@@ -16,14 +16,18 @@ Importing this package has no side effects.
 """
 
 from beam_agents.model.client import (
+    CircuitOpenError,
+    FacadeError,
     LLMClient,
     LlmRequest,
     LlmResponse,
+    OutputSchemaError,
     ProviderError,
     ProviderTimeout,
     RateLimitError,
     ServerError,
 )
+from beam_agents.model.facade import CircuitBreakerPolicy, LlmClientFacade, RetryPolicy, TraceEvent
 from beam_agents.model.fake import (
     FakeLLM,
     UnmatchedRequestError,
@@ -47,16 +51,23 @@ __all__ = [
     "BLOB_CAP_BYTES",
     "MAX_ENTRIES",
     "TTL_MS",
+    "CircuitBreakerPolicy",
+    "CircuitOpenError",
+    "FacadeError",
     "FakeLLM",
     "LLMClient",
+    "LlmClientFacade",
     "LlmRequest",
     "LlmResponse",
+    "OutputSchemaError",
     "ProviderError",
     "ProviderTimeout",
     "RateLimitError",
     "ReplayCache",
     "ReplayEntry",
+    "RetryPolicy",
     "ServerError",
+    "TraceEvent",
     "UnmatchedRequestError",
     "compute_cache_key",
     "fail_then_succeed",

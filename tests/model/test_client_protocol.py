@@ -10,7 +10,13 @@ import inspect
 
 from beam_agents.model import LLMClient, LlmRequest, LlmResponse
 
-_REQUEST = LlmRequest(model_id="m-1", messages=[], tools_schema=[], sampling_params={})
+_REQUEST = LlmRequest(
+    model_id="m-1",
+    messages=[],
+    tools_schema=[],
+    output_schema={"type": "object"},
+    sampling_params={},
+)
 
 
 class _ConformingClient:
