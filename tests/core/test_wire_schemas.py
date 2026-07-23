@@ -40,7 +40,7 @@ def _unknown_field(field_number: int, value: int) -> bytes:
 # --- Requirement: Proto package and committed generation ---------------------
 
 
-def test_all_seven_message_classes_importable() -> None:
+def test_all_eight_message_classes_importable() -> None:
     # Scenario: Bindings are importable from the installed package.
     for name in (
         "MemoryBlob",
@@ -50,6 +50,7 @@ def test_all_seven_message_classes_importable() -> None:
         "AgentEnvelope",
         "Continuation",
         "LlmCacheBlob",
+        "RuntimeError",
     ):
         assert hasattr(protos, name)
     assert set(protos.__all__) == {
@@ -60,6 +61,7 @@ def test_all_seven_message_classes_importable() -> None:
         "AgentEnvelope",
         "Continuation",
         "LlmCacheBlob",
+        "RuntimeError",
     }
 
 

@@ -35,6 +35,7 @@ from beam_agents._protos import (
     Continuation,
     LlmCacheBlob,
     MemoryBlob,
+    RuntimeError,
     ToolIntent,
     ToolResult,
     TraceEvent,
@@ -43,8 +44,8 @@ from beam_agents._protos import (
 if TYPE_CHECKING:
     from apache_beam.coders.typecoders import CoderRegistry
 
-# The seven message types this module encodes. Exposed for tests and for
-# `register_coders` to iterate.
+# The wire/state message types this module encodes. Exposed for tests and
+# for `register_coders` to iterate.
 MESSAGE_TYPES: tuple[type[Message], ...] = (
     MemoryBlob,
     ToolIntent,
@@ -53,6 +54,7 @@ MESSAGE_TYPES: tuple[type[Message], ...] = (
     AgentEnvelope,
     Continuation,
     LlmCacheBlob,
+    RuntimeError,
 )
 
 
@@ -108,7 +110,7 @@ class DeterministicProtoCoder(beam.coders.Coder):
 
 
 def register_coders() -> None:
-    """Register :class:`DeterministicProtoCoder` for all seven message types.
+    """Register :class:`DeterministicProtoCoder` for all eight message types.
 
     Idempotent: safe to call from every entry point (pipeline construction,
     test fixtures). Does nothing but populate Beam's global coder registry, so

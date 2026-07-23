@@ -26,6 +26,7 @@ from beam_agents._protos import (
     Continuation,
     LlmCacheBlob,
     MemoryBlob,
+    RuntimeError,
     ToolIntent,
     ToolResult,
     TraceEvent,
@@ -177,6 +178,30 @@ def _continuations(draw: st.DrawFn) -> Continuation:
     )
 
 
+@st.composite
+def _runtime_errors(draw: st.DrawFn) -> RuntimeError:
+    return RuntimeError(
+        error_type=draw(
+            st.sampled_from(
+                [
+                    RuntimeError.ERROR_TYPE_UNSPECIFIED,
+                    RuntimeError.INVALID_ENVELOPE,
+                    RuntimeError.BUSY_KEY,
+                    RuntimeError.ORPHANED_RESULT,
+                    RuntimeError.ACTIVATION_TIMEOUT,
+                    RuntimeError.ACTIVATION_FAILED,
+                    RuntimeError.TIMEOUT_HANDLING_FAILED,
+                ]
+            )
+        ),
+        entity_key=draw(_bytes),
+        seq=draw(_int64),
+        intent_id=draw(_text),
+        message=draw(_text),
+        observed_at_ms=draw(_int64),
+    )
+
+
 _STRATEGIES = {
     MemoryBlob: _memory_blobs(),
     ToolIntent: _tool_intents(),
@@ -185,6 +210,7 @@ _STRATEGIES = {
     AgentEnvelope: _agent_envelopes(),
     Continuation: _continuations(),
     LlmCacheBlob: _llm_cache_blobs(),
+    RuntimeError: _runtime_errors(),
 }
 _ANY_MESSAGE = st.one_of(*_STRATEGIES.values())
 
@@ -229,6 +255,12 @@ def _sample_pair(message_type: type[Message]) -> tuple[Message, Message]:
                 ],
             ),
         ),
+        RuntimeError: (
+            RuntimeError(error_type=RuntimeError.INVALID_ENVELOPE, message="bad", entity_key=b"k"),
+            RuntimeError(
+                error_type=RuntimeError.ACTIVATION_FAILED, message="boom", entity_key=b"k"
+            ),
+        ),
     }
     return samples[message_type]
 
@@ -258,6 +290,7 @@ def test_message_types_covers_all_seven_wire_messages() -> None:
         AgentEnvelope,
         Continuation,
         LlmCacheBlob,
+        RuntimeError,
     }
 
 
@@ -299,7 +332,7 @@ def test_map_insertion_order_does_not_affect_encoding() -> None:
 
 @given(message=_ANY_MESSAGE)
 def test_round_trip_equality(message: Message) -> None:
-    # Scenario: Round-trip equality for all seven types (incl. defaults, oneof, bytes).
+    # Scenario: Round-trip equality for all eight types (incl. defaults, oneof, bytes).
     coder = DeterministicProtoCoder(type(message))
     assert coder.decode(coder.encode(message)) == message
 
