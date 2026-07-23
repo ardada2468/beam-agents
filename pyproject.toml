@@ -109,6 +109,13 @@ disable_error_code = ["no-untyped-call"]
 module = "beam_agents.core.coders"
 disable_error_code = ["override"]
 
+# Beam's metrics API (`Metrics.counter(...).inc()`) ships no type annotations, so
+# incrementing the soft-cap counter reads as an untyped call under strict mode.
+# Suppress that one check for the facade; the rest of strict mode still applies.
+[[tool.mypy.overrides]]
+module = "beam_agents.memory.facade"
+disable_error_code = ["no-untyped-call"]
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config --cov=beam_agents --cov-report=term-missing --cov-report=xml"
 asyncio_mode = "auto"
