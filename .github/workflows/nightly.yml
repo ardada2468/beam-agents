@@ -1,0 +1,44 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  dataflow:
+    runs-on: ubuntu-latest
+    if: vars.GCP_PROJECT_ID != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test --group integration --group bench
+
+      - name: Dataflow tests
+        run: make test-dataflow
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+
+  skip-notice:
+    runs-on: ubuntu-latest
+    if: vars.GCP_PROJECT_ID == ''
+    steps:
+      - name: No GCP project configured
+        run: echo "GCP_PROJECT_ID is not set; skipping nightly Dataflow run."

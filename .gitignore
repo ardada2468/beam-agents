@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# mutmut
+.mutmut-cache
+mutants/
