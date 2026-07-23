@@ -189,8 +189,8 @@ def _runtime_errors(draw: st.DrawFn) -> RuntimeError:
                     RuntimeError.BUSY_KEY,
                     RuntimeError.ORPHANED_RESULT,
                     RuntimeError.ACTIVATION_TIMEOUT,
-                    RuntimeError.ACTIVATION_FAILURE,
-                    RuntimeError.TIMEOUT_HANDLING_FAILURE,
+                    RuntimeError.ACTIVATION_FAILED,
+                    RuntimeError.TIMEOUT_HANDLING_FAILED,
                 ]
             )
         ),
@@ -258,7 +258,7 @@ def _sample_pair(message_type: type[Message]) -> tuple[Message, Message]:
         RuntimeError: (
             RuntimeError(error_type=RuntimeError.INVALID_ENVELOPE, message="bad", entity_key=b"k"),
             RuntimeError(
-                error_type=RuntimeError.ACTIVATION_FAILURE, message="boom", entity_key=b"k"
+                error_type=RuntimeError.ACTIVATION_FAILED, message="boom", entity_key=b"k"
             ),
         ),
     }
@@ -332,7 +332,7 @@ def test_map_insertion_order_does_not_affect_encoding() -> None:
 
 @given(message=_ANY_MESSAGE)
 def test_round_trip_equality(message: Message) -> None:
-    # Scenario: Round-trip equality for all seven types (incl. defaults, oneof, bytes).
+    # Scenario: Round-trip equality for all eight types (incl. defaults, oneof, bytes).
     coder = DeterministicProtoCoder(type(message))
     assert coder.decode(coder.encode(message)) == message
 

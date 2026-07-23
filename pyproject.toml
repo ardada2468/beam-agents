@@ -101,6 +101,11 @@ disable_error_code = ["type-arg"]
 module = "tests.core.test_coders"
 disable_error_code = ["no-untyped-call"]
 
+# Apache Beam's pipeline testing APIs are also untyped.
+[[tool.mypy.overrides]]
+module = "tests.core.test_stateful_dofn_pipeline"
+disable_error_code = ["no-untyped-call"]
+
 # Beam types `Coder.from_type_hint` as `-> CoderT` (a cls-bound TypeVar), so our
 # concrete override return trips the LSP `override` check — the same concrete
 # pattern Beam's own subclasses (e.g. MapCoder) use. Suppress that one check for

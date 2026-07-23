@@ -204,15 +204,15 @@ class RuntimeError(_message.Message):
         BUSY_KEY: _ClassVar[RuntimeError.ErrorType]
         ORPHANED_RESULT: _ClassVar[RuntimeError.ErrorType]
         ACTIVATION_TIMEOUT: _ClassVar[RuntimeError.ErrorType]
-        ACTIVATION_FAILURE: _ClassVar[RuntimeError.ErrorType]
-        TIMEOUT_HANDLING_FAILURE: _ClassVar[RuntimeError.ErrorType]
+        ACTIVATION_FAILED: _ClassVar[RuntimeError.ErrorType]
+        TIMEOUT_HANDLING_FAILED: _ClassVar[RuntimeError.ErrorType]
     ERROR_TYPE_UNSPECIFIED: RuntimeError.ErrorType
     INVALID_ENVELOPE: RuntimeError.ErrorType
     BUSY_KEY: RuntimeError.ErrorType
     ORPHANED_RESULT: RuntimeError.ErrorType
     ACTIVATION_TIMEOUT: RuntimeError.ErrorType
-    ACTIVATION_FAILURE: RuntimeError.ErrorType
-    TIMEOUT_HANDLING_FAILURE: RuntimeError.ErrorType
+    ACTIVATION_FAILED: RuntimeError.ErrorType
+    TIMEOUT_HANDLING_FAILED: RuntimeError.ErrorType
     ERROR_TYPE_FIELD_NUMBER: _ClassVar[int]
     ENTITY_KEY_FIELD_NUMBER: _ClassVar[int]
     SEQ_FIELD_NUMBER: _ClassVar[int]

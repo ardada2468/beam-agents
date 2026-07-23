@@ -110,7 +110,7 @@ class DeterministicProtoCoder(beam.coders.Coder):
 
 
 def register_coders() -> None:
-    """Register :class:`DeterministicProtoCoder` for all seven message types.
+    """Register :class:`DeterministicProtoCoder` for all eight message types.
 
     Idempotent: safe to call from every entry point (pipeline construction,
     test fixtures). Does nothing but populate Beam's global coder registry, so

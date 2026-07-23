@@ -26,6 +26,7 @@ from beam_agents._protos import (
     Continuation,
     LlmCacheBlob,
     MemoryBlob,
+    RuntimeError,
     ToolIntent,
     ToolResult,
     TraceEvent,
@@ -147,6 +148,17 @@ def _continuation() -> Continuation:
     )
 
 
+def _runtime_error() -> RuntimeError:
+    return RuntimeError(
+        error_type=RuntimeError.ACTIVATION_FAILED,
+        entity_key=b"entity-1",
+        seq=7,
+        intent_id="11111111-2222-5333-8444-555555555555",
+        message="activation failed: ValueError: invalid response",
+        observed_at_ms=_T1,
+    )
+
+
 # name -> fully-populated message. Filenames are `<name>.bin`.
 GOLDEN: dict[str, Message] = {
     "memory_blob": _memory_blob(),
@@ -156,6 +168,7 @@ GOLDEN: dict[str, Message] = {
     "agent_envelope": _agent_envelope(),
     "continuation": _continuation(),
     "llm_cache_blob": _llm_cache_blob(),
+    "runtime_error": _runtime_error(),
 }
 
 
