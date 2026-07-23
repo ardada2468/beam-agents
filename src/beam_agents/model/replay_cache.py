@@ -74,27 +74,30 @@ def compute_cache_key(
     model_id: str,
     messages: object,
     tools_schema: object,
+    output_schema: object,
     sampling_params: object,
     entity_key: bytes,
     seq: int,
 ) -> str:
     """Return the lowercase-hex sha256 of the canonical request material.
 
-    All six components are packed into one JSON document with fixed field names
+    All seven components are packed into one JSON document with fixed field names
     and serialized canonically (sorted keys, compact separators, non-ASCII
     preserved, NaN/Infinity rejected) so logically equal requests hash
     identically regardless of dict insertion order. Non-JSON-serializable input
     raises ``TypeError``; a NaN/Infinity float raises ``ValueError``.
 
-    ``messages``/``tools_schema``/``sampling_params`` are typed ``object`` (not
-    a recursive JSON alias): callers pass provider-shaped structures of any
-    concrete container type, and canonical-JSON serialization is the single
-    validation point — anything non-serializable fails loudly here.
+    ``messages``/``tools_schema``/``output_schema``/``sampling_params`` are
+    typed ``object`` (not a recursive JSON alias): callers pass
+    provider-shaped structures of any concrete container type, and
+    canonical-JSON serialization is the single validation point — anything
+    non-serializable fails loudly here.
     """
     document = {
         "model": model_id,
         "messages": messages,
         "tools": tools_schema,
+        "output_schema": output_schema,
         "params": sampling_params,
         "key": entity_key.hex(),
         "seq": seq,

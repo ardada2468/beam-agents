@@ -189,6 +189,7 @@ def _request_key(request: LlmRequest) -> str:
         request.model_id,
         request.messages,
         request.tools_schema,
+        request.output_schema,
         request.sampling_params,
         entity_key=b"",
         seq=0,

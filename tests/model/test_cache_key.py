@@ -19,13 +19,16 @@ _MESSAGES = [
     {"role": "user", "content": "score this transaction"},
 ]
 _TOOLS = [{"name": "lookup", "parameters": {"type": "object", "properties": {}}}]
+_OUTPUT_SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"}}}
 _PARAMS = {"temperature": 0.0, "max_tokens": 512, "top_p": 1.0}
 _KEY = b"entity-1"
 _SEQ = 7
 
 
 def _baseline() -> str:
-    return compute_cache_key("claude-opus-4-8", _MESSAGES, _TOOLS, _PARAMS, _KEY, _SEQ)
+    return compute_cache_key(
+        "claude-opus-4-8", _MESSAGES, _TOOLS, _OUTPUT_SCHEMA, _PARAMS, _KEY, _SEQ
+    )
 
 
 # --- Requirement: Deterministic content-hash cache key -----------------------
@@ -41,9 +44,17 @@ def test_logically_equal_requests_hash_identically() -> None:
     ]
     tools_permuted = [{"parameters": {"properties": {}, "type": "object"}, "name": "lookup"}]
 
-    first = compute_cache_key("claude-opus-4-8", _MESSAGES, _TOOLS, _PARAMS, _KEY, _SEQ)
+    first = compute_cache_key(
+        "claude-opus-4-8", _MESSAGES, _TOOLS, _OUTPUT_SCHEMA, _PARAMS, _KEY, _SEQ
+    )
     second = compute_cache_key(
-        "claude-opus-4-8", messages_permuted, tools_permuted, params_permuted, _KEY, _SEQ
+        "claude-opus-4-8",
+        messages_permuted,
+        tools_permuted,
+        {"properties": {"answer": {"type": "string"}}, "type": "object"},
+        params_permuted,
+        _KEY,
+        _SEQ,
     )
 
     assert first == second
@@ -55,24 +66,54 @@ def test_every_component_perturbs_the_key() -> None:
     # Scenario: Every component perturbs the key.
     baseline = _baseline()
     perturbed = [
-        compute_cache_key("claude-sonnet-5", _MESSAGES, _TOOLS, _PARAMS, _KEY, _SEQ),
+        compute_cache_key(
+            "claude-sonnet-5", _MESSAGES, _TOOLS, _OUTPUT_SCHEMA, _PARAMS, _KEY, _SEQ
+        ),
         compute_cache_key(
             "claude-opus-4-8",
             [*_MESSAGES, {"role": "user", "content": "extra"}],
             _TOOLS,
+            _OUTPUT_SCHEMA,
             _PARAMS,
             _KEY,
             _SEQ,
         ),
-        compute_cache_key("claude-opus-4-8", _MESSAGES, [], _PARAMS, _KEY, _SEQ),
-        compute_cache_key("claude-opus-4-8", _MESSAGES, _TOOLS, {"temperature": 0.7}, _KEY, _SEQ),
-        compute_cache_key("claude-opus-4-8", _MESSAGES, _TOOLS, _PARAMS, b"entity-2", _SEQ),
-        compute_cache_key("claude-opus-4-8", _MESSAGES, _TOOLS, _PARAMS, _KEY, _SEQ + 1),
+        compute_cache_key("claude-opus-4-8", _MESSAGES, [], _OUTPUT_SCHEMA, _PARAMS, _KEY, _SEQ),
+        compute_cache_key(
+            "claude-opus-4-8",
+            _MESSAGES,
+            _TOOLS,
+            {"type": "object", "properties": {"result": {"type": "string"}}},
+            _PARAMS,
+            _KEY,
+            _SEQ,
+        ),
+        compute_cache_key(
+            "claude-opus-4-8",
+            _MESSAGES,
+            _TOOLS,
+            _OUTPUT_SCHEMA,
+            {"temperature": 0.7},
+            _KEY,
+            _SEQ,
+        ),
+        compute_cache_key(
+            "claude-opus-4-8", _MESSAGES, _TOOLS, _OUTPUT_SCHEMA, _PARAMS, b"entity-2", _SEQ
+        ),
+        compute_cache_key(
+            "claude-opus-4-8",
+            _MESSAGES,
+            _TOOLS,
+            _OUTPUT_SCHEMA,
+            _PARAMS,
+            _KEY,
+            _SEQ + 1,
+        ),
     ]
 
     for key in perturbed:
         assert key != baseline
-    # All six perturbations are distinct from one another too.
+    # All seven perturbations are distinct from one another too.
     assert len(set(perturbed)) == len(perturbed)
 
 
@@ -85,6 +126,7 @@ def test_key_is_sha256_of_canonical_utf8_json() -> None:
             "model": "claude-opus-4-8",
             "messages": _MESSAGES,
             "tools": _TOOLS,
+            "output_schema": _OUTPUT_SCHEMA,
             "params": _PARAMS,
             "key": _KEY.hex(),
             "seq": _SEQ,
@@ -101,12 +143,27 @@ def test_key_is_sha256_of_canonical_utf8_json() -> None:
 def test_non_serializable_input_is_rejected() -> None:
     # Scenario: Non-canonical input is rejected loudly (non-serializable object).
     with pytest.raises(TypeError):
-        compute_cache_key("claude-opus-4-8", {"obj": object()}, _TOOLS, _PARAMS, _KEY, _SEQ)
+        compute_cache_key(
+            "claude-opus-4-8", {"obj": object()}, _TOOLS, _OUTPUT_SCHEMA, _PARAMS, _KEY, _SEQ
+        )
 
 
 def test_nan_sampling_param_is_rejected() -> None:
     # Scenario: Non-canonical input is rejected loudly (NaN has no canonical form).
     with pytest.raises(ValueError):
         compute_cache_key(
-            "claude-opus-4-8", _MESSAGES, _TOOLS, {"temperature": float("nan")}, _KEY, _SEQ
+            "claude-opus-4-8",
+            _MESSAGES,
+            _TOOLS,
+            _OUTPUT_SCHEMA,
+            {"temperature": float("nan")},
+            _KEY,
+            _SEQ,
+        )
+
+
+def test_non_serializable_output_schema_is_rejected() -> None:
+    with pytest.raises(TypeError):
+        compute_cache_key(
+            "claude-opus-4-8", _MESSAGES, _TOOLS, {"schema": object()}, _PARAMS, _KEY, _SEQ
         )
