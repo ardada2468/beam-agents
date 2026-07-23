@@ -38,5 +38,8 @@ async def test_latency_can_outlast_an_activation_deadline() -> None:
     # Scenario: Latency can outlast an activation deadline.
     fake = FakeLLM([(match_any(), respond_with(b"ok", latency_ms=10_000))])
 
-    with pytest.raises(TimeoutError):
+    # asyncio.TimeoutError is the builtin TimeoutError on 3.11+ but a distinct
+    # class on 3.10, so pytest.raises must target asyncio's spelling to pass
+    # on every supported interpreter.
+    with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(fake.complete(_REQUEST), timeout=0.01)
