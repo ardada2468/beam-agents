@@ -73,15 +73,15 @@
 
 ## 11. Verification
 
-- [ ] 11.1 Fresh clone → `uv sync --all-groups` → `make bootstrap lint type test-unit` all green
-- [ ] 11.2 `make compose-up` brings stack healthy within 60 s; `make test-integration` passes; `make compose-down` cleans up
-- [ ] 11.3 Push a throwaway branch with an intentional `ASYNC` violation; confirm `ci-lint` fails on that job
-- [ ] 11.4 Push a throwaway branch with an unregistered pytest marker; confirm `ci-unit` fails with `--strict-markers`
-- [ ] 11.5 Attempt to commit an edit under `src/beam_agents/` without an active OpenSpec change; confirm pre-commit blocks with a pointer to the workflow
-- [ ] 11.6 Run `openspec validate add-repo-scaffolding --strict` and confirm clean
+- [x] 11.1 Fresh clone → `uv sync --all-groups` → `make bootstrap lint type test-unit` all green — verified by removing `.venv` and re-running `make bootstrap lint type test-unit` from scratch (no GitHub remote yet to do a literal clone)
+- [x] 11.2 `make compose-up` brings stack healthy within 60 s; `make test-integration` passes; `make compose-down` cleans up — stack healthy in ~7s; found and fixed a real gap where pytest exit code 5 ("no tests collected") failed the integration/semantics/dataflow make targets on this pre-`core/` repo, now tolerated
+- [x] 11.3 Push a throwaway branch with an intentional `ASYNC` violation; confirm `ci-lint` fails on that job — verified locally via `make lint` (no remote to push to yet); `ASYNC251` caught a `time.sleep` inside an `async def`
+- [x] 11.4 Push a throwaway branch with an unregistered pytest marker; confirm `ci-unit` fails with `--strict-markers` — verified locally via `uv run pytest` with a typo'd marker, correctly rejected
+- [x] 11.5 Attempt to commit an edit under `src/beam_agents/` without an active OpenSpec change; confirm pre-commit blocks with a pointer to the workflow — verified in an isolated sandbox repo: blocks with no change present, passes with a change present, passes with `BEAM_AGENTS_ALLOW_NO_CHANGE=1`
+- [x] 11.6 Run `openspec validate add-repo-scaffolding --strict` and confirm clean
 
 ## 12. Archive readiness
 
-- [ ] 12.1 All tasks above checked and verified in a clean environment
-- [ ] 12.2 PR opened linking each new scenario in `specs/repo-scaffolding/spec.md` to the verification step (11.x) that exercises it
-- [ ] 12.3 On merge, run `/opsx:archive add-repo-scaffolding` to promote `specs/repo-scaffolding/spec.md` into `openspec/specs/repo-scaffolding/spec.md`
+- [x] 12.1 All tasks above checked and verified in a clean environment
+- [ ] 12.2 PR opened linking each new scenario in `specs/repo-scaffolding/spec.md` to the verification step (11.x) that exercises it — **blocked: no GitHub remote configured and no commit made yet (commits are not created without explicit user request); all files are staged and ready**
+- [ ] 12.3 On merge, run `/opsx:archive add-repo-scaffolding` to promote `specs/repo-scaffolding/spec.md` into `openspec/specs/repo-scaffolding/spec.md` — pending 12.2
