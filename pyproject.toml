@@ -36,6 +36,7 @@ lint = [
 ]
 typecheck = [
   "mypy",
+  "types-protobuf",
 ]
 integration = [
   "testcontainers[kafka,redis]",
@@ -59,6 +60,8 @@ packages = ["src/beam_agents"]
 line-length = 100
 target-version = "py310"
 src = ["src", "tests"]
+# Generated protobuf bindings are committed but never hand-edited or linted.
+extend-exclude = ["src/beam_agents/_protos/*_pb2.py", "src/beam_agents/_protos/*_pb2.pyi"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "PL", "RUF"]
@@ -83,6 +86,20 @@ warn_unreachable = true
 [[tool.mypy.overrides]]
 module = "apache_beam.*"
 ignore_missing_imports = true
+
+# Generated protobuf stubs use bare `Mapping` in a few __init__ signatures,
+# which trips strict `type-arg`. The gencode is never hand-edited, so we relax
+# strict reporting for the generated package only.
+[[tool.mypy.overrides]]
+module = "beam_agents._protos.*"
+disable_error_code = ["type-arg"]
+
+# Apache Beam ships no type stubs, so every Beam call in a test reads as an
+# untyped call under strict mode. Relax that one check for the coder tests that
+# drive real pipelines; the rest of strict mode still applies.
+[[tool.mypy.overrides]]
+module = "tests.core.test_coders"
+disable_error_code = ["no-untyped-call"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config --cov=beam_agents --cov-report=term-missing --cov-report=xml"
