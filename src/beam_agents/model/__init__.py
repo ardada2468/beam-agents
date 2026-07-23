@@ -1,4 +1,7 @@
-"""LLM replay cache over the keyed ``LlmCacheBlob`` state value.
+"""LLM replay cache over the keyed ``LlmCacheBlob`` state value, plus the
+async model-client seam (:class:`LLMClient`, :class:`LlmRequest`,
+:class:`LlmResponse`, the provider-error taxonomy) and its deterministic test
+double, :class:`FakeLLM`.
 
 Correctness invariant 3 requires that bundle retries make zero additional
 provider calls on the cached path. The model client reaches the per-key replay
@@ -12,6 +15,25 @@ cap with a digest-only fallback for oversized responses.
 Importing this package has no side effects.
 """
 
+from beam_agents.model.client import (
+    LLMClient,
+    LlmRequest,
+    LlmResponse,
+    ProviderError,
+    ProviderTimeout,
+    RateLimitError,
+    ServerError,
+)
+from beam_agents.model.fake import (
+    FakeLLM,
+    UnmatchedRequestError,
+    fail_then_succeed,
+    match_any,
+    match_contains,
+    match_model_id,
+    raise_error,
+    respond_with,
+)
 from beam_agents.model.replay_cache import (
     BLOB_CAP_BYTES,
     MAX_ENTRIES,
@@ -25,7 +47,22 @@ __all__ = [
     "BLOB_CAP_BYTES",
     "MAX_ENTRIES",
     "TTL_MS",
+    "FakeLLM",
+    "LLMClient",
+    "LlmRequest",
+    "LlmResponse",
+    "ProviderError",
+    "ProviderTimeout",
+    "RateLimitError",
     "ReplayCache",
     "ReplayEntry",
+    "ServerError",
+    "UnmatchedRequestError",
     "compute_cache_key",
+    "fail_then_succeed",
+    "match_any",
+    "match_contains",
+    "match_model_id",
+    "raise_error",
+    "respond_with",
 ]
