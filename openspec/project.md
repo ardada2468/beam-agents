@@ -10,7 +10,7 @@ Direct competitor: Apache Flink Agents. Our differentiation: Dataflow managed se
 
 ## Tech stack
 
-- Python ≥ 3.10 (developed on 3.11); `apache-beam[gcp] >= 2.60`
+- Python ≥ 3.11; `apache-beam[gcp] >= 2.60`
 - `uv` for env/deps; `pyproject.toml` dependency groups; lockfile committed
 - Protobuf for ALL wire and state schemas (`protos/` → generated `_pb2.py` committed; regen must be diff-clean in CI)
 - `httpx[http2]` async clients; `pydantic` v2 for tool schemas and constrained JSON outputs
@@ -88,7 +88,7 @@ Async bridge: `setup()` starts one background thread per DoFn instance with a de
 ### Git/PR
 
 - Squash-merge; one merged commit = one archived OpenSpec change. Commit messages reference the change folder.
-- Required checks: ci (lint, type, unit matrix 3.10–3.12), integration, quality (mutation on touched core files, coverage ratchet — coverage may never decrease).
+- Required checks: ci (lint, type, unit matrix 3.11–3.12), integration, quality (mutation on touched core files, coverage ratchet — coverage may never decrease).
 - PR description links the spec scenarios each new test implements.
 
 ## Domain glossary
