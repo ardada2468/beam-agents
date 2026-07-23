@@ -19,7 +19,7 @@ or equivalently:
 make bootstrap
 ```
 
-Requires Python `>=3.10,<3.13` (this repo pins `3.11` via `.python-version`)
+Requires Python `>=3.11,<3.13` (this repo pins `3.11` via `.python-version`)
 and [`uv`](https://docs.astral.sh/uv/).
 
 ## Running tests
