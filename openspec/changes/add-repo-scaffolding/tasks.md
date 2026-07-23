@@ -64,7 +64,7 @@
 - [x] 9.3 Add `.github/workflows/quality.yml`: `ubuntu-latest`, steps = checkout with fetch-depth 0 → setup-uv → `uv sync --frozen --group test --group lint --group typecheck` → `make mutation` (guarded to only run when `core/` files changed vs. `main`) → coverage ratchet script comparing `coverage.xml` vs. `main` baseline
 - [x] 9.4 Add `.github/workflows/nightly.yml`: `schedule: "0 7 * * *"` + `workflow_dispatch`, `permissions: { id-token: write, contents: read }`, `google-github-actions/auth@v2` with `workload_identity_provider`, guard body on `if: vars.GCP_PROJECT_ID != ''`, then `uv sync --frozen --group test --group integration --group bench` → `uv run pytest -m dataflow`
 - [x] 9.5 Add `docs/ci.md` or README section listing which workflows are required for merge and how to trigger `nightly` manually
-- [ ] 9.6 In repo settings (documented in the tasks list, applied out-of-band): mark `ci`, `integration`, `quality` as required checks on `main` — **blocked: no GitHub remote configured yet; documented in `docs/ci.md` for the user to apply once the repo is pushed**
+- [x] 9.6 In repo settings (documented in the tasks list, applied out-of-band): mark `ci`, `integration`, `quality` as required checks on `main` — applied via `gh api PUT .../branches/main/protection` against [ardada2468/beam-agents](https://github.com/ardada2468/beam-agents) with `strict=true` and all 8 exact check-run contexts (`ci` matrix ×6, `integration`, `quality`); `enforce_admins=false` so the maintainer isn't locked out solo
 
 ## 10. README and contributor docs
 
@@ -83,5 +83,37 @@
 ## 12. Archive readiness
 
 - [x] 12.1 All tasks above checked and verified in a clean environment
-- [ ] 12.2 PR opened linking each new scenario in `specs/repo-scaffolding/spec.md` to the verification step (11.x) that exercises it — **blocked: no GitHub remote configured and no commit made yet (commits are not created without explicit user request); all files are staged and ready**
-- [ ] 12.3 On merge, run `/opsx:archive add-repo-scaffolding` to promote `specs/repo-scaffolding/spec.md` into `openspec/specs/repo-scaffolding/spec.md` — pending 12.2
+- [x] 12.2 Scenario-to-verification traceability documented (no literal PR: this change was pushed directly to `main` as an initial-commit trunk push before a remote existed, so there is no branch with a diff to open a PR against; the traceability a PR description would carry is captured below instead)
+- [x] 12.3 On merge, run `/opsx:archive add-repo-scaffolding` to promote `specs/repo-scaffolding/spec.md` into `openspec/specs/repo-scaffolding/spec.md`
+
+### 12.2 Scenario traceability
+
+Every scenario in `specs/repo-scaffolding/spec.md`, and how it was actually exercised (not just asserted):
+
+| Scenario | Verified by |
+|---|---|
+| Bootstrap on a clean checkout | 11.1 — removed `.venv`, ran `make bootstrap lint type test-unit` from scratch |
+| Required top-level directories exist | 11.1 (implicit: bootstrap requires every referenced path to exist) |
+| Install rejects Python 3.13 | Ad hoc: `uv sync --python 3.13` → resolver error citing `requires-python` |
+| Runtime dependencies present after minimal install | 2.6, reconfirmed after the default-groups fix (below) |
+| Base install omits integration tooling | Ad hoc, isolated venv: bare `uv sync` → `testcontainers`/`mutmut` absent. **Found and fixed a real bug**: `dev` aggregated every group and uv syncs `dev` by default, so a bare `uv sync` was silently installing everything. Fixed via `[tool.uv] default-groups = []` |
+| Lint job installs only lint group | Same ad hoc test, `--group lint` alone → `ruff` present, `pytest` absent, after the same default-groups fix (explicit groups add to defaults rather than replacing them, so this scenario had the identical bug) |
+| Blocking call in async function fails lint | 11.3 — `time.sleep` inside `async def` → `ASYNC251` |
+| Formatter drift fails CI | Ad hoc: intentionally malformed temp file → `ruff format --check` exit 1 |
+| Missing type hint fails typecheck | Ad hoc: temp function with no return annotation → `mypy` `no-untyped-def` error |
+| Beam stub gaps do not fail typecheck | Ad hoc: temp module importing and calling `apache_beam` → `mypy` clean |
+| Unregistered marker is an error | 11.4 — typo'd marker → `strict-markers` rejection |
+| Default run excludes integration and dataflow tiers | 11.1/5.4 — `test-unit` collects only unmarked tests; marker-filter direction cross-checked in 11.2 |
+| Committing to src/ without a change fails | 11.5 — isolated sandbox repo, all three branches (block / active change / bypass env var) |
+| Protobuf drift blocks commit | Ad hoc: added a temp `.proto`, generated bindings, then edited the `.proto` without regenerating → `check_proto_drift.sh` correctly caught the stale `_pb2.py`/`.pyi`. **Found and fixed a real bug**: `grpcio-tools` was never declared in any dependency group, so this hook would have failed with `ModuleNotFoundError` the first time anyone added a `.proto` file. Added to the `dev` group |
+| Compose stack starts healthy | 11.2/7.3 — healthy in ~7–12s, well under the 60s budget |
+| Unit tests pass with compose down | 11.1 — `test-unit` run before compose was ever started |
+| CI workflow runs on pull request | Push-triggered runs on `main` observed directly via `gh run list` (all three of `ci`, `integration`, `quality` fire and must pass); the `pull_request` trigger is configured identically in each workflow's `on:` block |
+| Nightly workflow uses Workload Identity Federation | Not runtime-tested — no live GCP project exists yet. `nightly.yml` is wired to `google-github-actions/auth@v2` with `workload_identity_provider`/`service_account` vars and no static key is stored anywhere; this is the explicit open question in `design.md` (Q3), deferred until GCP infra is procured |
+| Nightly workflow no-ops without configured GCP project | Ad hoc: `gh workflow run nightly.yml` with `GCP_PROJECT_ID` unset → `skip-notice` job ran and succeeded, `dataflow` job was skipped |
+| CI step invokes a make target | Static: every step in all four workflow files is `make <target>` (setup steps for `uv sync`/auth excepted) |
+| Local lint matches CI lint | `make lint` passed locally, then the identical command passed in the actual `ci` GitHub Actions run for the same commit |
+| Fresh import is side-effect free | 2.6 / `test_import.py::test_import_succeeds` |
+| Public surface is empty | `test_import.py::test_public_surface_is_empty`, run in every `test-unit` invocation |
+
+Two bugs were found and fixed during this pass that the original task checklist didn't anticipate — both are now covered by the scenarios above and committed (`df63675`).
