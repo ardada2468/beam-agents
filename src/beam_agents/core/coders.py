@@ -85,6 +85,10 @@ class DeterministicProtoCoder(beam.coders.Coder):
     def from_type_hint(
         cls, typehint: type[Message], unused_registry: CoderRegistry
     ) -> DeterministicProtoCoder:
+        # Beam types Coder.from_type_hint as `-> CoderT` (return same type as
+        # cls); returning a concrete coder is the pattern Beam's own subclasses
+        # use (e.g. MapCoder). The narrowed return trips mypy's LSP `override`
+        # check, suppressed for this module in pyproject.toml.
         if not (isinstance(typehint, type) and issubclass(typehint, Message)):
             raise ValueError(
                 f"Expected a subclass of google.protobuf.message.Message, got {typehint!r}"

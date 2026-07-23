@@ -264,6 +264,32 @@ def test_coder_reports_deterministic(message_type: type[Message]) -> None:
     assert DeterministicProtoCoder(message_type).is_deterministic() is True
 
 
+# --- Coder identity: equality, hashing, and type-hint construction -----------
+
+
+def test_coder_equality_and_hash_track_message_type() -> None:
+    same_a = DeterministicProtoCoder(ToolIntent)
+    same_b = DeterministicProtoCoder(ToolIntent)
+    other = DeterministicProtoCoder(ToolResult)
+
+    assert same_a == same_b
+    assert hash(same_a) == hash(same_b)
+    assert same_a != other
+    assert same_a != "not a coder"
+
+
+def test_from_type_hint_builds_coder_for_message_type() -> None:
+    coder = DeterministicProtoCoder.from_type_hint(ToolIntent, coder_registry)
+    assert isinstance(coder, DeterministicProtoCoder)
+    assert coder.to_type_hint() is ToolIntent
+
+
+def test_from_type_hint_rejects_non_message_type() -> None:
+    with pytest.raises(ValueError, match="Expected a subclass"):
+        # Deliberately wrong type to exercise the runtime guard.
+        DeterministicProtoCoder.from_type_hint(int, coder_registry)  # type: ignore[arg-type]
+
+
 # --- Requirement: Explicit registration, no import side effects --------------
 
 

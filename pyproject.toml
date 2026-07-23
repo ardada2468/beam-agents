@@ -101,6 +101,14 @@ disable_error_code = ["type-arg"]
 module = "tests.core.test_coders"
 disable_error_code = ["no-untyped-call"]
 
+# Beam types `Coder.from_type_hint` as `-> CoderT` (a cls-bound TypeVar), so our
+# concrete override return trips the LSP `override` check — the same concrete
+# pattern Beam's own subclasses (e.g. MapCoder) use. Suppress that one check for
+# this module; the rest of strict mode still applies.
+[[tool.mypy.overrides]]
+module = "beam_agents.core.coders"
+disable_error_code = ["override"]
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config --cov=beam_agents --cov-report=term-missing --cov-report=xml"
 asyncio_mode = "auto"
@@ -116,3 +124,21 @@ markers = [
 [tool.coverage.run]
 source = ["beam_agents"]
 branch = true
+
+[tool.mutmut]
+# Never mutate the generated protobuf bindings, and kill mutants with the core
+# test suite only. The full src/ tree is still copied (default source_paths) so
+# imports resolve. Test selection is scoped for two reasons:
+#   1. It keeps mutmut from running the package-surface test in
+#      `tests/test_import.py`, which inspects `beam_agents/__init__.py` and
+#      cannot pass while mutmut has instrumented it.
+#   2. It deselects the two TestPipeline tests. mutmut reaps children with
+#      os.wait(), which also reaps Beam DirectRunner worker subprocesses and
+#      crashes with a KeyError on the unexpected PID. The determinism,
+#      round-trip, and registration tests still cover every mutant in coders.py.
+do_not_mutate = ["*/_protos/*"]
+pytest_add_cli_args_test_selection = [
+  "tests/core",
+  "-k",
+  "not shuffle_boundary and not group_by_key_key",
+]
