@@ -24,6 +24,7 @@ from hypothesis import strategies as st
 from beam_agents._protos import (
     AgentEnvelope,
     Continuation,
+    LlmCacheBlob,
     MemoryBlob,
     ToolIntent,
     ToolResult,
@@ -35,7 +36,7 @@ from beam_agents.core.coders import (
     register_coders,
 )
 
-# --- Hypothesis strategies for the six message types -------------------------
+# --- Hypothesis strategies for the seven message types -------------------------
 
 # Protobuf strings must be valid UTF-8; the codec restriction excludes surrogates.
 _text = st.text(alphabet=st.characters(codec="utf-8"), max_size=16)
@@ -140,6 +141,29 @@ def _agent_envelopes(draw: st.DrawFn) -> AgentEnvelope:
 
 
 @st.composite
+def _llm_cache_blobs(draw: st.DrawFn) -> LlmCacheBlob:
+    blob = LlmCacheBlob(
+        state_schema_version=draw(_uint32),
+        total_response_bytes=draw(_int64),
+    )
+    for cache_key, response, digest, created, accessed, digest_only in draw(
+        st.lists(
+            st.tuples(_text, _bytes, _bytes, _int64, _int64, st.booleans()),
+            max_size=4,
+        )
+    ):
+        blob.entries.add(
+            cache_key=cache_key,
+            response=response,
+            response_digest=digest,
+            created_at_ms=created,
+            last_access_ms=accessed,
+            digest_only=digest_only,
+        )
+    return blob
+
+
+@st.composite
 def _continuations(draw: st.DrawFn) -> Continuation:
     return Continuation(
         state_schema_version=draw(_uint32),
@@ -160,6 +184,7 @@ _STRATEGIES = {
     TraceEvent: _trace_events(),
     AgentEnvelope: _agent_envelopes(),
     Continuation: _continuations(),
+    LlmCacheBlob: _llm_cache_blobs(),
 }
 _ANY_MESSAGE = st.one_of(*_STRATEGIES.values())
 
@@ -190,6 +215,20 @@ def _sample_pair(message_type: type[Message]) -> tuple[Message, Message]:
             Continuation(state_schema_version=1, adapter="langgraph", snapshot=b"s1"),
             Continuation(state_schema_version=1, adapter="langgraph", snapshot=b"s2"),
         ),
+        LlmCacheBlob: (
+            LlmCacheBlob(
+                state_schema_version=1,
+                entries=[LlmCacheBlob.LlmCacheEntry(cache_key="a", response=b"r1")],
+            ),
+            LlmCacheBlob(
+                state_schema_version=1,
+                entries=[
+                    LlmCacheBlob.LlmCacheEntry(
+                        cache_key="b", response=b"", digest_only=True, response_digest=b"d"
+                    )
+                ],
+            ),
+        ),
     }
     return samples[message_type]
 
@@ -202,6 +241,24 @@ def clean_registry() -> Iterator[None]:
         yield
     finally:
         coder_registry._coders = saved
+
+
+# --- Coverage: the module supports exactly the seven wire/state messages -----
+
+
+def test_message_types_covers_all_seven_wire_messages() -> None:
+    # Independent of coders.MESSAGE_TYPES iteration order: the module must
+    # support exactly the seven wire/state message classes, including the
+    # replay-cache blob.
+    assert set(MESSAGE_TYPES) == {
+        MemoryBlob,
+        ToolIntent,
+        ToolResult,
+        TraceEvent,
+        AgentEnvelope,
+        Continuation,
+        LlmCacheBlob,
+    }
 
 
 # --- Requirement: Deterministic proto coder ----------------------------------
@@ -242,7 +299,7 @@ def test_map_insertion_order_does_not_affect_encoding() -> None:
 
 @given(message=_ANY_MESSAGE)
 def test_round_trip_equality(message: Message) -> None:
-    # Scenario: Round-trip equality for all six types (incl. defaults, oneof, bytes).
+    # Scenario: Round-trip equality for all seven types (incl. defaults, oneof, bytes).
     coder = DeterministicProtoCoder(type(message))
     assert coder.decode(coder.encode(message)) == message
 

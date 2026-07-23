@@ -169,3 +169,28 @@ class Continuation(_message.Message):
     suspended_at_ms: int
     deadline_ms: int
     def __init__(self, state_schema_version: _Optional[int] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., pending_intent_ids: _Optional[_Iterable[str]] = ..., adapter: _Optional[str] = ..., snapshot: _Optional[bytes] = ..., suspended_at_ms: _Optional[int] = ..., deadline_ms: _Optional[int] = ...) -> None: ...
+
+class LlmCacheBlob(_message.Message):
+    __slots__ = ("state_schema_version", "entries", "total_response_bytes")
+    class LlmCacheEntry(_message.Message):
+        __slots__ = ("cache_key", "response", "response_digest", "created_at_ms", "last_access_ms", "digest_only")
+        CACHE_KEY_FIELD_NUMBER: _ClassVar[int]
+        RESPONSE_FIELD_NUMBER: _ClassVar[int]
+        RESPONSE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+        CREATED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+        LAST_ACCESS_MS_FIELD_NUMBER: _ClassVar[int]
+        DIGEST_ONLY_FIELD_NUMBER: _ClassVar[int]
+        cache_key: str
+        response: bytes
+        response_digest: bytes
+        created_at_ms: int
+        last_access_ms: int
+        digest_only: bool
+        def __init__(self, cache_key: _Optional[str] = ..., response: _Optional[bytes] = ..., response_digest: _Optional[bytes] = ..., created_at_ms: _Optional[int] = ..., last_access_ms: _Optional[int] = ..., digest_only: _Optional[bool] = ...) -> None: ...
+    STATE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_RESPONSE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    state_schema_version: int
+    entries: _containers.RepeatedCompositeFieldContainer[LlmCacheBlob.LlmCacheEntry]
+    total_response_bytes: int
+    def __init__(self, state_schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[LlmCacheBlob.LlmCacheEntry, _Mapping]]] = ..., total_response_bytes: _Optional[int] = ...) -> None: ...

@@ -1,8 +1,7 @@
-# proto-coders Specification
+# proto-coders Delta Specification
 
-## Purpose
-TBD - created by archiving change add-wire-schemas-and-coders. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Deterministic proto coder for all seven message types
 `beam_agents.core.coders` SHALL provide a Beam coder that encodes messages with protobuf deterministic serialization (`SerializeToString(deterministic=True)`) and SHALL support all seven message types (`MemoryBlob`, `ToolIntent`, `ToolResult`, `TraceEvent`, `AgentEnvelope`, `Continuation`, `LlmCacheBlob`). Encoding the same message value MUST always produce identical bytes within a single protobuf library version.
 
@@ -20,13 +19,6 @@ For every supported message type, decoding an encoded message SHALL yield a mess
 #### Scenario: Round-trip equality for all seven types
 - **WHEN** property-based instances of each of the seven message types are passed through `decode(encode(msg))`
 - **THEN** the decoded message compares equal to the original
-
-### Requirement: Coder advertises determinism and is usable as a key coder
-The coder SHALL report `is_deterministic() == True` so Beam accepts these types as grouping keys and state values without deterministic-coder fallback wrapping.
-
-#### Scenario: Message type works as a GroupByKey key
-- **WHEN** a `TestPipeline` groups elements keyed by a `ToolIntent` after coder registration
-- **THEN** the pipeline runs without a non-deterministic-coder error and grouping is by message value equality
 
 ### Requirement: Explicit registration, no import side effects
 The module SHALL expose a `register_coders()` function that registers the deterministic coder for all seven message types with Beam's coder registry. Importing `beam_agents.core.coders` SHALL NOT mutate the registry, and `register_coders()` MUST be idempotent.

@@ -8,6 +8,7 @@ this package; never regenerate or hand-edit ``beam_agents_pb2`` directly.
 from beam_agents._protos.beam_agents_pb2 import (
     AgentEnvelope,
     Continuation,
+    LlmCacheBlob,
     MemoryBlob,
     ToolIntent,
     ToolResult,
@@ -17,6 +18,7 @@ from beam_agents._protos.beam_agents_pb2 import (
 __all__ = [
     "AgentEnvelope",
     "Continuation",
+    "LlmCacheBlob",
     "MemoryBlob",
     "ToolIntent",
     "ToolResult",

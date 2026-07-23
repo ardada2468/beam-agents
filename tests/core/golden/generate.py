@@ -24,6 +24,7 @@ from google.protobuf.message import Message
 from beam_agents._protos import (
     AgentEnvelope,
     Continuation,
+    LlmCacheBlob,
     MemoryBlob,
     ToolIntent,
     ToolResult,
@@ -102,6 +103,34 @@ def _agent_envelope() -> AgentEnvelope:
     )
 
 
+def _llm_cache_blob() -> LlmCacheBlob:
+    blob = LlmCacheBlob(state_schema_version=1, total_response_bytes=11)
+    # A fully-stored entry: response retained, digest populated.
+    blob.entries.add(
+        cache_key="0" * 64,
+        response=b"hello world",
+        response_digest=bytes.fromhex(
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        ),
+        created_at_ms=_T0,
+        last_access_ms=_T0,
+        digest_only=False,
+    )
+    # A digest-only entry: oversized response dropped, only the digest kept.
+    # The digest is sha256 of the (dropped) original response, here "hi".
+    blob.entries.add(
+        cache_key="f" * 64,
+        response=b"",
+        response_digest=bytes.fromhex(
+            "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+        ),
+        created_at_ms=_T0 + 1,
+        last_access_ms=_T1,
+        digest_only=True,
+    )
+    return blob
+
+
 def _continuation() -> Continuation:
     return Continuation(
         state_schema_version=1,
@@ -126,6 +155,7 @@ GOLDEN: dict[str, Message] = {
     "trace_event": _trace_event(),
     "agent_envelope": _agent_envelope(),
     "continuation": _continuation(),
+    "llm_cache_blob": _llm_cache_blob(),
 }
 
 

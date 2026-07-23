@@ -1,6 +1,6 @@
-"""Deterministic Beam coders for the six beam_agents.v1 wire/state messages.
+"""Deterministic Beam coders for the seven beam_agents.v1 wire/state messages.
 
-Every element and keyed-state value in the runtime is one of six protobuf
+Every element and keyed-state value in the runtime is one of seven protobuf
 messages. Beam's stock ``ProtoCoder`` reports itself non-deterministic (so Beam
 would reject these types as GroupByKey keys) and uses plain
 ``SerializeToString()``, which does not order map fields. This module defines a
@@ -33,6 +33,7 @@ from google.protobuf.message import Message
 from beam_agents._protos import (
     AgentEnvelope,
     Continuation,
+    LlmCacheBlob,
     MemoryBlob,
     ToolIntent,
     ToolResult,
@@ -42,7 +43,7 @@ from beam_agents._protos import (
 if TYPE_CHECKING:
     from apache_beam.coders.typecoders import CoderRegistry
 
-# The six message types this module encodes. Exposed for tests and for
+# The seven message types this module encodes. Exposed for tests and for
 # `register_coders` to iterate.
 MESSAGE_TYPES: tuple[type[Message], ...] = (
     MemoryBlob,
@@ -51,6 +52,7 @@ MESSAGE_TYPES: tuple[type[Message], ...] = (
     TraceEvent,
     AgentEnvelope,
     Continuation,
+    LlmCacheBlob,
 )
 
 
@@ -106,7 +108,7 @@ class DeterministicProtoCoder(beam.coders.Coder):
 
 
 def register_coders() -> None:
-    """Register :class:`DeterministicProtoCoder` for all six message types.
+    """Register :class:`DeterministicProtoCoder` for all seven message types.
 
     Idempotent: safe to call from every entry point (pipeline construction,
     test fixtures). Does nothing but populate Beam's global coder registry, so
