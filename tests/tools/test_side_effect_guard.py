@@ -10,7 +10,7 @@ import pytest
 from beam_agents.tools import SideEffectToolError, ToolRunner, tool
 
 
-def test_tool_runner_refuses_a_side_effecting_tool() -> None:
+async def test_tool_runner_refuses_a_side_effecting_tool() -> None:
     # Scenario: ToolRunner refuses a side-effecting tool.
     calls: list[object] = []
 
@@ -21,7 +21,7 @@ def test_tool_runner_refuses_a_side_effecting_tool() -> None:
     runner = ToolRunner()
 
     with pytest.raises(SideEffectToolError, match="charge"):
-        runner.run(charge, {"amount_cents": 100})
+        await runner.run(charge, {"amount_cents": 100})
 
     assert calls == []
 
