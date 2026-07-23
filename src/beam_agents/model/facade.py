@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
-import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -230,7 +230,7 @@ class LlmClientFacade:
             payload = json.loads(response.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise OutputSchemaError("response is not valid utf-8 JSON") from error
-        _validate_schema_value(payload, output_schema)
+        _validate_schema_value(payload, output_schema, allow_provider_metadata=True)
 
 
 async def _default_sleep_ms(ms: int) -> None:
@@ -325,7 +325,12 @@ def _as_int(value: object) -> int | None:
     return None
 
 
-def _validate_schema_value(value: object, schema: object) -> None:  # noqa: PLR0912
+def _validate_schema_value(  # noqa: PLR0912
+    value: object,
+    schema: object,
+    *,
+    allow_provider_metadata: bool = False,
+) -> None:
     if not isinstance(schema, dict):
         raise OutputSchemaError("output_schema must be an object schema")
 
@@ -354,7 +359,10 @@ def _validate_schema_value(value: object, schema: object) -> None:  # noqa: PLR0
             if isinstance(key, str) and key in value:
                 _validate_schema_value(value[key], child)
         if schema.get("additionalProperties") is False:
-            unknown = set(value.keys()) - {k for k in properties if isinstance(k, str)}
+            allowed = {k for k in properties if isinstance(k, str)}
+            if allow_provider_metadata:
+                allowed.add("usage")
+            unknown = set(value.keys()) - allowed
             if unknown:
                 raise OutputSchemaError(f"unknown property: {next(iter(unknown))}")
         return
