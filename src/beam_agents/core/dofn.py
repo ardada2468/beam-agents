@@ -8,13 +8,15 @@ import threading
 from collections.abc import Callable, Coroutine, Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Protocol, cast, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import apache_beam as beam
+from apache_beam.coders.typecoders import registry as _reg
 from apache_beam.pvalue import TaggedOutput
 from apache_beam.transforms import userstate
 from apache_beam.transforms.timeutil import TimeDomain
 from apache_beam.utils.timestamp import Timestamp
+from google.protobuf.message import Message
 
 from beam_agents._protos import (
     AgentEnvelope,
@@ -27,7 +29,6 @@ from beam_agents._protos import (
 from beam_agents._protos import (
     RuntimeError as RuntimeErrorProto,
 )
-from beam_agents.core.coders import DeterministicProtoCoder
 from beam_agents.memory import Memory
 from beam_agents.memory.facade import HARD_CAP_BYTES
 from beam_agents.model import BLOB_CAP_BYTES, ReplayCache
@@ -332,14 +333,35 @@ class _IntSumCombineFn(beam.CombineFn):
 class _AgentDoFn(beam.DoFn):
     """Internal runtime boundary: route, execute one activation, commit atomically."""
 
-    MEMORY = userstate.ReadModifyWriteStateSpec("MEMORY", DeterministicProtoCoder(MemoryBlob))
+    # Lazy coder proxy to avoid import-time registration side effects. The
+    # proxy delegates to whatever coder the Beam registry resolves at runtime
+    # (e.g., after register_coders() is called in tests or pipeline setup).
+    class _LazyCoder:
+        def __init__(self, proto_type: type[Message]) -> None:
+            self._proto_type = proto_type
+
+        def encode(self, value: Message) -> bytes:
+            coder = _reg.get_coder(self._proto_type)
+            return coder.encode(value)
+
+        def decode(self, encoded: bytes) -> Any:
+            coder = _reg.get_coder(self._proto_type)
+            c: Any = coder
+            return cast(Message, c.decode(encoded))
+
+        def is_deterministic(self) -> bool:  # best-effort delegate
+            coder = _reg.get_coder(self._proto_type)
+            try:
+                return coder.is_deterministic()
+            except Exception:
+                return False
+
+    MEMORY = userstate.ReadModifyWriteStateSpec("MEMORY", cast(Any, _LazyCoder(MemoryBlob)))
     CONTINUATION = userstate.ReadModifyWriteStateSpec(
-        "CONTINUATION", DeterministicProtoCoder(Continuation)
+        "CONTINUATION", cast(Any, _LazyCoder(Continuation))
     )
-    LLM_CACHE = userstate.ReadModifyWriteStateSpec(
-        "LLM_CACHE", DeterministicProtoCoder(LlmCacheBlob)
-    )
-    PENDING = userstate.BagStateSpec("PENDING", DeterministicProtoCoder(ToolIntent))
+    LLM_CACHE = userstate.ReadModifyWriteStateSpec("LLM_CACHE", cast(Any, _LazyCoder(LlmCacheBlob)))
+    PENDING = userstate.BagStateSpec("PENDING", cast(Any, _LazyCoder(ToolIntent)))
     SEQ = userstate.CombiningValueStateSpec(
         "SEQ",
         beam.coders.VarIntCoder(),
