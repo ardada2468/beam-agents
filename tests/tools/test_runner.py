@@ -11,8 +11,8 @@ import pytest
 from beam_agents.tools import ToolArgumentError, ToolRunner, tool
 
 
-def test_valid_arguments_are_validated_and_the_tool_runs() -> None:
-    # Scenario: Valid arguments are validated and the tool runs.
+async def test_valid_arguments_are_validated_and_a_sync_tool_runs() -> None:
+    # Scenario: Valid arguments are validated and a sync tool runs.
     calls: list[tuple[str, int]] = []
 
     @tool
@@ -21,13 +21,13 @@ def test_valid_arguments_are_validated_and_the_tool_runs() -> None:
         return customer_id
 
     runner = ToolRunner()
-    result = runner.run(lookup, {"customer_id": "abc", "limit": 5})
+    result = await runner.run(lookup, {"customer_id": "abc", "limit": 5})
 
     assert result == "abc"
     assert calls == [("abc", 5)]
 
 
-def test_invalid_arguments_are_rejected_before_the_callable_runs() -> None:
+async def test_invalid_arguments_are_rejected_before_the_callable_runs() -> None:
     # Scenario: Invalid arguments are rejected before the callable runs.
     calls: list[object] = []
 
@@ -39,9 +39,25 @@ def test_invalid_arguments_are_rejected_before_the_callable_runs() -> None:
     runner = ToolRunner()
 
     with pytest.raises(ToolArgumentError):
-        runner.run(lookup, {})  # missing required field
+        await runner.run(lookup, {})  # missing required field
 
     with pytest.raises(ToolArgumentError):
-        runner.run(lookup, {"customer_id": object()})  # wrong type, not coercible to str
+        await runner.run(lookup, {"customer_id": object()})  # wrong type, not coercible to str
 
     assert calls == []
+
+
+async def test_an_async_tool_is_awaited_and_its_result_returned() -> None:
+    # Scenario: An async tool is awaited and its result returned.
+    calls: list[tuple[str, int]] = []
+
+    @tool
+    async def lookup(customer_id: str, limit: int = 10) -> str:
+        calls.append((customer_id, limit))
+        return customer_id
+
+    runner = ToolRunner()
+    result = await runner.run(lookup, {"customer_id": "abc", "limit": 5})
+
+    assert result == "abc"
+    assert calls == [("abc", 5)]
