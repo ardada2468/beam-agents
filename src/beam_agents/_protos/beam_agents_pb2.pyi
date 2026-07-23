@@ -194,3 +194,35 @@ class LlmCacheBlob(_message.Message):
     entries: _containers.RepeatedCompositeFieldContainer[LlmCacheBlob.LlmCacheEntry]
     total_response_bytes: int
     def __init__(self, state_schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[LlmCacheBlob.LlmCacheEntry, _Mapping]]] = ..., total_response_bytes: _Optional[int] = ...) -> None: ...
+
+class RuntimeError(_message.Message):
+    __slots__ = ("error_type", "entity_key", "seq", "intent_id", "message", "observed_at_ms")
+    class ErrorType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        ERROR_TYPE_UNSPECIFIED: _ClassVar[RuntimeError.ErrorType]
+        INVALID_ENVELOPE: _ClassVar[RuntimeError.ErrorType]
+        BUSY_KEY: _ClassVar[RuntimeError.ErrorType]
+        ORPHANED_RESULT: _ClassVar[RuntimeError.ErrorType]
+        ACTIVATION_TIMEOUT: _ClassVar[RuntimeError.ErrorType]
+        ACTIVATION_FAILURE: _ClassVar[RuntimeError.ErrorType]
+        TIMEOUT_HANDLING_FAILURE: _ClassVar[RuntimeError.ErrorType]
+    ERROR_TYPE_UNSPECIFIED: RuntimeError.ErrorType
+    INVALID_ENVELOPE: RuntimeError.ErrorType
+    BUSY_KEY: RuntimeError.ErrorType
+    ORPHANED_RESULT: RuntimeError.ErrorType
+    ACTIVATION_TIMEOUT: RuntimeError.ErrorType
+    ACTIVATION_FAILURE: RuntimeError.ErrorType
+    TIMEOUT_HANDLING_FAILURE: RuntimeError.ErrorType
+    ERROR_TYPE_FIELD_NUMBER: _ClassVar[int]
+    ENTITY_KEY_FIELD_NUMBER: _ClassVar[int]
+    SEQ_FIELD_NUMBER: _ClassVar[int]
+    INTENT_ID_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    OBSERVED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    error_type: RuntimeError.ErrorType
+    entity_key: bytes
+    seq: int
+    intent_id: str
+    message: str
+    observed_at_ms: int
+    def __init__(self, error_type: _Optional[_Union[RuntimeError.ErrorType, str]] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., intent_id: _Optional[str] = ..., message: _Optional[str] = ..., observed_at_ms: _Optional[int] = ...) -> None: ...

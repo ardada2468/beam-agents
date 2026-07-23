@@ -166,3 +166,25 @@ message LlmCacheBlob {
   // re-serialize.
   int64 total_response_bytes = 3;
 }
+
+// Typed runtime error for dead-letter output from routing, timeouts, and
+// activation failures. Additive-only: existing persisted state is unaffected.
+message RuntimeError {
+  enum ErrorType {
+    ERROR_TYPE_UNSPECIFIED = 0;
+    INVALID_ENVELOPE = 1;
+    BUSY_KEY = 2;
+    ORPHANED_RESULT = 3;
+    ACTIVATION_TIMEOUT = 4;
+    ACTIVATION_FAILURE = 5;
+    TIMEOUT_HANDLING_FAILURE = 6;
+  }
+
+  ErrorType error_type = 1;
+  bytes entity_key = 2;
+  int64 seq = 3;
+  string intent_id = 4;
+  // Stable, human-readable message suitable for logs and dead-letter sink.
+  string message = 5;
+  int64 observed_at_ms = 6;
+}
