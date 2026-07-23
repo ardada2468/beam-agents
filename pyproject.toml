@@ -21,6 +21,7 @@ dev = [
   { include-group = "bench" },
   { include-group = "docs" },
   "pre-commit",
+  "grpcio-tools",
 ]
 test = [
   "pytest",
@@ -43,6 +44,9 @@ bench = [
   "pyperf",
 ]
 docs = []
+
+[tool.uv]
+default-groups = []
 
 [build-system]
 requires = ["hatchling"]
