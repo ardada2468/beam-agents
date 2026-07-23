@@ -133,3 +133,36 @@ message Continuation {
   int64 suspended_at_ms = 7;
   int64 deadline_ms = 8;
 }
+
+// Per-key LLM replay cache: bounded content-hash-keyed responses with LRU
+// metadata, backing correctness invariant 3 (bundle retries make zero extra
+// provider calls on the cached path).
+//
+// Like MemoryBlob, this is a single-value blob (Beam Python has no MapState).
+// Entries are a repeated field, not a proto `map<>`, so LRU order is
+// representable and encoding order is under our control. The 64-entry LRU
+// bound, 6h TTL, and 100 KiB blob cap are enforced by runtime code, not this
+// schema.
+message LlmCacheBlob {
+  // Single cached LLM response, keyed by a content hash of the request.
+  message LlmCacheEntry {
+    // 64-char lowercase hex sha256 of the canonical request material.
+    string cache_key = 1;
+    // Serialized provider response; empty when digest_only is set.
+    bytes response = 2;
+    // sha256 of the full response bytes, populated for every entry (including
+    // digest-only ones) so retries can detect provider nondeterminism.
+    bytes response_digest = 3;
+    int64 created_at_ms = 4;
+    int64 last_access_ms = 5;
+    // True when the response was too large to store: the payload is dropped and
+    // only response_digest is retained for divergence detection.
+    bool digest_only = 6;
+  }
+
+  uint32 state_schema_version = 1;
+  repeated LlmCacheEntry entries = 2;
+  // Cached sum of stored response sizes, for cheap accounting without a full
+  // re-serialize.
+  int64 total_response_bytes = 3;
+}

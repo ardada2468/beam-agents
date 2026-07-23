@@ -10,6 +10,7 @@ import beam_agents._protos as protos
 from beam_agents._protos import (
     AgentEnvelope,
     Continuation,
+    LlmCacheBlob,
     MemoryBlob,
     ToolIntent,
     ToolResult,
@@ -39,7 +40,7 @@ def _unknown_field(field_number: int, value: int) -> bytes:
 # --- Requirement: Proto package and committed generation ---------------------
 
 
-def test_all_six_message_classes_importable() -> None:
+def test_all_seven_message_classes_importable() -> None:
     # Scenario: Bindings are importable from the installed package.
     for name in (
         "MemoryBlob",
@@ -48,6 +49,7 @@ def test_all_six_message_classes_importable() -> None:
         "TraceEvent",
         "AgentEnvelope",
         "Continuation",
+        "LlmCacheBlob",
     ):
         assert hasattr(protos, name)
     assert set(protos.__all__) == {
@@ -57,6 +59,7 @@ def test_all_six_message_classes_importable() -> None:
         "TraceEvent",
         "AgentEnvelope",
         "Continuation",
+        "LlmCacheBlob",
     }
 
 
@@ -88,6 +91,56 @@ def test_memory_blob_schema_version_zero_is_distinguishable() -> None:
 
     assert versioned.state_schema_version == 1
     assert parsed_unversioned.state_schema_version == 0
+
+
+# --- Requirement: LlmCacheBlob carries versioned, LRU-orderable cache entries -
+
+
+def test_llm_cache_entries_round_trip_in_insertion_order() -> None:
+    # Scenario: Cache entries round-trip in insertion order.
+    blob = LlmCacheBlob(state_schema_version=1, total_response_bytes=6)
+    for i, key in enumerate(("a", "b", "c")):
+        blob.entries.add(
+            cache_key=key,
+            response=key.encode(),
+            response_digest=(key * 2).encode(),
+            created_at_ms=1000 + i,
+            last_access_ms=2000 + i,
+            digest_only=False,
+        )
+
+    parsed = LlmCacheBlob()
+    parsed.ParseFromString(blob.SerializeToString())
+
+    assert [e.cache_key for e in parsed.entries] == ["a", "b", "c"]
+    assert [e.response for e in parsed.entries] == [b"a", b"b", b"c"]
+    assert [e.response_digest for e in parsed.entries] == [b"aa", b"bb", b"cc"]
+    assert [e.created_at_ms for e in parsed.entries] == [1000, 1001, 1002]
+    assert [e.last_access_ms for e in parsed.entries] == [2000, 2001, 2002]
+    assert parsed.state_schema_version == 1
+    assert parsed.total_response_bytes == 6
+
+
+def test_llm_cache_digest_only_entry_representable() -> None:
+    # Scenario: Digest-only entries are representable.
+    digest = bytes(range(32))
+    blob = LlmCacheBlob(state_schema_version=1)
+    blob.entries.add(
+        cache_key="k",
+        response=b"",
+        response_digest=digest,
+        created_at_ms=5,
+        last_access_ms=5,
+        digest_only=True,
+    )
+
+    parsed = LlmCacheBlob()
+    parsed.ParseFromString(blob.SerializeToString())
+
+    entry = parsed.entries[0]
+    assert entry.digest_only is True
+    assert entry.response == b""
+    assert entry.response_digest == digest
 
 
 # --- Requirement: ToolIntent carries deterministic identity and expiry -------
@@ -266,3 +319,20 @@ def test_unknown_fields_survive_re_encode() -> None:
     reencoded = parsed.SerializeToString()
 
     assert unknown in reencoded
+
+
+def test_llm_cache_blob_tolerates_and_preserves_unknown_fields() -> None:
+    # Scenario: Unknown fields are tolerated on decode / survive re-encode,
+    # extended to the newly added LlmCacheBlob type.
+    known = LlmCacheBlob(state_schema_version=1, total_response_bytes=3)
+    known.entries.add(cache_key="k", response=b"abc", digest_only=False)
+    unknown = _unknown_field(500, 42)
+    wire = known.SerializeToString() + unknown
+
+    parsed = LlmCacheBlob()
+    parsed.ParseFromString(wire)  # must not raise
+
+    assert parsed.state_schema_version == 1
+    assert parsed.entries[0].cache_key == "k"
+    assert parsed.entries[0].response == b"abc"
+    assert unknown in parsed.SerializeToString()

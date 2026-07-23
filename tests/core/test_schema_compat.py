@@ -33,7 +33,7 @@ def test_golden_blob_decodes_to_expected_fields(name: str) -> None:
 
 
 def test_every_message_type_has_a_golden_fixture() -> None:
-    # All six message types must have a committed baseline.
+    # All seven message types must have a committed baseline.
     committed = {p.stem for p in GOLDEN_DIR.glob("*.bin")}
     assert committed == set(GOLDEN)
-    assert len(committed) == 6
+    assert len(committed) == 7
