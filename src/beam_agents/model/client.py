@@ -84,3 +84,17 @@ class ServerError(ProviderError):
 
 class ProviderTimeout(ProviderError):
     """The provider did not respond within its deadline."""
+
+
+class ProviderRequestError(Exception):
+    """A non-retryable client-side failure: a non-429 4xx response, or a 2xx
+    body the provider's `Decode` could not parse.
+
+    Deliberately not a `ProviderError` subclass: `LlmFacade._call_with_retry`
+    retries on `except ProviderError`, and this failure must propagate
+    immediately instead (mirroring `CircuitOpenError`/`UnmatchedRequestError`).
+    """
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"non-retryable provider request error (status={status})")
+        self.status = status

@@ -15,11 +15,14 @@ cap with a digest-only fallback for oversized responses.
 Importing this package has no side effects.
 """
 
+from beam_agents.model.anthropic import AnthropicProvider
+from beam_agents.model.anthropic import decode as anthropic_decode
 from beam_agents.model.client import (
     LLMClient,
     LlmRequest,
     LlmResponse,
     ProviderError,
+    ProviderRequestError,
     ProviderTimeout,
     RateLimitError,
     ServerError,
@@ -46,6 +49,8 @@ from beam_agents.model.fake import (
     raise_error,
     respond_with,
 )
+from beam_agents.model.openai_compat import OpenAICompatProvider
+from beam_agents.model.openai_compat import decode as openai_compat_decode
 from beam_agents.model.replay_cache import (
     BLOB_CAP_BYTES,
     MAX_ENTRIES,
@@ -59,6 +64,7 @@ __all__ = [
     "BLOB_CAP_BYTES",
     "MAX_ENTRIES",
     "TTL_MS",
+    "AnthropicProvider",
     "CircuitBreaker",
     "CircuitOpenError",
     "CircuitState",
@@ -69,8 +75,10 @@ __all__ = [
     "LlmFacade",
     "LlmRequest",
     "LlmResponse",
+    "OpenAICompatProvider",
     "OutputSchemaError",
     "ProviderError",
+    "ProviderRequestError",
     "ProviderTimeout",
     "RateLimitError",
     "ReplayCache",
@@ -80,11 +88,13 @@ __all__ = [
     "StagingSink",
     "TokenUsage",
     "UnmatchedRequestError",
+    "anthropic_decode",
     "compute_cache_key",
     "fail_then_succeed",
     "match_any",
     "match_contains",
     "match_model_id",
+    "openai_compat_decode",
     "raise_error",
     "respond_with",
 ]
