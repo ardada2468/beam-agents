@@ -71,6 +71,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["PLR2004"]
+# Beam's stateful-DoFn API *requires* state/timer handles to be declared as
+# argument defaults (`state=beam.DoFn.StateParam(SPEC)`); B008 (no calls in
+# defaults) is a false positive for this idiom.
+"src/beam_agents/core/dofn.py" = ["B008"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -114,6 +118,28 @@ disable_error_code = ["override"]
 # Suppress that one check for the facade; the rest of strict mode still applies.
 [[tool.mypy.overrides]]
 module = "beam_agents.memory.facade"
+disable_error_code = ["no-untyped-call"]
+
+# The stateful DoFn and its transform are the densest Beam surface in the repo:
+# every state/timer/output call routes through Beam's untyped API, and Beam's
+# generics (PTransform, TaggedOutput) ship without parameters. Relax those Beam-
+# only checks for these two modules; the rest of strict mode still applies.
+[[tool.mypy.overrides]]
+module = "beam_agents.core.dofn"
+disable_error_code = ["no-untyped-call", "type-arg"]
+
+[[tool.mypy.overrides]]
+module = "beam_agents.core.transform"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Beam's TestPipeline/TestStream/assert_that helpers are untyped, so every
+# pipeline-driving test call reads as an untyped call under strict mode.
+[[tool.mypy.overrides]]
+module = [
+    "tests.core.test_dofn_pipeline",
+    "tests.core.test_dofn_streaming",
+    "tests.core._dofn_helpers",
+]
 disable_error_code = ["no-untyped-call"]
 
 [tool.pytest.ini_options]
