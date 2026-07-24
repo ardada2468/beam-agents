@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import asyncio
 
+import apache_beam as beam
+
+from beam_agents._protos import AgentEnvelope
 from beam_agents.core.agent import Complete, Suspend
 from beam_agents.core.context import ActivationContext
 from beam_agents.model.client import LlmRequest, ProviderError
@@ -17,6 +20,17 @@ from beam_agents.model.fake import FakeLLM, match_any, raise_error, respond_with
 
 # Tool intents get a fixed TTL in tests; the value only feeds expires_at.
 _TTL_MS = 60_000
+
+
+def keyed(pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+    """Key a ``PCollection[AgentEnvelope]`` by ``entity_key`` for ``RunAgent``.
+
+    ``RunAgent`` no longer keys elements itself (add-runagent-transform); every
+    pipeline test keys its envelope stream upstream with this helper.
+    """
+    return pcoll | beam.WithKeys(lambda e: e.entity_key).with_output_types(
+        tuple[bytes, AgentEnvelope]
+    )
 
 
 def make_pong_provider() -> FakeLLM:

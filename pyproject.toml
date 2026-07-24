@@ -75,6 +75,11 @@ ignore = [
 # argument defaults (`state=beam.DoFn.StateParam(SPEC)`); B008 (no calls in
 # defaults) is a false positive for this idiom.
 "src/beam_agents/core/dofn.py" = ["B008"]
+# DefaultSinkResolver.resolve() imports each IO client (Kafka/Pub/Sub/BigQuery)
+# lazily, on purpose: AgentConfig.__post_init__ only calls validate(), which
+# must stay import-free so sink-URI validation runs offline. PLC0415 (imports
+# not at top-level) is exactly what that design requires here.
+"src/beam_agents/core/transform.py" = ["PLC0415"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -104,6 +109,13 @@ disable_error_code = ["type-arg"]
 [[tool.mypy.overrides]]
 module = "tests.core.test_coders"
 disable_error_code = ["no-untyped-call"]
+
+# Same Beam-untyped-API relaxation as beam_agents.core.transform (type-arg,
+# no-any-return) for the KV-keying test helper and construction-time/sink
+# tests exercising RunAgent/AgentConfig's PCollection-typed seams directly.
+[[tool.mypy.overrides]]
+module = "tests.core.test_transform"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # Beam types `Coder.from_type_hint` as `-> CoderT` (a cls-bound TypeVar), so our
 # concrete override return trips the LSP `override` check — the same concrete
@@ -138,9 +150,14 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 module = [
     "tests.core.test_dofn_pipeline",
     "tests.core.test_dofn_streaming",
-    "tests.core._dofn_helpers",
 ]
 disable_error_code = ["no-untyped-call"]
+
+# _dofn_helpers' `keyed()` returns a bare PCollection (Beam's own generic is
+# unparameterized here too); same relaxation as beam_agents.core.transform.
+[[tool.mypy.overrides]]
+module = "tests.core._dofn_helpers"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config --cov=beam_agents --cov-report=term-missing --cov-report=xml"
@@ -172,13 +189,17 @@ branch = true
 #      registration tests still cover every mutant in coders.py, and the async
 #      bridge and loop driver are covered by the fast non-Beam unit tests
 #      (test_bridge.py, test_loop.py). The `-k` clause drops coders.py's two
-#      TestPipeline tests; the `--ignore`s drop the stateful-DoFn pipeline and
-#      TestStream suites for the same DirectRunner reason.
+#      TestPipeline tests; the `--ignore`s drop the stateful-DoFn pipeline,
+#      TestStream, and RunAgent-transform pipeline suites for the same
+#      DirectRunner reason (test_transform.py also drives TestPipeline/
+#      TestStream; its non-pipeline AgentConfig/SinkResolver unit tests still
+#      cover transform.py's validation logic, just not under mutmut).
 do_not_mutate = ["*/_protos/*"]
 pytest_add_cli_args_test_selection = [
   "tests/core",
   "--ignore=tests/core/test_dofn_pipeline.py",
   "--ignore=tests/core/test_dofn_streaming.py",
+  "--ignore=tests/core/test_transform.py",
   "-k",
   "not shuffle_boundary and not group_by_key_key",
 ]

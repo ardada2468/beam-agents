@@ -23,10 +23,11 @@ from apache_beam.transforms.window import TimestampedValue
 from beam_agents._protos import AgentEnvelope, ToolResult
 from beam_agents.core.agent import intent_id_for
 from beam_agents.core.dofn import HITL_TIMEOUT_OUTPUT, REASON_ORPHANED
-from beam_agents.core.transform import RunAgent
+from beam_agents.core.transform import AgentConfig, RunAgent
 from tests.core._dofn_helpers import (
     append_agent,
     conditional_append_agent,
+    keyed,
     make_pong_provider,
     make_slow_provider,
     seq_agent,
@@ -90,10 +91,8 @@ def test_seq_increments_once_per_committed_activation() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = (
-            p
-            | stream
-            | RunAgent(seq_agent, provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS)
+        out = keyed(p | stream) | RunAgent(
+            seq_agent, config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS)
         )
         assert_that(out.output, equal_to([b"0", b"1", b"2"]))
 
@@ -112,10 +111,9 @@ def test_per_key_ordering_and_memory_persistence() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = (
-            p
-            | stream
-            | RunAgent(append_agent, provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS)
+        out = keyed(p | stream) | RunAgent(
+            append_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
         )
         # The terminal "a,b,c" is only reachable if appends applied in order.
         assert_that(out.output, equal_to([b"a#0", b"a,b#1", b"a,b,c#2"]))
@@ -135,10 +133,9 @@ def test_interleaved_keys_preserve_per_key_order() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = (
-            p
-            | stream
-            | RunAgent(append_agent, provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS)
+        out = keyed(p | stream) | RunAgent(
+            append_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
         )
         assert_that(
             out.output,
@@ -160,12 +157,9 @@ def test_failed_activation_commits_nothing() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = (
-            p
-            | stream
-            | RunAgent(
-                conditional_append_agent, provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS
-            )
+        out = keyed(p | stream) | RunAgent(
+            conditional_append_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
         )
         # "b" lands on the pre-failure ring (a,b) with seq 1, proving FAIL neither
         # persisted its scratch write nor advanced SEQ.
@@ -187,15 +181,13 @@ def test_timeout_routes_to_errors_without_mutating_state() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = (
-            p
-            | stream
-            | RunAgent(
-                timeout_or_append_agent,
+        out = keyed(p | stream) | RunAgent(
+            timeout_or_append_agent,
+            config=AgentConfig(
                 provider_factory=make_slow_provider,
                 activation_timeout_s=0.3,
                 ttl_ms=_BIG_TTL_MS,
-            )
+            ),
         )
         # "a" -> a#0; SLOW times out (no commit); "b" -> a,b#1 (seq not advanced
         # by the timeout, memory intact).
@@ -217,12 +209,9 @@ def test_suspend_then_tool_result_resumes() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = (
-            p
-            | stream
-            | RunAgent(
-                suspend_then_complete_agent, provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS
-            )
+        out = keyed(p | stream) | RunAgent(
+            suspend_then_complete_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
         )
         # Suspend emits an intent (no main output); resume completes to the echo.
         assert_that(out.output, equal_to([b"resumed:done"]), label="resumed")
@@ -246,7 +235,9 @@ def test_ttl_fire_wipes_state_and_resets_seq() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = p | stream | RunAgent(append_agent, provider_factory=make_pong_provider, ttl_ms=100)
+        out = keyed(p | stream) | RunAgent(
+            append_agent, config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=100)
+        )
         # Post-wipe "b" starts a fresh ring at seq 0 (b"b#0"), not b"a,b#1".
         assert_that(out.output, equal_to([b"a#0", b"b#0"]))
 
@@ -266,7 +257,9 @@ def test_new_element_rearms_ttl_and_supersedes_old_mark() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = p | stream | RunAgent(append_agent, provider_factory=make_pong_provider, ttl_ms=100)
+        out = keyed(p | stream) | RunAgent(
+            append_agent, config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=100)
+        )
         # No wipe occurred at 1120: "c" sees the accumulated ring and seq 2.
         assert_that(out.output, equal_to([b"a#0", b"a,b#1", b"a,b,c#2"]))
 
@@ -286,12 +279,9 @@ def test_hitl_timeout_fires_fallback_and_orphans_late_result() -> None:
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
-        out = (
-            p
-            | stream
-            | RunAgent(
-                suspend_then_complete_agent, provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS
-            )
+        out = keyed(p | stream) | RunAgent(
+            suspend_then_complete_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
         )
         assert_that(out.output, equal_to([HITL_TIMEOUT_OUTPUT]), label="fallback")
         reasons = out.errors | "reasons" >> beam.Map(lambda e: e.reason)

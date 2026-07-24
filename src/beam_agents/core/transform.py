@@ -3,27 +3,38 @@ stateful, fault-tolerant Beam step.
 
 Usage::
 
-    outputs = envelopes | RunAgent(agent, provider_factory=make_client)
+    outputs = keyed_envelopes | RunAgent(agent, config=AgentConfig(provider_factory=make_client))
     outputs.output   # terminal agent outputs (bytes)
     outputs.intents  # ToolIntent side-effect requests -> outbox topic
     outputs.traces   # TraceEvent observability records
     outputs.errors   # ActivationError dead-letter records
 
-Input is a ``PCollection[AgentEnvelope]``; this transform keys each envelope by
-``entity_key`` so the stateful ``_AgentDoFn`` gets per-key serialization, and
-registers the deterministic proto coders so no element or state value ever falls
-back to pickle.
+Input is a pre-keyed ``PCollection[KV[bytes, AgentEnvelope]]`` — the caller
+``Flatten``s its event/tool-result/approval streams and keys them with
+``beam.WithKeys(entity_key).with_output_types(tuple[bytes, AgentEnvelope])``
+upstream, matching the documented Dataflow shape. ``RunAgent`` does not key
+elements itself; it validates the input is KV-shaped at pipeline-construction
+(``expand``) time and raises ``ValueError`` otherwise.
+
+``AgentConfig`` bundles the provider factory, runtime knobs, and optional sink
+URIs (``intents_to``/``traces_to``/``errors_to``); it validates itself at
+construction time so misconfiguration fails at the site of the typo rather than
+deep inside a runner. Configured sink URIs are resolved to Beam write
+transforms via a pluggable ``SinkResolver`` and attached as terminal branches
+to their tagged output; unset sinks leave that output exposed for the caller.
 
 Importing this module has no side effects.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from urllib.parse import urlparse
 
 import apache_beam as beam
+from apache_beam.typehints.typehints import AnyTypeConstraint, TupleHint
 
-from beam_agents._protos import AgentEnvelope
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
 
@@ -38,43 +49,202 @@ INTENTS_TAG = "intents"
 TRACES_TAG = "traces"
 ERRORS_TAG = "errors"
 
+_DEFAULT_ACTIVATION_TIMEOUT_S = 30.0
+_DEFAULT_TTL_MS = 3_600_000
+_DEFAULT_CANCEL_GRACE_S = 5.0
 
-def _key_by_entity(envelope: AgentEnvelope) -> tuple[bytes, AgentEnvelope]:
-    return (envelope.entity_key, envelope)
+_SINK_FIELDS = ("intents_to", "traces_to", "errors_to")
+_SINK_LABELS = {
+    "intents_to": "WriteIntents",
+    "traces_to": "WriteTraces",
+    "errors_to": "WriteErrors",
+}
+
+
+class UnknownSinkSchemeError(ValueError):
+    """A sink URI's scheme is unrecognized, or the URI is malformed for its scheme."""
+
+
+@runtime_checkable
+class SinkResolver(Protocol):
+    """Resolves a sink URI to a Beam write transform.
+
+    ``validate`` runs at ``AgentConfig`` construction: it must be cheap and
+    import-free, raising :class:`UnknownSinkSchemeError` for an unrecognized
+    scheme or a malformed URI. ``resolve`` runs only at ``RunAgent.expand`` and
+    may construct real IO clients.
+    """
+
+    def validate(self, field_name: str, uri: str) -> None: ...
+
+    def resolve(self, uri: str) -> beam.PTransform: ...
+
+
+class DefaultSinkResolver:
+    """Resolves ``kafka://``, ``pubsub://``, and ``bigquery://`` sink URIs.
+
+    URI grammar:
+
+    - ``kafka://<bootstrap-servers>/<topic>`` — comma-separated ``host:port`` list.
+    - ``pubsub://<project>/<topic>``
+    - ``bigquery://<project>/<dataset>/<table>``
+
+    IO client modules are imported lazily inside :meth:`resolve` so
+    :meth:`validate` (called at ``AgentConfig`` construction) never imports them.
+    """
+
+    _SCHEMES = frozenset({"kafka", "pubsub", "bigquery"})
+    _BIGQUERY_URI_SEGMENTS = 2  # <dataset>/<table>
+
+    def validate(self, field_name: str, uri: str) -> None:
+        self._parse(field_name, uri)
+
+    def resolve(self, uri: str) -> beam.PTransform:
+        scheme, parts = self._parse("<sink>", uri)
+        if scheme == "kafka":
+            from apache_beam.io.kafka import WriteToKafka
+
+            servers, topic = parts
+            return WriteToKafka(producer_config={"bootstrap.servers": servers}, topic=topic)
+        if scheme == "pubsub":
+            from apache_beam.io.gcp.pubsub import WriteToPubSub
+
+            project, topic = parts
+            return WriteToPubSub(topic=f"projects/{project}/topics/{topic}")
+        from apache_beam.io.gcp.bigquery import WriteToBigQuery
+
+        project, dataset, table = parts
+        return WriteToBigQuery(table=f"{project}:{dataset}.{table}")
+
+    def _parse(self, field_name: str, uri: str) -> tuple[str, tuple[str, ...]]:
+        parsed = urlparse(uri)
+        scheme = parsed.scheme
+        if scheme not in self._SCHEMES:
+            raise UnknownSinkSchemeError(
+                f"{field_name}: unknown sink URI scheme {(scheme or uri)!r}; "
+                f"expected one of {sorted(self._SCHEMES)}"
+            )
+        segments = [s for s in parsed.path.split("/") if s]
+        if scheme == "kafka":
+            if not parsed.netloc or len(segments) != 1:
+                raise UnknownSinkSchemeError(
+                    f"{field_name}: malformed kafka URI {uri!r}; "
+                    "expected kafka://<bootstrap-servers>/<topic>"
+                )
+            return scheme, (parsed.netloc, segments[0])
+        if scheme == "pubsub":
+            if not parsed.netloc or len(segments) != 1:
+                raise UnknownSinkSchemeError(
+                    f"{field_name}: malformed pubsub URI {uri!r}; "
+                    "expected pubsub://<project>/<topic>"
+                )
+            return scheme, (parsed.netloc, segments[0])
+        if not parsed.netloc or len(segments) != self._BIGQUERY_URI_SEGMENTS:
+            raise UnknownSinkSchemeError(
+                f"{field_name}: malformed bigquery URI {uri!r}; "
+                "expected bigquery://<project>/<dataset>/<table>"
+            )
+        return scheme, (parsed.netloc, *segments)
+
+
+def _require_positive(name: str, value: float) -> None:
+    if value <= 0:
+        raise ValueError(f"AgentConfig.{name} must be positive, got {value!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentConfig:
+    """Immutable, self-validating ``RunAgent`` configuration.
+
+    Bundles the provider factory, the runtime knobs, and the optional sink
+    URIs. Validation runs in ``__post_init__``, so a misconfigured value raises
+    ``ValueError`` at the construction site — before any pipeline exists.
+    """
+
+    provider_factory: Callable[[], LLMClient]
+    activation_timeout_s: float = field(default=_DEFAULT_ACTIVATION_TIMEOUT_S, kw_only=True)
+    ttl_ms: int = field(default=_DEFAULT_TTL_MS, kw_only=True)
+    cancel_grace_s: float = field(default=_DEFAULT_CANCEL_GRACE_S, kw_only=True)
+    intents_to: str | None = field(default=None, kw_only=True)
+    traces_to: str | None = field(default=None, kw_only=True)
+    errors_to: str | None = field(default=None, kw_only=True)
+    sink_resolver: SinkResolver = field(default_factory=DefaultSinkResolver, kw_only=True)
+
+    def __post_init__(self) -> None:
+        _require_positive("activation_timeout_s", self.activation_timeout_s)
+        _require_positive("ttl_ms", self.ttl_ms)
+        _require_positive("cancel_grace_s", self.cancel_grace_s)
+        for field_name in _SINK_FIELDS:
+            uri = getattr(self, field_name)
+            if uri is not None:
+                self.sink_resolver.validate(field_name, uri)
+
+
+@dataclass(frozen=True, slots=True)
+class RunAgentOutputs:
+    """``RunAgent``'s four named outputs: main plus the three tagged streams."""
+
+    output: beam.pvalue.PCollection
+    intents: beam.pvalue.PCollection
+    traces: beam.pvalue.PCollection
+    errors: beam.pvalue.PCollection
+
+
+_KV_ARITY = 2  # a KV pair is a 2-tuple: (key, value)
+
+
+def _validate_kv_input(pcoll: beam.pvalue.PCollection) -> None:
+    """Raise ``ValueError`` if ``pcoll`` is positively not KV-shaped.
+
+    An absent/erased element type is allowed to pass (the DoFn's downstream KV
+    requirement is the backstop); only a definite non-pair type is rejected.
+    """
+    element_type = pcoll.element_type
+    if element_type is None or isinstance(element_type, AnyTypeConstraint):
+        return
+    is_pair = (
+        isinstance(element_type, TupleHint.TupleConstraint)
+        and len(element_type.tuple_types) == _KV_ARITY
+    )
+    if not is_pair:
+        raise ValueError(
+            "RunAgent requires a PCollection[KV[bytes, AgentEnvelope]] input "
+            f"(pre-keyed by entity_key); got element type {element_type!r}. Key "
+            "upstream with beam.WithKeys(entity_key)"
+            ".with_output_types(tuple[bytes, AgentEnvelope]) before RunAgent."
+        )
 
 
 class RunAgent(beam.PTransform):
-    """Run ``agent`` as a keyed stateful transform over a stream of envelopes."""
+    """Run ``agent`` as a keyed stateful transform over a pre-keyed envelope stream."""
 
-    def __init__(
-        self,
-        agent: Agent,
-        *,
-        provider_factory: Callable[[], LLMClient],
-        activation_timeout_s: float = 30.0,
-        ttl_ms: int = 3_600_000,
-        cancel_grace_s: float = 5.0,
-    ) -> None:
+    def __init__(self, agent: Agent, *, config: AgentConfig) -> None:
         super().__init__()
         self._agent = agent
-        self._provider_factory = provider_factory
-        self._activation_timeout_s = activation_timeout_s
-        self._ttl_ms = ttl_ms
-        self._cancel_grace_s = cancel_grace_s
+        self._config = config
 
-    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.DoOutputsTuple:
+    def expand(self, pcoll: beam.pvalue.PCollection) -> RunAgentOutputs:
+        _validate_kv_input(pcoll)
         register_coders()
         dofn = _AgentDoFn(
             self._agent,
-            provider_factory=self._provider_factory,
-            activation_timeout_s=self._activation_timeout_s,
-            ttl_ms=self._ttl_ms,
-            cancel_grace_s=self._cancel_grace_s,
+            provider_factory=self._config.provider_factory,
+            activation_timeout_s=self._config.activation_timeout_s,
+            ttl_ms=self._config.ttl_ms,
+            cancel_grace_s=self._config.cancel_grace_s,
         )
-        return (
-            pcoll
-            | "WithEntityKey"
-            >> beam.Map(_key_by_entity).with_output_types(tuple[bytes, AgentEnvelope])
-            | "Activate"
-            >> beam.ParDo(dofn).with_outputs(INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output")
+        tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
+            INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
         )
+        outputs = RunAgentOutputs(
+            output=tagged.output,
+            intents=tagged.intents,
+            traces=tagged.traces,
+            errors=tagged.errors,
+        )
+        for field_name in _SINK_FIELDS:
+            uri = getattr(self._config, field_name)
+            if uri is not None:
+                sink = self._config.sink_resolver.resolve(uri)
+                getattr(outputs, field_name.removesuffix("_to")) | _SINK_LABELS[field_name] >> sink
+        return outputs
