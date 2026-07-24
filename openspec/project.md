@@ -74,6 +74,7 @@ Async bridge: `setup()` starts one background thread per DoFn instance with a de
 - `-m integration`: Redpanda + Redis + Flink mini-cluster (testcontainers).
 - `-m semantics`: correctness gates — retry determinism (chaos wrapper forcing bundle retries: zero extra FakeLLM calls, byte-identical intents), effectively-once end-to-end (induced worker kills: exactly one execution per intent_id), state compat (golden blobs). These gate every release and never get skipped or marked flaky. Split further by infra need: `semantics and not integration` is offline (no docker) and runs as a required `ci` check on every PR; docker-backed semantics gates additionally carry the `integration` marker and run in the `integration` workflow via `make test-semantics`.
 - `-m dataflow`: nightly only, real Dataflow, FakeLLM-over-HTTP.
+- `-m smoke`: nightly only, real Anthropic/OpenAI-compatible endpoints; excluded from `test-unit`, skips locally/in PRs without provider credentials (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Taxonomy mapping and decode behavior for these providers are still verified offline via `httpx.MockTransport`, not gated behind this marker.
 - Timer/watermark behavior is tested with TestStream scripted watermark/processing-time advances — never with `sleep()`.
 - FakeLLM (scripted matcher responses, records all requests) is the default model in all tests; real providers only in nightly smoke.
 

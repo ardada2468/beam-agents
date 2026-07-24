@@ -42,3 +42,31 @@ jobs:
     steps:
       - name: No GCP project configured
         run: echo "GCP_PROJECT_ID is not set; skipping nightly Dataflow run."
+
+  smoke:
+    runs-on: ubuntu-latest
+    if: secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      - name: Real-provider smoke tests
+        run: make test-smoke
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+  smoke-skip-notice:
+    runs-on: ubuntu-latest
+    if: secrets.ANTHROPIC_API_KEY == '' && secrets.OPENAI_API_KEY == ''
+    steps:
+      - name: No provider credentials configured
+        run: echo "Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is set; skipping nightly smoke run."

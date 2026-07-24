@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose -f docker/compose.yaml
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-dataflow mutation coverage-ratchet compose-up compose-down proto
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-18s %s\n", $$1, $$2}'
@@ -22,7 +22,7 @@ type: ## Run mypy --strict
 	uv run mypy
 
 test-unit: ## Run the unit test tier (offline, no docker)
-	uv run pytest -m "not integration and not semantics and not dataflow"
+	uv run pytest -m "not integration and not semantics and not dataflow and not smoke"
 
 # Exit code 5 means "no tests collected", which is expected until core/ and
 # its adapters exist; treat it as success rather than failing empty CI runs.
@@ -40,6 +40,9 @@ test-semantics-offline: ## Run offline (no-docker) semantics gates; required in 
 
 test-dataflow: ## Run dataflow-marked tests (nightly only, requires real GCP)
 	uv run pytest -m dataflow; test $$? -eq 0 -o $$? -eq 5
+
+test-smoke: ## Run smoke-marked tests against live providers (nightly only, requires credentials)
+	uv run pytest -m smoke; test $$? -eq 0 -o $$? -eq 5
 
 mutation: ## Run mutmut against core/
 	uv run mutmut run

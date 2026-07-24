@@ -178,6 +178,7 @@ markers = [
   "integration: requires docker compose services (Redpanda, Redis, Flink)",
   "semantics: correctness/determinism gates",
   "dataflow: nightly-only tests against real Dataflow",
+  "smoke: nightly-only real-provider smoke tests against live endpoints",
   "slow: tests that take longer than 5 seconds",
 ]
 
