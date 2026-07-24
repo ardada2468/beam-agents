@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose -f docker/compose.yaml
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-dataflow mutation coverage-ratchet compose-up compose-down proto
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-dataflow mutation coverage-ratchet compose-up compose-down proto
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-18s %s\n", $$1, $$2}'
@@ -31,6 +31,12 @@ test-integration: ## Run integration-marked tests (requires compose-up)
 
 test-semantics: ## Run semantics/correctness-marked tests (requires compose-up)
 	uv run pytest -m semantics; test $$? -eq 0 -o $$? -eq 5
+
+# No exit-5 tolerance: this selection is required to be non-empty. An empty
+# collection here means the gate was accidentally deselected, not that it's
+# still pending — it must fail the build, not pass silently.
+test-semantics-offline: ## Run offline (no-docker) semantics gates; required in ci
+	uv run pytest -m "semantics and not integration"
 
 test-dataflow: ## Run dataflow-marked tests (nightly only, requires real GCP)
 	uv run pytest -m dataflow; test $$? -eq 0 -o $$? -eq 5
