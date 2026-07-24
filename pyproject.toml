@@ -159,6 +159,16 @@ disable_error_code = ["no-untyped-call"]
 module = "tests.core._dofn_helpers"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
+# Same Beam-untyped-API relaxation as the stateful-DoFn pipeline/streaming
+# tests, for the chaos helper's own pipeline-driving unit tests.
+[[tool.mypy.overrides]]
+module = "tests.testing.test_chaos"
+disable_error_code = ["no-untyped-call"]
+
+[[tool.mypy.overrides]]
+module = "tests.semantics.test_retry_determinism"
+disable_error_code = ["no-untyped-call"]
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config --cov=beam_agents --cov-report=term-missing --cov-report=xml"
 asyncio_mode = "auto"
