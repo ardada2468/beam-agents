@@ -7,7 +7,11 @@ state mutation, resume, TTL wipe/re-arm, and HITL fail-closed.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import apache_beam as beam
+import pytest
+from apache_beam.coders.typecoders import registry as coder_registry
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Aliased: a bare "TestPipeline" name would be mis-collected by pytest.
@@ -33,6 +37,21 @@ from tests.core._dofn_helpers import (
 # Large event-time TTL so working-memory GC never fires mid-stream unless a test
 # deliberately shrinks it.
 _BIG_TTL_MS = 1_000_000_000
+
+
+@pytest.fixture(autouse=True)
+def _restore_coder_registry() -> Iterator[None]:
+    """Snapshot and restore the global coder registry around every test.
+
+    ``RunAgent.expand`` calls ``register_coders()``, which mutates the process-
+    global registry; restoring keeps that registration from leaking into later
+    tests that assert import alone registers nothing.
+    """
+    saved = dict(coder_registry._coders)
+    try:
+        yield
+    finally:
+        coder_registry._coders = saved
 
 
 def _streaming_pipeline() -> BeamTestPipeline:
