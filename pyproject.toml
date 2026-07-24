@@ -165,13 +165,20 @@ branch = true
 #   1. It keeps mutmut from running the package-surface test in
 #      `tests/test_import.py`, which inspects `beam_agents/__init__.py` and
 #      cannot pass while mutmut has instrumented it.
-#   2. It deselects the two TestPipeline tests. mutmut reaps children with
+#   2. It deselects the Beam-pipeline tests. mutmut reaps children with
 #      os.wait(), which also reaps Beam DirectRunner worker subprocesses and
-#      crashes with a KeyError on the unexpected PID. The determinism,
-#      round-trip, and registration tests still cover every mutant in coders.py.
+#      crashes with a KeyError on the unexpected PID; the pipeline tests are also
+#      far too slow to run once per mutant. The coder determinism/round-trip/
+#      registration tests still cover every mutant in coders.py, and the async
+#      bridge and loop driver are covered by the fast non-Beam unit tests
+#      (test_bridge.py, test_loop.py). The `-k` clause drops coders.py's two
+#      TestPipeline tests; the `--ignore`s drop the stateful-DoFn pipeline and
+#      TestStream suites for the same DirectRunner reason.
 do_not_mutate = ["*/_protos/*"]
 pytest_add_cli_args_test_selection = [
   "tests/core",
+  "--ignore=tests/core/test_dofn_pipeline.py",
+  "--ignore=tests/core/test_dofn_streaming.py",
   "-k",
   "not shuffle_boundary and not group_by_key_key",
 ]
