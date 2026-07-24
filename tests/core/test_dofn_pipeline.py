@@ -23,8 +23,8 @@ from apache_beam.testing.util import assert_that, equal_to
 from beam_agents._protos import AgentEnvelope, ToolResult
 from beam_agents.core.coders import DeterministicProtoCoder, register_coders
 from beam_agents.core.dofn import REASON_ORPHANED, ActivationError, _AgentDoFn
-from beam_agents.core.transform import RunAgent
-from tests.core._dofn_helpers import append_agent, make_pong_provider, seq_agent
+from beam_agents.core.transform import AgentConfig, RunAgent
+from tests.core._dofn_helpers import append_agent, keyed, make_pong_provider, seq_agent
 
 
 def _event(key: bytes, payload: bytes, t_ms: int = 1000) -> AgentEnvelope:
@@ -72,10 +72,9 @@ def test_run_agent_registers_deterministic_envelope_coder() -> None:
 def test_fresh_key_reads_seq_zero() -> None:
     # Scenario: a fresh key reads versioned-empty facades and zero seq.
     with BeamTestPipeline() as p:
-        out = (
-            p
-            | beam.Create([_event(b"k", b"go")])
-            | RunAgent(seq_agent, provider_factory=make_pong_provider)
+        envs = p | beam.Create([_event(b"k", b"go")])
+        out = keyed(envs) | RunAgent(
+            seq_agent, config=AgentConfig(provider_factory=make_pong_provider)
         )
         assert_that(out.output, equal_to([b"0"]))
 
@@ -83,10 +82,9 @@ def test_fresh_key_reads_seq_zero() -> None:
 def test_event_starts_activation() -> None:
     # Scenario: event starts an activation (and its memory write commits).
     with BeamTestPipeline() as p:
-        out = (
-            p
-            | beam.Create([_event(b"k", b"hello")])
-            | RunAgent(append_agent, provider_factory=make_pong_provider)
+        envs = p | beam.Create([_event(b"k", b"hello")])
+        out = keyed(envs) | RunAgent(
+            append_agent, config=AgentConfig(provider_factory=make_pong_provider)
         )
         assert_that(out.output, equal_to([b"hello#0"]))
 
@@ -98,7 +96,10 @@ def test_orphaned_result_routes_to_errors() -> None:
     envelope.tool_result.status = ToolResult.OK
 
     with BeamTestPipeline() as p:
-        out = p | beam.Create([envelope]) | RunAgent(seq_agent, provider_factory=make_pong_provider)
+        envs = p | beam.Create([envelope])
+        out = keyed(envs) | RunAgent(
+            seq_agent, config=AgentConfig(provider_factory=make_pong_provider)
+        )
         assert_that(out.output, equal_to([]), label="no-output")
         assert_that(
             out.errors,
@@ -115,7 +116,10 @@ def test_orphaned_approval_routes_to_errors() -> None:
     envelope.approval.approved = True
 
     with BeamTestPipeline() as p:
-        out = p | beam.Create([envelope]) | RunAgent(seq_agent, provider_factory=make_pong_provider)
+        envs = p | beam.Create([envelope])
+        out = keyed(envs) | RunAgent(
+            seq_agent, config=AgentConfig(provider_factory=make_pong_provider)
+        )
         assert_that(out.output, equal_to([]), label="no-output")
         assert_that(
             out.errors,
