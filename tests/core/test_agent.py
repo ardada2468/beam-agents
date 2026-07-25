@@ -8,7 +8,14 @@ base class, the activation drives all work through the context, and
 
 from __future__ import annotations
 
-from beam_agents.core.agent import FunctionAgent, StreamAgent
+import uuid
+
+from beam_agents.core.agent import (
+    _INTENT_NAMESPACE,
+    FunctionAgent,
+    StreamAgent,
+    intent_id_for,
+)
 from beam_agents.core.context import AgentContext
 
 from ._context_helpers import make_context
@@ -59,3 +66,12 @@ async def test_a_function_is_adapted_into_a_streamagent() -> None:
     assert calls == [ctx]
     result = ctx.drain()
     assert result.outputs == ("from-function",)
+
+
+def test_intent_id_is_deterministic_and_sensitive_to_every_input() -> None:
+    expected = uuid.uuid5(_INTENT_NAMESPACE, "74656e616e742d37|9|3")
+
+    assert uuid.UUID(intent_id_for(b"tenant-7", 9, 3)) == expected
+    assert intent_id_for(b"tenant-8", 9, 3) != str(expected)
+    assert intent_id_for(b"tenant-7", 10, 3) != str(expected)
+    assert intent_id_for(b"tenant-7", 9, 4) != str(expected)

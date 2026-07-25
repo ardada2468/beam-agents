@@ -8,6 +8,7 @@ import side effects, and end-to-end flow through a Beam shuffle boundary.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from unittest.mock import Mock
 
 import apache_beam as beam
 import pytest
@@ -275,6 +276,14 @@ def test_repeated_encoding_is_byte_identical(message: Message) -> None:
     assert coder.encode(message) == coder.encode(twin)
 
 
+def test_encoding_requests_deterministic_protobuf_serialization() -> None:
+    message = Mock(spec=Message)
+    message.SerializeToString.return_value = b"wire"
+
+    assert DeterministicProtoCoder(ToolIntent).encode(message) == b"wire"
+    message.SerializeToString.assert_called_once_with(deterministic=True)
+
+
 def test_map_insertion_order_does_not_affect_encoding() -> None:
     # Scenario: Map insertion order does not affect encoding.
     items = [
@@ -330,7 +339,9 @@ def test_coder_equality_and_hash_track_message_type() -> None:
     other = DeterministicProtoCoder(ToolResult)
 
     assert same_a == same_b
-    assert hash(same_a) == hash(same_b)
+    assert hash(same_a) == hash(same_b) == hash(ToolIntent)
+    assert hash(other) == hash(ToolResult)
+    assert hash(same_a) != hash(other)
     assert same_a != other
     assert same_a != "not a coder"
 

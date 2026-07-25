@@ -41,5 +41,15 @@ tests. Add new markers to `[tool.pytest.ini_options]` if you need one.
 - Coverage may never regress vs. `main` (enforced by
   `make coverage-ratchet`)
 
+`mutation-baseline.toml` contains independent per-module ceilings for mutants
+that run no tests. Lower a ceiling when coverage improves; never raise one
+without an explicit review of why the mutation-tested surface must shrink.
+
+`mutation-exclusions.toml` is only for live mutants proven behaviorally
+equivalent to the original implementation. Every entry must name the exact
+mutant and give a mandatory technical reason. Missing, stale, killed, or
+indeterminate exclusions fail the gate. Weakening or deselecting a test is
+never an alternative to killing an observable mutant.
+
 Run `make bootstrap && pre-commit run --all-files` before pushing to catch
 all of the above locally.

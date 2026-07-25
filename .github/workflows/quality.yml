@@ -31,7 +31,7 @@ jobs:
       - name: Check for core/ changes
         id: core-changed
         run: |
-          if git diff --name-only origin/main...HEAD -- src/beam_agents/core | grep -q .; then
+          if git diff --name-only origin/main...HEAD -- src/beam_agents/core tests/core | grep -q .; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"

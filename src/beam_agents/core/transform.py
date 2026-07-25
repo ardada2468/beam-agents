@@ -35,6 +35,8 @@ from urllib.parse import urlparse
 import apache_beam as beam
 from apache_beam.typehints.typehints import AnyTypeConstraint, TupleHint
 
+from beam_agents._protos import ToolIntent
+from beam_agents.actions.write_intents import WriteIntents, WriteIntentsResult
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
 
@@ -72,12 +74,33 @@ class SinkResolver(Protocol):
     ``validate`` runs at ``AgentConfig`` construction: it must be cheap and
     import-free, raising :class:`UnknownSinkSchemeError` for an unrecognized
     scheme or a malformed URI. ``resolve`` runs only at ``RunAgent.expand`` and
-    may construct real IO clients.
+    may construct real IO clients. Both take ``field_name`` (one of
+    ``intents_to``/``traces_to``/``errors_to``) so a resolver can special-case
+    a field independently of URI scheme.
     """
 
     def validate(self, field_name: str, uri: str) -> None: ...
 
-    def resolve(self, uri: str) -> beam.PTransform: ...
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform: ...
+
+
+class _KeyedWriteIntents(beam.PTransform):
+    """Keys ``ToolIntent``s by ``entity_key`` and writes them via ``WriteIntents``.
+
+    Adapts ``RunAgent``'s unkeyed ``.intents`` output (``PCollection[ToolIntent]``)
+    to the pre-keyed ``PCollection[KV[bytes, ToolIntent]]`` that ``WriteIntents``
+    requires, preserving per-key emission order end to end.
+    """
+
+    def __init__(self, uri: str) -> None:
+        super().__init__()
+        self._uri = uri
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> WriteIntentsResult:
+        keyed = pcoll | "KeyIntentsByEntity" >> beam.WithKeys(
+            lambda intent: intent.entity_key
+        ).with_output_types(tuple[bytes, ToolIntent])
+        return keyed | WriteIntents(self._uri)
 
 
 class DefaultSinkResolver:
@@ -89,6 +112,12 @@ class DefaultSinkResolver:
     - ``pubsub://<project>/<topic>``
     - ``bigquery://<project>/<dataset>/<table>``
 
+    For ``intents_to`` with a ``kafka://`` or ``pubsub://`` scheme, resolution
+    returns the keyed :class:`WriteIntents` outbox writer (see
+    ``actions/write_intents.py``) instead of a bare write transform, so
+    per-key intent order is preserved and serialization failures are
+    dead-lettered rather than dropped.
+
     IO client modules are imported lazily inside :meth:`resolve` so
     :meth:`validate` (called at ``AgentConfig`` construction) never imports them.
     """
@@ -99,8 +128,10 @@ class DefaultSinkResolver:
     def validate(self, field_name: str, uri: str) -> None:
         self._parse(field_name, uri)
 
-    def resolve(self, uri: str) -> beam.PTransform:
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
         scheme, parts = self._parse("<sink>", uri)
+        if field_name == "intents_to" and scheme in ("kafka", "pubsub"):
+            return _KeyedWriteIntents(uri)
         if scheme == "kafka":
             from apache_beam.io.kafka import WriteToKafka
 
@@ -244,7 +275,19 @@ class RunAgent(beam.PTransform):
         )
         for field_name in _SINK_FIELDS:
             uri = getattr(self._config, field_name)
-            if uri is not None:
-                sink = self._config.sink_resolver.resolve(uri)
+            if uri is None:
+                continue
+            sink = self._config.sink_resolver.resolve(field_name, uri)
+            result = (
                 getattr(outputs, field_name.removesuffix("_to")) | _SINK_LABELS[field_name] >> sink
+            )
+            if (
+                field_name == "intents_to"
+                and isinstance(result, WriteIntentsResult)
+                and self._config.errors_to is not None
+            ):
+                errors_sink = self._config.sink_resolver.resolve(
+                    "errors_to", self._config.errors_to
+                )
+                result.dead_letter | "IntentDeadLetterToErrors" >> errors_sink
         return outputs

@@ -13,8 +13,17 @@ import uuid
 
 import pytest
 
-from beam_agents.core.context import INTENT_NAMESPACE, AgentResult
+import beam_agents.core.context as context_module
+from beam_agents._protos import LlmCacheBlob, MemoryBlob, ToolResult, TraceEvent
+from beam_agents.core.agent import intent_id_for
+from beam_agents.core.context import (
+    INTENT_NAMESPACE,
+    ActivationContext,
+    AgentContext,
+    AgentResult,
+)
 from beam_agents.model import FakeLLM, LlmRequest, StagingSink, TokenUsage, match_any, respond_with
+from beam_agents.model.replay_cache import compute_cache_key as real_compute_cache_key
 from beam_agents.tools import SideEffectToolError, ToolRegistry, tool
 
 from ._context_helpers import make_context
@@ -115,7 +124,7 @@ def test_draining_twice_is_refused() -> None:
     ctx = make_context()
     ctx.drain()
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match=r"^AgentContext\.drain\(\) called more than once$"):
         ctx.drain()
 
 
@@ -143,6 +152,17 @@ async def test_facade_staged_traces_land_in_the_context_bundle() -> None:
     assert len(result.traces) == 1
 
 
+def test_stage_trace_event_preserves_the_exact_event() -> None:
+    ctx = make_context()
+    event = TraceEvent(seq=8, event_type=TraceEvent.LLM_CALL)
+
+    ctx.stage_trace_event(event)
+
+    result = ctx.drain()
+    assert result.traces == (event,)
+    assert result.traces[0] is event
+
+
 async def test_accumulated_usage_survives_to_the_result() -> None:
     # Scenario: Accumulated usage survives to the result.
     fake = FakeLLM([(match_any(), respond_with(b"hello"))])
@@ -168,14 +188,41 @@ def test_act_stages_an_intent_without_executing_the_tool() -> None:
     calls: list[object] = []
     registry = ToolRegistry()
     _register_side_effect_tool(registry, calls)
-    ctx = make_context(tool_registry=registry)
+    ctx = make_context(
+        entity_key=b"entity-a",
+        seq=7,
+        now_ms=1234,
+        tool_registry=registry,
+    )
 
     ctx.act("charge_card", {"amount": 5})
 
     result = ctx.drain()
     assert len(result.intents) == 1
-    assert result.intents[0].tool_name == "charge_card"
+    intent = result.intents[0]
+    assert intent.entity_key == b"entity-a"
+    assert intent.seq == 7
+    assert intent.step_index == 0
+    assert intent.tool_name == "charge_card"
+    assert intent.args_json == '{"amount":5}'
+    assert intent.created_at_ms == 1234
+    assert intent.expires_at_ms == 0
+    assert intent.attempt == 0
     assert calls == []
+
+
+def test_act_preserves_unicode_and_rejects_non_finite_numbers() -> None:
+    calls: list[object] = []
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, calls)
+    ctx = make_context(tool_registry=registry)
+
+    ctx.act("charge_card", {"amount": "€5"})
+    assert ctx.drain().intents[0].args_json == '{"amount":"€5"}'
+
+    ctx = make_context(tool_registry=registry)
+    with pytest.raises(ValueError, match="Out of range float values"):
+        ctx.act("charge_card", {"amount": float("nan")})
 
 
 def test_intent_ids_are_deterministic_and_match_the_uuid5_formula() -> None:
@@ -208,6 +255,17 @@ def test_replayed_activation_produces_byte_identical_intents() -> None:
     assert first.intents == second.intents
 
 
+def test_act_sorts_argument_keys_independent_of_insertion_order() -> None:
+    calls: list[object] = []
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, calls)
+    ctx = make_context(tool_registry=registry)
+
+    ctx.act("charge_card", {"z": 1, "amount": 5, "a": 2})
+
+    assert ctx.drain().intents[0].args_json == '{"a":2,"amount":5,"z":1}'
+
+
 def test_step_index_advances_per_act_call() -> None:
     # Scenario: step_index advances per act call.
     calls: list[object] = []
@@ -234,7 +292,13 @@ def test_act_on_a_read_only_tool_is_refused() -> None:
     registry.register(lookup)
     ctx = make_context(tool_registry=registry)
 
-    with pytest.raises(ValueError, match="side_effect=False"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"^tool 'lookup' is side_effect=False; call it via run_tool\(\.\.\.\) "
+            r"instead of act\(\.\.\.\)$"
+        ),
+    ):
         ctx.act("lookup", {"customer_id": "abc"})
 
     assert ctx.drain().intents == ()
@@ -322,6 +386,7 @@ async def test_result_carries_every_staged_effect_category() -> None:
     n = len(b"hi")
     assert result.usage.total_tokens == 2 * n
     assert result.memory_blob is not None
+    assert result.cache_blob is not None
 
 
 def test_a_clean_activation_yields_an_empty_result() -> None:
@@ -344,3 +409,269 @@ def test_agent_result_is_frozen() -> None:
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.outputs = ("x",)  # type: ignore[misc]
+
+
+def test_agent_context_wires_every_model_facade_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    facade = object()
+
+    def fake_facade(provider: object, replay_cache: object, **kwargs: object) -> object:
+        captured["provider"] = provider
+        captured["replay_cache"] = replay_cache
+        captured.update(kwargs)
+        return facade
+
+    monkeypatch.setattr(context_module, "LlmFacade", fake_facade)
+    provider = object()
+    replay_cache = object()
+    rng = object()
+    sleep = object()
+    breaker = object()
+    retry_policy = object()
+    decode = object()
+    memory = object()
+    registry = ToolRegistry()
+
+    ctx = AgentContext(
+        entity_key=b"key",
+        seq=8,
+        now_ms=123,
+        memory=memory,  # type: ignore[arg-type]
+        replay_cache=replay_cache,  # type: ignore[arg-type]
+        provider=provider,  # type: ignore[arg-type]
+        rng=rng,  # type: ignore[arg-type]
+        sleep=sleep,  # type: ignore[arg-type]
+        breaker=breaker,  # type: ignore[arg-type]
+        retry_policy=retry_policy,  # type: ignore[arg-type]
+        decode=decode,  # type: ignore[arg-type]
+        tool_registry=registry,
+    )
+
+    assert ctx.model is facade
+    assert captured == {
+        "provider": provider,
+        "replay_cache": replay_cache,
+        "now_ms": 123,
+        "rng": rng,
+        "sleep": sleep,
+        "breaker": breaker,
+        "retry_policy": retry_policy,
+        "decode": decode,
+        "staging": ctx,
+    }
+
+
+def test_activation_context_preserves_inputs_and_wires_state_facades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, tuple[object, int, object | None]] = {}
+    memory = object()
+    replay_cache = object()
+
+    def fake_memory(blob: object, *, now_ms: int, compactor: object | None = None) -> object:
+        captured["memory"] = (blob, now_ms, compactor)
+        return memory
+
+    def fake_replay_cache(blob: object, *, now_ms: int) -> object:
+        captured["cache"] = (blob, now_ms, None)
+        return replay_cache
+
+    monkeypatch.setattr(context_module, "Memory", fake_memory)
+    monkeypatch.setattr(context_module, "ReplayCache", fake_replay_cache)
+    provider = object()
+    memory_blob = MemoryBlob(state_schema_version=1)
+    cache_blob = LlmCacheBlob(state_schema_version=1)
+    resume_result = ToolResult(intent_id="intent-1", status=ToolResult.OK)
+    resume_approval = object()
+    compactor = object()
+
+    ctx = ActivationContext(
+        entity_key=b"key",
+        seq=8,
+        now_ms=123,
+        provider=provider,  # type: ignore[arg-type]
+        memory_blob=memory_blob,
+        cache_blob=cache_blob,
+        event=b"event",
+        resume_result=resume_result,
+        resume_approval=resume_approval,
+        snapshot=b"snapshot",
+        compactor=compactor,  # type: ignore[arg-type]
+    )
+
+    assert ctx.entity_key == b"key"
+    assert ctx.seq == 8
+    assert ctx.now_ms == 123
+    assert ctx.event == b"event"
+    assert ctx.snapshot == b"snapshot"
+    assert ctx.resume_result is resume_result
+    assert ctx.resume_approval is resume_approval
+    assert ctx.is_resume is True
+    assert ctx.memory is memory
+    assert captured == {
+        "memory": (memory_blob, 123, compactor),
+        "cache": (cache_blob, 123, None),
+    }
+
+
+def test_activation_context_defaults_event_snapshot_and_resume_state() -> None:
+    ctx = ActivationContext(
+        entity_key=b"key",
+        seq=1,
+        now_ms=2,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    assert ctx.event == b""
+    assert ctx.snapshot == b""
+    assert ctx.resume_result is None
+    assert ctx.resume_approval is None
+    assert ctx.is_resume is False
+
+
+def test_activation_context_stages_complete_intents_and_continuations() -> None:
+    ctx = ActivationContext(
+        entity_key=b"key",
+        seq=8,
+        now_ms=123,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    intent_id = ctx.act("charge", '{"amount":5}', ttl_ms=60)
+    second_id = ctx.act("notify", '{"channel":"email"}', ttl_ms=0)
+    continuation = ctx.build_continuation(
+        snapshot=b"state",
+        adapter="langgraph",
+        deadline_ms=999,
+    )
+
+    assert len(ctx.staged_intents) == 2
+    intent = ctx.staged_intents[0]
+    assert intent_id == intent_id_for(b"key", 8, 0)
+    assert intent.intent_id == intent_id
+    assert intent.entity_key == b"key"
+    assert intent.seq == 8
+    assert intent.step_index == 0
+    assert intent.tool_name == "charge"
+    assert intent.args_json == '{"amount":5}'
+    assert intent.created_at_ms == 123
+    assert intent.expires_at_ms == 183
+    assert intent.attempt == 0
+    assert second_id != intent_id
+    assert ctx.staged_intents[1].step_index == 1
+    assert ctx.step_index == 2
+    assert continuation.state_schema_version == 1
+    assert continuation.seq == 8
+    assert continuation.step_index == 2
+    assert list(continuation.pending_intent_ids) == [intent_id, second_id]
+    assert continuation.adapter == "langgraph"
+    assert continuation.snapshot == b"state"
+    assert continuation.suspended_at_ms == 123
+    assert continuation.deadline_ms == 999
+
+
+def test_activation_context_stages_trace_objects_without_rewriting_them() -> None:
+    ctx = ActivationContext(
+        entity_key=b"key",
+        seq=1,
+        now_ms=2,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+    )
+    direct = TraceEvent(seq=7, event_type=TraceEvent.ERROR)
+    sink = TraceEvent(seq=8, event_type=TraceEvent.TOOL_CALL)
+
+    ctx.stage_trace(direct)
+    ctx.stage_trace_event(sink)
+
+    assert ctx.staged_traces == [direct, sink]
+    assert ctx.staged_traces[0] is direct
+    assert ctx.staged_traces[1] is sink
+
+
+async def test_activation_context_model_call_uses_all_cache_dimensions_and_traces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[object, ...]] = []
+
+    def capture_cache_key(
+        model_id: str,
+        messages: object,
+        tools_schema: object,
+        sampling_params: object,
+        entity_key: bytes,
+        seq: int,
+    ) -> str:
+        captured.append((model_id, messages, tools_schema, sampling_params, entity_key, seq))
+        return real_compute_cache_key(
+            model_id, messages, tools_schema, sampling_params, entity_key, seq
+        )
+
+    monkeypatch.setattr(context_module, "compute_cache_key", capture_cache_key)
+    fake = FakeLLM([(match_any(), respond_with(b"response"))])
+    ctx = ActivationContext(
+        entity_key=b"key",
+        seq=8,
+        now_ms=123,
+        provider=fake,
+        memory_blob=None,
+        cache_blob=None,
+    )
+    request = LlmRequest(
+        model_id="model-1",
+        messages=[{"role": "user", "content": "hello"}],
+        tools_schema=[{"name": "lookup"}],
+        sampling_params={"temperature": 0.25},
+    )
+
+    ctx.act("prepare", "{}", ttl_ms=0)
+    first = await ctx.call_model(request)
+    second = await ctx.call_model(request)
+
+    assert first.response == b"response"
+    assert second.response == b"response"
+    assert fake.call_count == 1
+    assert captured == [
+        (
+            "model-1",
+            [{"role": "user", "content": "hello"}],
+            [{"name": "lookup"}],
+            {"temperature": 0.25},
+            b"key",
+            8,
+        ),
+        (
+            "model-1",
+            [{"role": "user", "content": "hello"}],
+            [{"name": "lookup"}],
+            {"temperature": 0.25},
+            b"key",
+            8,
+        ),
+    ]
+    assert ctx.step_index == 3
+    assert len(ctx.staged_traces) == 2
+    miss, hit = ctx.staged_traces
+    assert miss.entity_key == hit.entity_key == b"key"
+    assert miss.seq == hit.seq == 8
+    assert miss.step_index == 1
+    assert hit.step_index == 2
+    assert miss.event_type == hit.event_type == TraceEvent.LLM_CALL
+    assert dict(miss.attributes) == {
+        "gen_ai.request.model": "model-1",
+        "beam_agents.cache_hit": "false",
+    }
+    assert dict(hit.attributes) == {
+        "gen_ai.request.model": "model-1",
+        "beam_agents.cache_hit": "true",
+    }
+    assert miss.start_ms == miss.end_ms == 123
+    assert hit.start_ms == hit.end_ms == 123
+    assert ctx.cache_blob().entries[0].response == b"response"
