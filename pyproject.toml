@@ -80,6 +80,10 @@ ignore = [
 # must stay import-free so sink-URI validation runs offline. PLC0415 (imports
 # not at top-level) is exactly what that design requires here.
 "src/beam_agents/core/transform.py" = ["PLC0415"]
+# WriteIntents.__init__ parses/validates the outbox URI eagerly but must not
+# import Kafka/Pub/Sub IO clients until expand() actually builds the writer;
+# same PLC0415-is-the-point rationale as core/transform.py above.
+"src/beam_agents/actions/write_intents.py" = ["PLC0415"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -94,6 +98,10 @@ warn_unreachable = true
 
 [[tool.mypy.overrides]]
 module = "apache_beam.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "google.*"
 ignore_missing_imports = true
 
 # Generated protobuf stubs use bare `Mapping` in a few __init__ signatures,
@@ -115,6 +123,17 @@ disable_error_code = ["no-untyped-call"]
 # tests exercising RunAgent/AgentConfig's PCollection-typed seams directly.
 [[tool.mypy.overrides]]
 module = "tests.core.test_transform"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation, for WriteIntents' own pipeline-driving
+# construction/order/dead-letter/resolver tests.
+[[tool.mypy.overrides]]
+module = "tests.actions.test_write_intents"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation, for the live-broker Kafka round-trip test.
+[[tool.mypy.overrides]]
+module = "tests.actions.test_write_intents_integration"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # Beam types `Coder.from_type_hint` as `-> CoderT` (a cls-bound TypeVar), so our
@@ -143,6 +162,13 @@ disable_error_code = ["no-untyped-call", "type-arg"]
 [[tool.mypy.overrides]]
 module = "beam_agents.core.transform"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation as core/transform.py and core/dofn.py: every
+# ParDo/PTransform/PubsubMessage call and Beam's unparameterized generics read
+# as untyped/under-specified under strict mode.
+[[tool.mypy.overrides]]
+module = "beam_agents.actions.write_intents"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return", "no-untyped-def"]
 
 # Beam's TestPipeline/TestStream/assert_that helpers are untyped, so every
 # pipeline-driving test call reads as an untyped call under strict mode.

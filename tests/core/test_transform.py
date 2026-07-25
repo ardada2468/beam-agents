@@ -95,7 +95,7 @@ class _StubSinkResolver:
     def validate(self, field_name: str, uri: str) -> None:
         self.validated.append((field_name, uri))
 
-    def resolve(self, uri: str) -> beam.PTransform:
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
         self.resolved.append(uri)
         return beam.Map(lambda x: x)
 
@@ -106,7 +106,7 @@ class _RejectingSinkResolver:
     def validate(self, field_name: str, uri: str) -> None:
         raise UnknownSinkSchemeError(f"{field_name}: rejected {uri!r}")
 
-    def resolve(self, uri: str) -> beam.PTransform:  # pragma: no cover - unreachable
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:  # pragma: no cover
         raise AssertionError("resolve() should not be called when validate() rejects")
 
 
@@ -208,7 +208,7 @@ def test_default_resolver_validate_does_not_import_io_clients() -> None:
     ],
 )
 def test_default_resolver_resolve_returns_a_ptransform(uri: str) -> None:
-    transform = DefaultSinkResolver().resolve(uri)
+    transform = DefaultSinkResolver().resolve("traces_to", uri)
     assert isinstance(transform, beam.PTransform)
 
 

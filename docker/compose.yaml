@@ -21,6 +21,24 @@ services:
       retries: 10
       start_period: 10s
 
+  pubsub-emulator:
+    image: google/cloud-sdk@sha256:5fa0e7f1a6eadda7144614c3c6c737651e69fbd9b547a7e1372006ee5cc5e005
+    command:
+      - gcloud
+      - beta
+      - emulators
+      - pubsub
+      - start
+      - --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8085"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     ports:
