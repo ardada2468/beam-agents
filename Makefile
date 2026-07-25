@@ -1,5 +1,6 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose -f docker/compose.yaml
+MUTATION_CHILDREN := $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
 .PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto
 
@@ -44,8 +45,9 @@ test-dataflow: ## Run dataflow-marked tests (nightly only, requires real GCP)
 test-smoke: ## Run smoke-marked tests against live providers (nightly only, requires credentials)
 	uv run pytest -m smoke; test $$? -eq 0 -o $$? -eq 5
 
-mutation: ## Run mutmut against core/
-	uv run mutmut run
+mutation: ## Run and enforce the core/ mutation gate
+	uv run mutmut run --max-children $(MUTATION_CHILDREN)
+	uv run python scripts/mutation_gate.py
 
 coverage-ratchet: ## Fail if coverage.xml regressed vs. origin/main
 	uv run python scripts/coverage_ratchet.py

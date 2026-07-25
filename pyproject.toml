@@ -213,9 +213,27 @@ source = ["beam_agents"]
 branch = true
 
 [tool.mutmut]
-# Never mutate the generated protobuf bindings, and kill mutants with the core
-# test suite only. The full src/ tree is still copied (default source_paths) so
-# imports resolve. Test selection is scoped for two reasons:
+# Mutation scope is core/ ONLY. The killing test suite is tests/core, so a mutant
+# anywhere else can only ever be reported as uncovered or survived — noise that
+# costs a fork each and hides real core survivors. Extending mutation to model/,
+# tools/, memory/, or actions/ requires giving each its own test selection first.
+#
+# source_paths deliberately stays at its default (src/): it controls both what is
+# mutated AND what is copied into mutants/. Narrowing it to core/ would leave
+# beam_agents.model, beam_agents.tools, etc. unimportable inside the mutant tree
+# and break every core test. only_mutate filters mutation while the copied tree
+# stays whole. do_not_mutate is redundant under the current only_mutate, but is
+# the correct guard if that pattern ever widens.
+#
+# mutate_only_covered_lines is deliberately NOT set: it makes mutmut run pytest
+# in-process under coverage.collect(), and apache-beam's numpy import then dies
+# with "ImportError: cannot load module more than once per process". So mutants
+# on lines no selected test executes are still generated and reported as
+# "no tests" (currently 453, almost all in dofn.py and transform.py, whose test
+# suites are deselected below). See docs/ci.md — that surface is outside
+# mutation testing, and the gate ratchets the count so it cannot grow.
+#
+# Test selection is scoped for two reasons:
 #   1. It keeps mutmut from running the package-surface test in
 #      `tests/test_import.py`, which inspects `beam_agents/__init__.py` and
 #      cannot pass while mutmut has instrumented it.
@@ -225,17 +243,22 @@ branch = true
 #      far too slow to run once per mutant. The coder determinism/round-trip/
 #      registration tests still cover every mutant in coders.py, and the async
 #      bridge and loop driver are covered by the fast non-Beam unit tests
-#      (test_bridge.py, test_loop.py). The `-k` clause drops coders.py's two
-#      TestPipeline tests; the `--ignore`s drop the stateful-DoFn pipeline,
-#      TestStream, and RunAgent-transform pipeline suites for the same
-#      DirectRunner reason (test_transform.py also drives TestPipeline/
-#      TestStream; its non-pipeline AgentConfig/SinkResolver unit tests still
-#      cover transform.py's validation logic, just not under mutmut).
+#      (test_bridge.py, test_loop.py). The mutation-gate tests are also excluded:
+#      they exercise scripts/mutation_gate.py, which is intentionally outside
+#      mutmut's copied src/ tree and cannot kill core mutants. The `-k` clause
+#      drops coders.py's two TestPipeline tests; the other `--ignore`s drop the
+#      stateful-DoFn pipeline, TestStream, and RunAgent-transform pipeline suites
+#      for the same DirectRunner reason (test_transform.py also drives
+#      TestPipeline/TestStream; its non-pipeline AgentConfig/SinkResolver unit
+#      tests still cover transform.py's validation logic, just not under mutmut).
+only_mutate = ["src/beam_agents/core/*"]
+pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
 do_not_mutate = ["*/_protos/*"]
 pytest_add_cli_args_test_selection = [
   "tests/core",
   "--ignore=tests/core/test_dofn_pipeline.py",
   "--ignore=tests/core/test_dofn_streaming.py",
+  "--ignore=tests/core/test_mutation_gate.py",
   "--ignore=tests/core/test_transform.py",
   "-k",
   "not shuffle_boundary and not group_by_key_key",
