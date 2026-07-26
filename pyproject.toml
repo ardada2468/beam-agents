@@ -200,6 +200,16 @@ disable_error_code = ["no-untyped-call"]
 module = "tests.semantics.test_retry_determinism"
 disable_error_code = ["no-untyped-call"]
 
+[[tool.mypy.overrides]]
+module = "tests.semantics.test_hitl_fail_closed"
+disable_error_code = ["no-untyped-call"]
+
+# Same Beam-untyped-API relaxation: this module drives `on_hitl` with fake
+# state/timer handles and asserts on Beam's unparameterized TaggedOutput.
+[[tool.mypy.overrides]]
+module = "tests.core.test_dofn_hitl_timer"
+disable_error_code = ["no-untyped-call", "type-arg"]
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config"
 asyncio_mode = "auto"

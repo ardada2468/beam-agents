@@ -13,8 +13,9 @@ import asyncio
 import apache_beam as beam
 
 from beam_agents._protos import AgentEnvelope
-from beam_agents.core.agent import Complete, Suspend
+from beam_agents.core.agent import Complete, FallbackContext, Suspend
 from beam_agents.core.context import ActivationContext
+from beam_agents.hitl import Escalate, Route
 from beam_agents.model.client import LlmRequest, ProviderError
 from beam_agents.model.fake import FakeLLM, match_any, raise_error, respond_with
 
@@ -129,6 +130,45 @@ async def suspend_then_complete_agent(ctx: ActivationContext) -> Complete | Susp
         return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=1000)
     assert ctx.resume_result is not None
     return Complete(output=b"resumed:" + ctx.resume_result.payload)
+
+
+def escalate_once(fallback: FallbackContext) -> Route:
+    """Timeout policy that pages a second approver instead of denying.
+
+    Module-level (not a lambda) so the `HitlPolicy` holding it pickles for the
+    DirectRunner, exactly as `HitlPolicy` documents.
+    """
+    return Escalate(tool_name="pager", args_json='{"level":2}', timeout_ms=5_000)
+
+
+async def approval_agent(ctx: ActivationContext) -> Complete | Suspend:
+    """Request a human approval and suspend; on resume, report the decision.
+
+    The suspension's deadline is `event_time + 1000ms`, and the approval
+    intent's TTL is far longer, so the deadline under test is the timeout.
+    """
+    if not ctx.is_resume:
+        ctx.request_approval('{"amount":5}', ttl_ms=_TTL_MS)
+        return Suspend(snapshot=b"awaiting-approval", adapter="test", timeout_ms=1000)
+    approval = ctx.resume_approval
+    if approval is not None:
+        return Complete(output=b"approved" if approval.approved else b"rejected")
+    assert ctx.resume_result is not None
+    return Complete(output=b"result:" + str(ctx.resume_result.status).encode())
+
+
+async def suspend_then_act_again_agent(ctx: ActivationContext) -> Complete | Suspend:
+    """Stage an intent and suspend; on resume, stage a second intent.
+
+    Both intents belong to the same ``seq``, so their IDs only differ if the
+    resumed activation continues the suspended one's step index instead of
+    restarting at zero.
+    """
+    if not ctx.is_resume:
+        ctx.act("http.post", '{"url":"first"}', ttl_ms=_TTL_MS)
+        return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=1000)
+    ctx.act("http.post", '{"url":"second"}', ttl_ms=_TTL_MS)
+    return Complete(output=b"done")
 
 
 async def suspend_then_fail_agent(ctx: ActivationContext) -> Complete | Suspend:

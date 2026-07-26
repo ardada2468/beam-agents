@@ -131,6 +131,27 @@ def _llm_cache_blob() -> LlmCacheBlob:
     return blob
 
 
+def _tool_intent_approval() -> ToolIntent:
+    """A `kind = APPROVAL` intent: the human-in-the-loop baseline.
+
+    `kind` was added after the v1 baseline blobs were written, so this fixture
+    (not `tool_intent`, which is deliberately left as the pre-`kind` bytes)
+    is what pins the new field's encoding.
+    """
+    return ToolIntent(
+        intent_id="aaaaaaaa-bbbb-5ccc-8ddd-eeeeeeeeeeee",
+        entity_key=b"entity-1",
+        seq=7,
+        step_index=3,
+        tool_name="approval",
+        args_json='{"amount":9000,"reason":"refund"}',
+        created_at_ms=_T0,
+        expires_at_ms=_T0 + 3_600_000,
+        attempt=0,
+        kind=ToolIntent.APPROVAL,
+    )
+
+
 def _continuation() -> Continuation:
     return Continuation(
         state_schema_version=1,
@@ -147,14 +168,38 @@ def _continuation() -> Continuation:
     )
 
 
-# name -> fully-populated message. Filenames are `<name>.bin`.
+def _continuation_escalated() -> Continuation:
+    """A continuation that has already escalated once.
+
+    Pins the encoding of `escalations`, added after the v1 baseline; the
+    `continuation` fixture stays as the pre-`escalations` bytes.
+    """
+    return Continuation(
+        state_schema_version=1,
+        seq=7,
+        step_index=4,
+        pending_intent_ids=["aaaaaaaa-bbbb-5ccc-8ddd-eeeeeeeeeeee"],
+        adapter="langgraph",
+        snapshot=bytes(range(64)),
+        suspended_at_ms=_T0,
+        deadline_ms=_T0 + 1_200_000,
+        escalations=1,
+    )
+
+
+# name -> fully-populated message. Filenames are `<name>.bin`. Every message
+# type has at least one fixture; a type gains a second one when a field is
+# added after the v1 baseline, so the original blob keeps proving that
+# pre-field bytes still decode while the new one pins the new field.
 GOLDEN: dict[str, Message] = {
     "memory_blob": _memory_blob(),
     "tool_intent": _tool_intent(),
+    "tool_intent_approval": _tool_intent_approval(),
     "tool_result": _tool_result(),
     "trace_event": _trace_event(),
     "agent_envelope": _agent_envelope(),
     "continuation": _continuation(),
+    "continuation_escalated": _continuation_escalated(),
     "llm_cache_blob": _llm_cache_blob(),
 }
 

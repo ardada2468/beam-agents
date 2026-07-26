@@ -16,17 +16,28 @@ from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
-from beam_agents._protos import AgentEnvelope, ToolResult
+from beam_agents._protos import AgentEnvelope, ToolIntent, ToolResult
 from beam_agents.core.agent import intent_id_for
-from beam_agents.core.dofn import HITL_TIMEOUT_OUTPUT, REASON_ERROR, REASON_ORPHANED, REASON_TIMEOUT
+from beam_agents.core.dofn import (
+    DETAIL_DEADLINE_PASSED,
+    DETAIL_NO_CONTINUATION,
+    HITL_TIMEOUT_OUTPUT,
+    REASON_ERROR,
+    REASON_ORPHANED,
+    REASON_TIMEOUT,
+)
 from beam_agents.core.transform import AgentConfig, RunAgent
+from beam_agents.hitl import HitlPolicy
 from tests.core._dofn_helpers import (
     append_agent,
+    approval_agent,
     conditional_append_agent,
+    escalate_once,
     keyed,
     make_pong_provider,
     make_slow_provider,
     seq_agent,
+    suspend_then_act_again_agent,
     suspend_then_complete_agent,
     suspend_then_fail_agent,
     timeout_or_append_agent,
@@ -49,13 +60,28 @@ def _event(key: bytes, payload: bytes, t_ms: int) -> TimestampedValue[AgentEnvel
 
 
 def _result(
-    key: bytes, intent_id: str, payload: bytes, t_ms: int
+    key: bytes,
+    intent_id: str,
+    payload: bytes,
+    t_ms: int,
+    status: ToolResult.Status = ToolResult.OK,
 ) -> TimestampedValue[AgentEnvelope]:
     env = AgentEnvelope(entity_key=key, event_time_ms=t_ms)
     env.tool_result.intent_id = intent_id
     env.tool_result.entity_key = key
     env.tool_result.payload = payload
-    env.tool_result.status = ToolResult.OK
+    env.tool_result.status = status
+    return TimestampedValue(env, t_ms / 1000)
+
+
+def _approval(
+    key: bytes, intent_id: str, *, approved: bool, t_ms: int
+) -> TimestampedValue[AgentEnvelope]:
+    env = AgentEnvelope(entity_key=key, event_time_ms=t_ms)
+    env.approval.intent_id = intent_id
+    env.approval.approved = approved
+    env.approval.approver = "alice@example.test"
+    env.approval.decided_at_ms = t_ms
     return TimestampedValue(env, t_ms / 1000)
 
 
@@ -193,7 +219,7 @@ def test_resume_failure_routes_to_errors_without_mutating_state() -> None:
         TestStream()
         .advance_watermark_to(0)
         .add_elements([_event(b"k", b"go", 1000)])
-        .add_elements([_result(b"k", intent_id, b"done", 2000)])
+        .add_elements([_result(b"k", intent_id, b"done", 1500)])  # inside the deadline
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
@@ -217,7 +243,7 @@ def test_suspend_then_tool_result_resumes() -> None:
         TestStream()
         .advance_watermark_to(0)
         .add_elements([_event(b"k", b"go", 1000)])
-        .add_elements([_result(b"k", intent_id, b"done", 2000)])
+        .add_elements([_result(b"k", intent_id, b"done", 1500)])  # inside the deadline
         .advance_watermark_to_infinity()
     )
     with _streaming_pipeline() as p:
@@ -229,6 +255,36 @@ def test_suspend_then_tool_result_resumes() -> None:
         assert_that(out.output, equal_to([b"resumed:done"]), label="resumed")
         tool_names = out.intents | "tool-names" >> beam.Map(lambda i: i.tool_name)
         assert_that(tool_names, equal_to(["http.post"]), label="intent")
+
+
+# --- Requirement: a resumed activation continues its step index ----------------
+
+
+def test_intent_staged_on_resume_does_not_collide_with_the_suspended_one() -> None:
+    # Scenario: An intent staged on resume does not collide with the suspended
+    # activation's intent. Both live in seq 0, so a resumed activation that
+    # restarted step_index at 0 would re-mint the suspension's own intent_id
+    # and the effector would dedup the second effect away as a duplicate.
+    first_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 1000)])
+        .add_elements([_result(b"k", first_id, b"done", 1500)])  # inside the deadline
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            suspend_then_act_again_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
+        )
+        assert_that(out.output, equal_to([b"done"]), label="resumed")
+        ids = out.intents | "ids" >> beam.Map(lambda i: (i.step_index, i.intent_id))
+        assert_that(
+            ids,
+            equal_to([(0, first_id), (1, intent_id_for(b"k", 0, 1))]),
+            label="distinct-ids",
+        )
 
 
 # --- Requirement: TTL timer wipes all state and re-arms per element -------------
@@ -298,3 +354,135 @@ def test_hitl_timeout_fires_fallback_and_orphans_late_result() -> None:
         assert_that(out.output, equal_to([HITL_TIMEOUT_OUTPUT]), label="fallback")
         reasons = out.errors | "reasons" >> beam.Map(lambda e: e.reason)
         assert_that(reasons, equal_to([REASON_ORPHANED]), label="orphaned")
+
+
+def test_timer_first_then_late_approval_is_orphaned() -> None:
+    # Scenario: Timer first, then a late approval is orphaned. The approval
+    # variant of the fail-closed ordering: the fallback runs exactly once and
+    # the human's late "yes" cannot resurrect the suspension.
+    approval_intent_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 0)])  # suspends, arms HITL at 1000ms
+        .advance_processing_time(5)  # -> fires the real-time HITL timer
+        .add_elements([_approval(b"k", approval_intent_id, approved=True, t_ms=100)])
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            approval_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
+        )
+        assert_that(out.output, equal_to([HITL_TIMEOUT_OUTPUT]), label="fallback-once")
+        details = out.errors | "details" >> beam.Map(lambda e: (e.reason, e.detail))
+        assert_that(
+            details,
+            equal_to([(REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:{approval_intent_id}")]),
+            label="orphaned",
+        )
+
+
+def test_approval_after_the_deadline_is_refused_before_the_timer_fires() -> None:
+    # Scenario: An approval arriving after the deadline is refused even before
+    # the timer fires. Processing time never advances here, so the real-time
+    # HITL timer has not fired and the continuation is still stored -- only the
+    # deadline check keeps the blocked effect from going through.
+    approval_intent_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 0)])  # suspends, deadline = 1000ms
+        .add_elements([_approval(b"k", approval_intent_id, approved=True, t_ms=1500)])
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            approval_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
+        )
+        assert_that(out.output, equal_to([]), label="not-resumed")
+        details = out.errors | "details" >> beam.Map(lambda e: (e.reason, e.detail))
+        assert_that(
+            details,
+            equal_to([(REASON_ORPHANED, f"{DETAIL_DEADLINE_PASSED}:{approval_intent_id}")]),
+            label="deadline-passed",
+        )
+
+
+def test_in_time_approval_resumes_and_clears_the_timer() -> None:
+    # Scenario: An in-time approval resumes the agent and clears the timer.
+    # Processing time then advances well past the original deadline: nothing
+    # fires, because the commit cleared the armed timer.
+    approval_intent_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 0)])  # suspends, deadline = 1000ms
+        .add_elements([_approval(b"k", approval_intent_id, approved=True, t_ms=500)])
+        .advance_processing_time(5)  # past the original deadline
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            approval_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
+        )
+        assert_that(out.output, equal_to([b"approved"]), label="resumed")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+
+def test_escalated_suspension_is_resumed_by_an_answer_to_the_escalation() -> None:
+    # Scenario: An answer to the escalated suspension resumes the agent.
+    # The whole loop end to end: suspend -> timer fires -> escalate (new intent,
+    # extended deadline, re-armed timer) -> a human answers the escalation
+    # before the new deadline -> the activation resumes.
+    escalation_intent_id = intent_id_for(b"k", 0, 1)  # next free step after the suspension
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 0)])  # suspends, arms HITL at 1000ms
+        .advance_processing_time(2)  # -> fires the timer; escalates to 6000ms
+        .add_elements([_approval(b"k", escalation_intent_id, approved=False, t_ms=3000)])
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            approval_agent,
+            config=AgentConfig(
+                provider_factory=make_pong_provider,
+                ttl_ms=_BIG_TTL_MS,
+                hitl_policy=HitlPolicy(on_timeout=escalate_once, max_escalations=1),
+            ),
+        )
+        assert_that(out.output, equal_to([b"rejected"]), label="resumed-by-escalation")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+        channels = out.intents | "channels" >> beam.Map(lambda i: (i.tool_name, i.kind))
+        assert_that(
+            channels,
+            equal_to([("approval", ToolIntent.APPROVAL), ("pager", ToolIntent.APPROVAL)]),
+            label="escalation-intent",
+        )
+
+
+def test_expired_result_reinjected_into_a_live_suspension_resumes() -> None:
+    # Scenario: An EXPIRED result re-injected into a live suspension resumes
+    # the agent. The effector refused the intent (layer 2) and published its
+    # refusal; that is a legitimate resume, not an orphan, so the agent gets to
+    # take its own degraded path.
+    approval_intent_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 0)])
+        .add_elements([_result(b"k", approval_intent_id, b"", 500, status=ToolResult.EXPIRED)])
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            approval_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
+        )
+        expected = b"result:" + str(ToolResult.EXPIRED).encode()
+        assert_that(out.output, equal_to([expected]), label="resumed")
+        assert_that(out.errors, equal_to([]), label="no-errors")

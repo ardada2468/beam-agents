@@ -38,6 +38,17 @@ message MemoryBlob {
 // `intent_id` is a caller-computed uuid5 (deterministic); this schema only
 // transports it and never computes or defaults it.
 message ToolIntent {
+  // What the effector does with this intent. Additive under
+  // state_schema_version = 1: an intent written before this field existed
+  // decodes as TOOL_KIND_UNSPECIFIED, which readers treat exactly like TOOL.
+  // Only an explicit APPROVAL is routed to a human approval channel instead of
+  // being executed.
+  enum Kind {
+    TOOL_KIND_UNSPECIFIED = 0;
+    TOOL = 1;
+    APPROVAL = 2;
+  }
+
   string intent_id = 1;
   bytes entity_key = 2;
   int64 seq = 3;
@@ -50,6 +61,7 @@ message ToolIntent {
   int64 created_at_ms = 7;
   int64 expires_at_ms = 8;
   uint32 attempt = 9;
+  Kind kind = 10;
 }
 
 // Effector outcome, re-injected on the same key as the originating intent.
@@ -132,6 +144,11 @@ message Continuation {
   bytes snapshot = 6;
   int64 suspended_at_ms = 7;
   int64 deadline_ms = 8;
+  // Timeout escalations already performed for this suspension, bounding the
+  // escalate route so the wait always ends. Additive under
+  // state_schema_version = 1: a blob written before this field existed decodes
+  // as 0.
+  uint32 escalations = 9;
 }
 
 // Per-key LLM replay cache: bounded content-hash-keyed responses with LRU

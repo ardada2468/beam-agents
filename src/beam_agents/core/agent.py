@@ -106,15 +106,26 @@ Outcome = Complete | Suspend
 
 @dataclass(frozen=True, slots=True)
 class FallbackContext:
-    """Passed to an agent's HITL fallback when a pending approval/result times out.
+    """Passed to the HITL policy when a pending approval/result times out.
 
-    Carries the suspended activation's ``seq`` and the ``snapshot`` the agent
-    persisted, so the fallback can emit a deterministic degraded output.
+    Carries the *expired continuation handle* — the suspended activation's
+    ``seq``, the ``snapshot`` the agent persisted, the ``deadline_ms`` that
+    elapsed, and the ``pending_intent_ids`` nothing ever answered — plus
+    ``fired_at_ms``, the timer's fire timestamp. ``kind`` says why the fallback
+    ran; only ``"timer"`` exists today.
+
+    Every time value the policy could need is carried here so the policy never
+    reads a clock: it runs inside a timer callback whose bundle can be retried,
+    and a retry must reach the same decision.
     """
 
     entity_key: bytes = field(default=b"")
     seq: int = 0
     snapshot: bytes = b""
+    kind: str = "timer"
+    deadline_ms: int = 0
+    fired_at_ms: int = 0
+    pending_intent_ids: tuple[str, ...] = ()
 
 
 @runtime_checkable

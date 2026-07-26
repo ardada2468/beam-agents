@@ -159,6 +159,7 @@ def test_tool_intent_all_fields_round_trip() -> None:
         created_at_ms=1_700_000_000_000,
         expires_at_ms=1_700_000_060_000,
         attempt=2,
+        kind=ToolIntent.TOOL,
     )
 
     parsed = ToolIntent()
@@ -166,6 +167,7 @@ def test_tool_intent_all_fields_round_trip() -> None:
 
     assert parsed == intent
     assert parsed.args_json == args_json
+    assert parsed.kind == ToolIntent.TOOL
 
 
 def test_tool_intent_expiry_representable() -> None:
@@ -174,6 +176,35 @@ def test_tool_intent_expiry_representable() -> None:
     parsed = ToolIntent()
     parsed.ParseFromString(intent.SerializeToString())
     assert parsed.expires_at_ms == 1_700_000_060_000
+
+
+def test_approval_intent_is_distinguishable_without_reading_tool_name() -> None:
+    # Scenario: Approval intents are distinguishable on the wire.
+    approval = ToolIntent(intent_id="a", tool_name="approval", kind=ToolIntent.APPROVAL)
+    tool = ToolIntent(intent_id="t", tool_name="approval", kind=ToolIntent.TOOL)
+
+    parsed_approval = ToolIntent()
+    parsed_approval.ParseFromString(approval.SerializeToString())
+    parsed_tool = ToolIntent()
+    parsed_tool.ParseFromString(tool.SerializeToString())
+
+    # Same tool_name on both: only `kind` separates them.
+    assert parsed_approval.kind == ToolIntent.APPROVAL
+    assert parsed_tool.kind == ToolIntent.TOOL
+    assert parsed_approval.tool_name == parsed_tool.tool_name
+
+
+def test_intent_without_kind_reads_as_unspecified_tool_call() -> None:
+    # Scenario: An intent written before kind existed reads as a tool call.
+    # An unset proto3 scalar is absent from the wire, so bytes produced before
+    # `kind` existed are exactly these bytes.
+    legacy = ToolIntent(intent_id="legacy", tool_name="http.post").SerializeToString()
+
+    parsed = ToolIntent()
+    parsed.ParseFromString(legacy)
+
+    assert parsed.kind == ToolIntent.TOOL_KIND_UNSPECIFIED
+    assert parsed.kind != ToolIntent.APPROVAL
 
 
 # --- Requirement: ToolResult correlates outcomes with terminal statuses ------
@@ -290,6 +321,19 @@ def test_continuation_round_trips_with_byte_identical_snapshot() -> None:
     assert parsed == cont
     assert parsed.snapshot == snapshot
     assert list(parsed.pending_intent_ids) == ["a", "b", "c"]
+
+
+def test_continuation_escalations_round_trips_and_defaults_to_zero() -> None:
+    # Scenario: Escalation count round-trips and defaults to zero.
+    legacy = Continuation(seq=10, deadline_ms=1_700_000_600_000).SerializeToString()
+    parsed_legacy = Continuation()
+    parsed_legacy.ParseFromString(legacy)
+    assert parsed_legacy.escalations == 0
+
+    escalated = Continuation(seq=10, deadline_ms=1_700_000_600_000, escalations=3)
+    parsed = Continuation()
+    parsed.ParseFromString(escalated.SerializeToString())
+    assert parsed.escalations == 3
 
 
 # --- Requirement: Schema evolution is additive and golden-blob guarded -------

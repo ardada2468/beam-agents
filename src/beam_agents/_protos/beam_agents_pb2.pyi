@@ -27,7 +27,15 @@ class MemoryBlob(_message.Message):
     def __init__(self, state_schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[MemoryBlob.MemoryEntry, _Mapping]]] = ..., total_value_bytes: _Optional[int] = ...) -> None: ...
 
 class ToolIntent(_message.Message):
-    __slots__ = ("intent_id", "entity_key", "seq", "step_index", "tool_name", "args_json", "created_at_ms", "expires_at_ms", "attempt")
+    __slots__ = ("intent_id", "entity_key", "seq", "step_index", "tool_name", "args_json", "created_at_ms", "expires_at_ms", "attempt", "kind")
+    class Kind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        TOOL_KIND_UNSPECIFIED: _ClassVar[ToolIntent.Kind]
+        TOOL: _ClassVar[ToolIntent.Kind]
+        APPROVAL: _ClassVar[ToolIntent.Kind]
+    TOOL_KIND_UNSPECIFIED: ToolIntent.Kind
+    TOOL: ToolIntent.Kind
+    APPROVAL: ToolIntent.Kind
     INTENT_ID_FIELD_NUMBER: _ClassVar[int]
     ENTITY_KEY_FIELD_NUMBER: _ClassVar[int]
     SEQ_FIELD_NUMBER: _ClassVar[int]
@@ -37,6 +45,7 @@ class ToolIntent(_message.Message):
     CREATED_AT_MS_FIELD_NUMBER: _ClassVar[int]
     EXPIRES_AT_MS_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
     intent_id: str
     entity_key: bytes
     seq: int
@@ -46,7 +55,8 @@ class ToolIntent(_message.Message):
     created_at_ms: int
     expires_at_ms: int
     attempt: int
-    def __init__(self, intent_id: _Optional[str] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., tool_name: _Optional[str] = ..., args_json: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., attempt: _Optional[int] = ...) -> None: ...
+    kind: ToolIntent.Kind
+    def __init__(self, intent_id: _Optional[str] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., tool_name: _Optional[str] = ..., args_json: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., attempt: _Optional[int] = ..., kind: _Optional[_Union[ToolIntent.Kind, str]] = ...) -> None: ...
 
 class ToolResult(_message.Message):
     __slots__ = ("intent_id", "entity_key", "seq", "status", "payload", "error_message", "completed_at_ms")
@@ -151,7 +161,7 @@ class AgentEnvelope(_message.Message):
     def __init__(self, entity_key: _Optional[bytes] = ..., event_time_ms: _Optional[int] = ..., external_event: _Optional[bytes] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., approval: _Optional[_Union[AgentEnvelope.Approval, _Mapping]] = ...) -> None: ...
 
 class Continuation(_message.Message):
-    __slots__ = ("state_schema_version", "seq", "step_index", "pending_intent_ids", "adapter", "snapshot", "suspended_at_ms", "deadline_ms")
+    __slots__ = ("state_schema_version", "seq", "step_index", "pending_intent_ids", "adapter", "snapshot", "suspended_at_ms", "deadline_ms", "escalations")
     STATE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     SEQ_FIELD_NUMBER: _ClassVar[int]
     STEP_INDEX_FIELD_NUMBER: _ClassVar[int]
@@ -160,6 +170,7 @@ class Continuation(_message.Message):
     SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
     SUSPENDED_AT_MS_FIELD_NUMBER: _ClassVar[int]
     DEADLINE_MS_FIELD_NUMBER: _ClassVar[int]
+    ESCALATIONS_FIELD_NUMBER: _ClassVar[int]
     state_schema_version: int
     seq: int
     step_index: int
@@ -168,7 +179,8 @@ class Continuation(_message.Message):
     snapshot: bytes
     suspended_at_ms: int
     deadline_ms: int
-    def __init__(self, state_schema_version: _Optional[int] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., pending_intent_ids: _Optional[_Iterable[str]] = ..., adapter: _Optional[str] = ..., snapshot: _Optional[bytes] = ..., suspended_at_ms: _Optional[int] = ..., deadline_ms: _Optional[int] = ...) -> None: ...
+    escalations: int
+    def __init__(self, state_schema_version: _Optional[int] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., pending_intent_ids: _Optional[_Iterable[str]] = ..., adapter: _Optional[str] = ..., snapshot: _Optional[bytes] = ..., suspended_at_ms: _Optional[int] = ..., deadline_ms: _Optional[int] = ..., escalations: _Optional[int] = ...) -> None: ...
 
 class LlmCacheBlob(_message.Message):
     __slots__ = ("state_schema_version", "entries", "total_response_bytes")
