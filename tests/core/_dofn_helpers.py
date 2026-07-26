@@ -131,5 +131,18 @@ async def suspend_then_complete_agent(ctx: ActivationContext) -> Complete | Susp
     return Complete(output=b"resumed:" + ctx.resume_result.payload)
 
 
+async def suspend_then_fail_agent(ctx: ActivationContext) -> Complete | Suspend:
+    """Suspend on the first activation; raise on resume.
+
+    Lets a test prove `_resume`'s fail-closed path commits nothing on a
+    resumed activation's own failure, independent of `_start`'s failure
+    handling.
+    """
+    if not ctx.is_resume:
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+        return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=1000)
+    raise RuntimeError("resume blew up")
+
+
 async def sleep_briefly(ms: int) -> None:  # pragma: no cover - trivial
     await asyncio.sleep(ms / 1000)

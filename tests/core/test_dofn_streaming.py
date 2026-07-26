@@ -7,11 +7,7 @@ state mutation, resume, TTL wipe/re-arm, and HITL fail-closed.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import apache_beam as beam
-import pytest
-from apache_beam.coders.typecoders import registry as coder_registry
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Aliased: a bare "TestPipeline" name would be mis-collected by pytest.
@@ -22,7 +18,7 @@ from apache_beam.transforms.window import TimestampedValue
 
 from beam_agents._protos import AgentEnvelope, ToolResult
 from beam_agents.core.agent import intent_id_for
-from beam_agents.core.dofn import HITL_TIMEOUT_OUTPUT, REASON_ORPHANED
+from beam_agents.core.dofn import HITL_TIMEOUT_OUTPUT, REASON_ERROR, REASON_ORPHANED, REASON_TIMEOUT
 from beam_agents.core.transform import AgentConfig, RunAgent
 from tests.core._dofn_helpers import (
     append_agent,
@@ -32,27 +28,13 @@ from tests.core._dofn_helpers import (
     make_slow_provider,
     seq_agent,
     suspend_then_complete_agent,
+    suspend_then_fail_agent,
     timeout_or_append_agent,
 )
 
 # Large event-time TTL so working-memory GC never fires mid-stream unless a test
 # deliberately shrinks it.
 _BIG_TTL_MS = 1_000_000_000
-
-
-@pytest.fixture(autouse=True)
-def _restore_coder_registry() -> Iterator[None]:
-    """Snapshot and restore the global coder registry around every test.
-
-    ``RunAgent.expand`` calls ``register_coders()``, which mutates the process-
-    global registry; restoring keeps that registration from leaking into later
-    tests that assert import alone registers nothing.
-    """
-    saved = dict(coder_registry._coders)
-    try:
-        yield
-    finally:
-        coder_registry._coders = saved
 
 
 def _streaming_pipeline() -> BeamTestPipeline:
@@ -164,6 +146,8 @@ def test_failed_activation_commits_nothing() -> None:
         # "b" lands on the pre-failure ring (a,b) with seq 1, proving FAIL neither
         # persisted its scratch write nor advanced SEQ.
         assert_that(out.output, equal_to([b"a#0", b"a,b#1"]))
+        errors = out.errors | "reasons" >> beam.Map(lambda e: (e.entity_key, e.reason))
+        assert_that(errors, equal_to([(b"k", REASON_ERROR)]), label="errors")
 
 
 # --- Requirement: activation timeout, no state mutation ------------------------
@@ -192,6 +176,34 @@ def test_timeout_routes_to_errors_without_mutating_state() -> None:
         # "a" -> a#0; SLOW times out (no commit); "b" -> a,b#1 (seq not advanced
         # by the timeout, memory intact).
         assert_that(out.output, equal_to([b"a#0", b"a,b#1"]))
+        errors = out.errors | "reasons" >> beam.Map(lambda e: (e.entity_key, e.reason))
+        assert_that(errors, equal_to([(b"k", REASON_TIMEOUT)]), label="errors")
+
+
+# --- Requirement: resume failure fails closed, same as activation failure -------
+
+
+def test_resume_failure_routes_to_errors_without_mutating_state() -> None:
+    # Scenario: a failing resume fails closed. `_AgentDoFn._resume` has its own
+    # except clause independent of `_start`'s (dofn.py), so this exercises a
+    # path `test_failed_activation_commits_nothing` (which only fails on
+    # `_start`) does not.
+    intent_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 1000)])
+        .add_elements([_result(b"k", intent_id, b"done", 2000)])
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            suspend_then_fail_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
+        )
+        assert_that(out.output, equal_to([]), label="no-output")
+        errors = out.errors | "reasons" >> beam.Map(lambda e: (e.entity_key, e.reason))
+        assert_that(errors, equal_to([(b"k", REASON_ERROR)]), label="errors")
 
 
 # --- Requirement: tool-result resumes the continuation -------------------------

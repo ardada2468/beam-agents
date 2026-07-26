@@ -20,8 +20,7 @@ dev = [
   { include-group = "integration" },
   { include-group = "bench" },
   { include-group = "docs" },
-  "pre-commit",
-  "grpcio-tools",
+  { include-group = "precommit" },
 ]
 test = [
   "pytest",
@@ -45,6 +44,12 @@ bench = [
   "pyperf",
 ]
 docs = []
+# pre-commit itself, plus grpcio-tools for the protobuf-drift hook (gen_proto.sh
+# invokes grpc_tools.protoc).
+precommit = [
+  "pre-commit",
+  "grpcio-tools",
+]
 
 [tool.uv]
 default-groups = []
@@ -196,7 +201,7 @@ module = "tests.semantics.test_retry_determinism"
 disable_error_code = ["no-untyped-call"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-markers --strict-config --cov=beam_agents --cov-report=term-missing --cov-report=xml"
+addopts = "-ra --strict-markers --strict-config"
 asyncio_mode = "auto"
 timeout = 30
 testpaths = ["tests"]
@@ -211,6 +216,16 @@ markers = [
 [tool.coverage.run]
 source = ["beam_agents"]
 branch = true
+# Generated protobuf bindings are never hand-edited (see the ruff/mypy
+# overrides above); regenerating them shouldn't move the gated coverage number.
+omit = ["*/_protos/*_pb2.py"]
+
+[tool.coverage.report]
+# Static floor under the branch-aware combined total (independent of the
+# branch-rate ratchet in coverage-baseline.toml / scripts/coverage_ratchet.py):
+# a hard backstop so coverage can't silently collapse if the ratchet step is
+# ever skipped.
+fail_under = 90
 
 [tool.mutmut]
 # Mutation scope is core/ ONLY. The killing test suite is tests/core, so a mutant

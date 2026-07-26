@@ -7,7 +7,6 @@ import side effects, and end-to-end flow through a Beam shuffle boundary.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from unittest.mock import Mock
 
 import apache_beam as beam
@@ -232,16 +231,6 @@ def _sample_pair(message_type: type[Message]) -> tuple[Message, Message]:
         ),
     }
     return samples[message_type]
-
-
-@pytest.fixture
-def clean_registry() -> Iterator[None]:
-    """Snapshot and restore the global coder registry so tests are isolated."""
-    saved = dict(coder_registry._coders)
-    try:
-        yield
-    finally:
-        coder_registry._coders = saved
 
 
 # --- Coverage: the module supports exactly the seven wire/state messages -----

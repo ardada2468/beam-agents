@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import random
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -53,11 +52,6 @@ from beam_agents.model.facade import (
 from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
 from beam_agents.tools.registry import ToolRegistry
 from beam_agents.tools.runner import ToolRunner
-
-# Fixed namespace for `uuid5(NAMESPACE, entity_key + seq + step_index)` intent
-# IDs (correctness invariant 2): a stable constant so the effector and any
-# offline recomputation derive the same IDs as the running pipeline.
-INTENT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "beam-agents.dev/tool-intent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,9 +156,11 @@ class AgentContext:
         """Stage a `ToolIntent`; the underlying tool is never executed here.
 
         `tool_name` must resolve to a `side_effect=True` tool (correctness
-        invariant 5). `intent_id` is `uuid5(INTENT_NAMESPACE, entity_key +
-        seq + step_index)`, so a replayed activation that issues the same
-        sequence of `act` calls produces byte-identical intents.
+        invariant 5). `intent_id` is `intent_id_for(entity_key, seq,
+        step_index)` -- the same function `ActivationContext.act` uses -- so a
+        replayed activation that issues the same sequence of `act` calls
+        produces byte-identical intents, and the two context surfaces mint the
+        same ID for the same `(entity_key, seq, step_index)`.
         """
         tool = self._tool_registry.get(tool_name)
         if not tool.side_effect:
@@ -180,9 +176,7 @@ class AgentContext:
             ensure_ascii=False,
             allow_nan=False,
         )
-        intent_id = str(
-            uuid.uuid5(INTENT_NAMESPACE, f"{self._entity_key.hex()}:{self._seq}:{step_index}")
-        )
+        intent_id = intent_id_for(self._entity_key, self._seq, step_index)
         self._intents.append(
             ToolIntent(
                 intent_id=intent_id,

@@ -9,8 +9,6 @@ test_dofn_streaming.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import apache_beam as beam
 import pytest
 from apache_beam.coders.coders import VarIntCoder
@@ -29,22 +27,6 @@ from tests.core._dofn_helpers import append_agent, keyed, make_pong_provider, se
 
 def _event(key: bytes, payload: bytes, t_ms: int = 1000) -> AgentEnvelope:
     return AgentEnvelope(entity_key=key, event_time_ms=t_ms, external_event=payload)
-
-
-@pytest.fixture(autouse=True)
-def _restore_coder_registry() -> Iterator[None]:
-    """Snapshot and restore the global coder registry around every test.
-
-    ``RunAgent.expand`` calls ``register_coders()``, which mutates the process-
-    global registry; without this, a test would leak that registration into
-    later tests (notably ``test_coders.test_import_alone_does_not_register``,
-    which asserts import alone registers nothing).
-    """
-    saved = dict(coder_registry._coders)
-    try:
-        yield
-    finally:
-        coder_registry._coders = saved
 
 
 # --- Requirement: keyed state and timer topology -------------------------------
