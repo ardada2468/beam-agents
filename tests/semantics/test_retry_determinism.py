@@ -16,10 +16,7 @@ pair (same seq), not a raw single-shot activation's own retry.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import pytest
-from apache_beam.coders.typecoders import registry as coder_registry
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
 from apache_beam.testing.test_stream import TestStream
@@ -42,15 +39,6 @@ _SEQ = 0
 # step_index=1. These are pure functions of call order, per agent-context.
 _INTENT_STEP_INDEX = 1
 _EXPECTED_INTENT_ID = intent_id_for(_ENTITY_KEY, _SEQ, _INTENT_STEP_INDEX)
-
-
-@pytest.fixture(autouse=True)
-def _restore_coder_registry() -> Iterator[None]:
-    saved = dict(coder_registry._coders)
-    try:
-        yield
-    finally:
-        coder_registry._coders = saved
 
 
 def _streaming_pipeline() -> BeamTestPipeline:

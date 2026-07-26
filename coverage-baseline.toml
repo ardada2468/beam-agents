@@ -1,0 +1,5 @@
+# Branch-coverage rate to beat, from coverage.xml's branch-rate attribute
+# (generated protobuf omitted -- see [tool.coverage.run] omit in pyproject.toml).
+# Ratcheted by hand: scripts/coverage_ratchet.py tells you to raise this when
+# coverage improves, so a gain is locked in deliberately rather than silently.
+branch_rate = 0.9228

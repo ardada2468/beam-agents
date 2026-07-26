@@ -6,13 +6,13 @@ the `RunAgent` sink-resolver integration.
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Callable, Iterator
 from unittest import mock
 
 import apache_beam as beam
 import pytest
-from apache_beam.coders.typecoders import registry as coder_registry
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
 from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that, equal_to
@@ -23,6 +23,7 @@ from beam_agents.actions.write_intents import (
     DEAD_LETTER_TAG,
     UnknownIntentsSchemeError,
     WriteIntents,
+    _OrderedPubsubWriteDoFn,
     _SerializeIntent,
     _validate_kv_input,
 )
@@ -33,18 +34,6 @@ from beam_agents.core.transform import (
     _KeyedWriteIntents,
 )
 from tests.core._dofn_helpers import make_pong_provider, suspend_then_complete_agent
-
-
-@pytest.fixture(autouse=True)
-def _restore_coder_registry() -> Iterator[None]:
-    """Undo the process-global mutation from ``RunAgent.expand`` (which calls
-    ``register_coders()``); see the identical fixture in test_transform.py.
-    """
-    saved = dict(coder_registry._coders)
-    try:
-        yield
-    finally:
-        coder_registry._coders = saved
 
 
 def _intent(key: bytes, seq: int, tool_name: str = "http.post") -> ToolIntent:
@@ -224,6 +213,44 @@ def test_dead_letter_pipeline_routes_failures_and_keeps_good_intents_out(
         assert_that(reasons, equal_to(["boom"]))
 
 
+# --- Requirement: _OrderedPubsubWriteDoFn bounds keys and recovers from publish failure --
+
+
+def test_ordering_key_over_pubsub_limit_is_rejected() -> None:
+    dofn = _OrderedPubsubWriteDoFn("my-project", "topic")
+    dofn.start_bundle()
+    # entity_key.hex() doubles the byte length; 513 bytes -> a 1026-byte
+    # ordering key, one over Pub/Sub's 1024-byte limit.
+    oversized_key = b"\x00" * 513
+    with pytest.raises(ValueError, match="ordering-key limit"):
+        dofn.process((oversized_key, b"payload"))
+
+
+def test_finish_bundle_resumes_publish_and_reraises_on_failure() -> None:
+    dofn = _OrderedPubsubWriteDoFn("my-project", "topic")
+    client = mock.Mock()
+    failing_future = mock.Mock()
+    failing_future.result.side_effect = RuntimeError("publish failed")
+    client.publish.return_value = failing_future
+    dofn._client = client
+    dofn._topic_path = "projects/my-project/topics/topic"
+    dofn.start_bundle()
+    dofn.process((b"k", b"payload"))
+
+    with pytest.raises(RuntimeError, match="publish failed"):
+        dofn.finish_bundle()
+
+    client.resume_publish.assert_called_once_with("projects/my-project/topics/topic", b"k".hex())
+
+
+def test_teardown_stops_the_publisher_client() -> None:
+    dofn = _OrderedPubsubWriteDoFn("my-project", "topic")
+    client = mock.Mock()
+    dofn._client = client
+    dofn.teardown()
+    client.stop.assert_called_once()
+
+
 # --- Requirement: WriteIntents is registered with the RunAgent sink resolver --
 
 
@@ -285,6 +312,112 @@ def test_run_agent_intents_to_kafka_resolves_to_write_intents(
             equal_to(["http.post"]),
             label="intents-still-exposed",
         )
+
+
+def _check_dead_letter_reached_errors(actual: list[tuple[bytes, bytes]]) -> None:
+    # A plain Python list mutated from inside a DoFn closure isn't reliably
+    # visible after the pipeline runs (DirectRunner may round-trip the DoFn
+    # through pickling), so this runs as an in-pipeline assert_that matcher
+    # instead of being inspected after the `with` block closes.
+    assert len(actual) == 1
+    key, payload = actual[0]
+    assert key == b"k"
+    detail = json.loads(payload)
+    assert detail["reason"] == "boom"
+    assert detail["tool_name"] == "http.post"
+
+
+class _AssertingErrorsSink(beam.PTransform):
+    """Asserts on the elements reaching `errors_to`, then passes them through."""
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        assert_that(pcoll, _check_dead_letter_reached_errors, label="errors-to-dead-letter")
+        return pcoll
+
+
+class _RecordingErrorsResolver:
+    """Delegates intents_to/traces_to to a real `DefaultSinkResolver`, but resolves
+    errors_to to an in-pipeline asserting sink instead of a real Kafka writer.
+
+    Exercises RunAgent's actual dead-letter -> errors_to wiring end to end
+    (only the real IO clients are swapped out), reproducing the crash where
+    dead-letter elements -- ``((entity_key, ToolIntent), reason)`` -- were
+    routed straight into a sink expecting ``KV[bytes, bytes]``.
+
+    `RunAgent.expand` resolves `errors_to` twice: once for the intents dead
+    letter (the branch under test) and once for the always-empty
+    `outputs.errors` stream in this scenario. `_SINK_FIELDS` in
+    core/transform.py orders `intents_to` before `errors_to`, so the
+    dead-letter resolve happens first; only that first resolve is asserted
+    on, the second gets a plain passthrough.
+    """
+
+    def __init__(self) -> None:
+        self._inner = DefaultSinkResolver()
+        self._errors_resolve_count = 0
+
+    def validate(self, field_name: str, uri: str) -> None:
+        self._inner.validate(field_name, uri)
+
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        if field_name == "errors_to":
+            self._errors_resolve_count += 1
+            if self._errors_resolve_count == 1:
+                return _AssertingErrorsSink()
+            return beam.Map(lambda x: x)
+        return self._inner.resolve(field_name, uri)
+
+
+def test_run_agent_intent_dead_letter_reaches_errors_to_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "beam_agents.actions.write_intents._WRITERS",
+        {
+            "kafka": lambda *_: _fake_writer_factory([])(""),
+            "pubsub": lambda *_: beam.Map(lambda x: x),
+        },
+    )
+
+    # Force every intent through WriteIntents' own dead-letter path, without
+    # touching ToolIntent.SerializeToString globally: that method is also used
+    # by the stateful DoFn's state coder to persist the pending intent before
+    # it ever reaches WriteIntents, so patching it there would fail commit
+    # itself rather than exercising the dead-letter -> errors_to wiring.
+    def always_dead_letters(
+        self: _SerializeIntent, element: tuple[bytes, ToolIntent]
+    ) -> Iterator[beam.pvalue.TaggedOutput]:
+        yield beam.pvalue.TaggedOutput(DEAD_LETTER_TAG, (element, "boom"))
+
+    monkeypatch.setattr(_SerializeIntent, "process", always_dead_letters)
+
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        intents_to="kafka://broker:9092/agent-intents",
+        errors_to="kafka://broker:9092/agent-errors",
+        sink_resolver=_RecordingErrorsResolver(),
+    )
+    options = beam.options.pipeline_options.PipelineOptions()
+    options.view_as(beam.options.pipeline_options.StandardOptions).streaming = True
+    with BeamTestPipeline(options=options) as p:
+        stream = (
+            TestStream()
+            .advance_watermark_to(0)
+            .add_elements(
+                [
+                    TimestampedValue(
+                        AgentEnvelope(entity_key=b"k", event_time_ms=0, external_event=b"go"), 0
+                    )
+                ]
+            )
+            .advance_watermark_to_infinity()
+        )
+        keyed = (
+            p
+            | stream
+            | beam.WithKeys(lambda e: e.entity_key).with_output_types(tuple[bytes, AgentEnvelope])
+        )
+        keyed | RunAgent(suspend_then_complete_agent, config=config)
 
 
 if __name__ == "__main__":  # pragma: no cover

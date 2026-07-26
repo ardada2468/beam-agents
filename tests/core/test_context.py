@@ -9,7 +9,6 @@ and the immutable `AgentResult` bundle.
 from __future__ import annotations
 
 import dataclasses
-import uuid
 
 import pytest
 
@@ -17,7 +16,6 @@ import beam_agents.core.context as context_module
 from beam_agents._protos import LlmCacheBlob, MemoryBlob, ToolResult, TraceEvent
 from beam_agents.core.agent import intent_id_for
 from beam_agents.core.context import (
-    INTENT_NAMESPACE,
     ActivationContext,
     AgentContext,
     AgentResult,
@@ -235,8 +233,32 @@ def test_intent_ids_are_deterministic_and_match_the_uuid5_formula() -> None:
     ctx.act("charge_card", {"amount": 5})
     result = ctx.drain()
 
-    expected = str(uuid.uuid5(INTENT_NAMESPACE, f"{b'key-x'.hex()}:9:0"))
-    assert result.intents[0].intent_id == expected
+    assert result.intents[0].intent_id == intent_id_for(b"key-x", 9, 0)
+
+
+def test_agent_context_and_activation_context_mint_the_same_intent_id() -> None:
+    # Scenario: AgentContext.act and ActivationContext.act are two independent
+    # entry points into intent-ID minting; both must agree for the same
+    # (entity_key, seq, step_index), not just each match its own formula.
+    calls: list[object] = []
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, calls)
+    agent_ctx = make_context(entity_key=b"key-y", seq=4, tool_registry=registry)
+    agent_ctx.act("charge_card", {"amount": 5})
+    agent_result = agent_ctx.drain()
+
+    activation_ctx = ActivationContext(
+        entity_key=b"key-y",
+        seq=4,
+        now_ms=0,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+    )
+    activation_intent_id = activation_ctx.act("charge_card", '{"amount":5}', ttl_ms=0)
+
+    assert agent_result.intents[0].intent_id == activation_intent_id
+    assert agent_result.intents[0].intent_id == intent_id_for(b"key-y", 4, 0)
 
 
 def test_replayed_activation_produces_byte_identical_intents() -> None:

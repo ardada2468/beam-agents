@@ -33,10 +33,14 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import apache_beam as beam
-from apache_beam.typehints.typehints import AnyTypeConstraint, TupleHint
 
 from beam_agents._protos import ToolIntent
-from beam_agents.actions.write_intents import WriteIntents, WriteIntentsResult
+from beam_agents.actions.write_intents import (
+    WriteIntents,
+    WriteIntentsResult,
+    encode_intent_dead_letter,
+    is_kv_shaped,
+)
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
 
@@ -114,9 +118,9 @@ class DefaultSinkResolver:
 
     For ``intents_to`` with a ``kafka://`` or ``pubsub://`` scheme, resolution
     returns the keyed :class:`WriteIntents` outbox writer (see
-    ``actions/write_intents.py``) instead of a bare write transform, so
-    per-key intent order is preserved and serialization failures are
-    dead-lettered rather than dropped.
+    ``actions/write_intents.py``) instead of a bare write transform, so each
+    key's intents are routed to a single partition/ordering key and
+    serialization failures are dead-lettered rather than dropped.
 
     IO client modules are imported lazily inside :meth:`resolve` so
     :meth:`validate` (called at ``AgentConfig`` construction) never imports them.
@@ -213,15 +217,21 @@ class AgentConfig:
 
 @dataclass(frozen=True, slots=True)
 class RunAgentOutputs:
-    """``RunAgent``'s four named outputs: main plus the three tagged streams."""
+    """``RunAgent``'s named outputs: main, the three tagged streams, and the
+    intents dead-letter branch.
+
+    ``dead_letter`` is ``None`` unless ``intents_to`` resolved to a
+    ``WriteIntents`` outbox writer (a ``kafka://``/``pubsub://`` scheme). It is
+    always exposed here, whether or not ``errors_to`` is also set, so a caller
+    can consume it directly instead of it being silently dropped by Beam as an
+    unconsumed ``PCollection`` when ``errors_to`` is unset.
+    """
 
     output: beam.pvalue.PCollection
     intents: beam.pvalue.PCollection
     traces: beam.pvalue.PCollection
     errors: beam.pvalue.PCollection
-
-
-_KV_ARITY = 2  # a KV pair is a 2-tuple: (key, value)
+    dead_letter: beam.pvalue.PCollection | None = None
 
 
 def _validate_kv_input(pcoll: beam.pvalue.PCollection) -> None:
@@ -230,17 +240,10 @@ def _validate_kv_input(pcoll: beam.pvalue.PCollection) -> None:
     An absent/erased element type is allowed to pass (the DoFn's downstream KV
     requirement is the backstop); only a definite non-pair type is rejected.
     """
-    element_type = pcoll.element_type
-    if element_type is None or isinstance(element_type, AnyTypeConstraint):
-        return
-    is_pair = (
-        isinstance(element_type, TupleHint.TupleConstraint)
-        and len(element_type.tuple_types) == _KV_ARITY
-    )
-    if not is_pair:
+    if not is_kv_shaped(pcoll.element_type):
         raise ValueError(
             "RunAgent requires a PCollection[KV[bytes, AgentEnvelope]] input "
-            f"(pre-keyed by entity_key); got element type {element_type!r}. Key "
+            f"(pre-keyed by entity_key); got element type {pcoll.element_type!r}. Key "
             "upstream with beam.WithKeys(entity_key)"
             ".with_output_types(tuple[bytes, AgentEnvelope]) before RunAgent."
         )
@@ -267,27 +270,38 @@ class RunAgent(beam.PTransform):
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
         )
-        outputs = RunAgentOutputs(
-            output=tagged.output,
-            intents=tagged.intents,
-            traces=tagged.traces,
-            errors=tagged.errors,
-        )
+        tagged_by_field = {
+            "intents": tagged.intents,
+            "traces": tagged.traces,
+            "errors": tagged.errors,
+        }
+        dead_letter: beam.pvalue.PCollection | None = None
         for field_name in _SINK_FIELDS:
             uri = getattr(self._config, field_name)
             if uri is None:
                 continue
             sink = self._config.sink_resolver.resolve(field_name, uri)
             result = (
-                getattr(outputs, field_name.removesuffix("_to")) | _SINK_LABELS[field_name] >> sink
+                tagged_by_field[field_name.removesuffix("_to")] | _SINK_LABELS[field_name] >> sink
             )
-            if (
-                field_name == "intents_to"
-                and isinstance(result, WriteIntentsResult)
-                and self._config.errors_to is not None
-            ):
-                errors_sink = self._config.sink_resolver.resolve(
-                    "errors_to", self._config.errors_to
-                )
-                result.dead_letter | "IntentDeadLetterToErrors" >> errors_sink
-        return outputs
+            if field_name == "intents_to" and isinstance(result, WriteIntentsResult):
+                dead_letter = result.dead_letter
+                if self._config.errors_to is not None:
+                    errors_sink = self._config.sink_resolver.resolve(
+                        "errors_to", self._config.errors_to
+                    )
+                    (
+                        dead_letter
+                        | "EncodeIntentDeadLetter"
+                        >> beam.Map(encode_intent_dead_letter).with_output_types(
+                            tuple[bytes, bytes]
+                        )
+                        | "IntentDeadLetterToErrors" >> errors_sink
+                    )
+        return RunAgentOutputs(
+            output=tagged.output,
+            intents=tagged.intents,
+            traces=tagged.traces,
+            errors=tagged.errors,
+            dead_letter=dead_letter,
+        )

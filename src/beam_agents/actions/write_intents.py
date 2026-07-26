@@ -19,15 +19,22 @@ be importable.
 
 Every intent is written keyed by its raw ``entity_key`` bytes (the Kafka
 message key, or the Pub/Sub ``orderingKey`` derived from it), so intents for
-a given entity land on one partition in emission order. A serialization
-failure is routed to the ``.dead_letter`` tagged output instead of failing
-the bundle or silently dropping the intent.
+a given entity are routed to a single partition/ordering key rather than
+scattered across the topic. Beam itself makes no intra-``PCollection``
+ordering guarantee (a key's intents can split across bundles or be
+reprocessed out of order on retry on a distributed runner), so this routing
+is what lets a consumer group a key's intents together -- it is not, by
+itself, a guarantee that wire order equals emission order. A consumer that
+needs a total order for a key should order by ``ToolIntent.seq``. A
+serialization failure is routed to the ``.dead_letter`` tagged output instead
+of failing the bundle or silently dropping the intent.
 
 Importing this module has no side effects.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -83,6 +90,12 @@ def _build_kafka_writer(brokers: str, topic: str) -> beam.PTransform:
     )
 
 
+# Pub/Sub rejects an ordering key longer than this many bytes; entity_key.hex()
+# doubles the key's byte length, so entity_key itself must stay at or under
+# half this to avoid a publish-time rejection.
+_PUBSUB_ORDERING_KEY_LIMIT = 1024
+
+
 class _OrderedPubsubWriteDoFn(beam.DoFn):
     """Publishes keyed payloads to Pub/Sub with message ordering enabled.
 
@@ -91,7 +104,8 @@ class _OrderedPubsubWriteDoFn(beam.DoFn):
     never forwards ``PubsubMessage.ordering_key`` to the underlying
     ``publish()`` call, so every message publishes unordered regardless of the
     key set on it. Publishing directly with ``enable_message_ordering=True``
-    is the only way to actually get per-key order on this outbox scheme.
+    is the only way to actually get Pub/Sub's ordering-key delivery on this
+    outbox scheme.
     """
 
     def __init__(self, project: str, topic: str) -> None:
@@ -104,26 +118,50 @@ class _OrderedPubsubWriteDoFn(beam.DoFn):
         from google.cloud import pubsub_v1  # type: ignore[attr-defined]
 
         self._client = pubsub_v1.PublisherClient(
-            publisher_options=pubsub_v1.types.PublisherOptions(enable_message_ordering=True)
+            publisher_options=pubsub_v1.types.PublisherOptions(
+                enable_message_ordering=True,
+                flow_control=pubsub_v1.types.PublishFlowControl(
+                    limit_exceeded_behavior=pubsub_v1.types.LimitExceededBehavior.BLOCK
+                ),
+            )
         )
         self._topic_path = self._client.topic_path(self._project, self._topic_name)
 
     def start_bundle(self) -> None:
-        self._futures: list[Any] = []
+        self._futures: list[tuple[str, Any]] = []
 
     def process(self, element: tuple[bytes, bytes]) -> None:
         key, payload = element
-        future = self._client.publish(self._topic_path, payload, ordering_key=key.hex())
-        self._futures.append(future)
+        ordering_key = key.hex()
+        if len(ordering_key) > _PUBSUB_ORDERING_KEY_LIMIT:
+            raise ValueError(
+                f"WriteIntents: entity_key is {len(key)} bytes; its hex encoding "
+                f"({len(ordering_key)} bytes) exceeds Pub/Sub's "
+                f"{_PUBSUB_ORDERING_KEY_LIMIT}-byte ordering-key limit"
+            )
+        future = self._client.publish(self._topic_path, payload, ordering_key=ordering_key)
+        self._futures.append((ordering_key, future))
 
     def finish_bundle(self) -> None:
-        for future in self._futures:
-            future.result()
-        self._futures = []
+        futures, self._futures = self._futures, []
+        for ordering_key, future in futures:
+            try:
+                future.result()
+            except Exception:
+                # An unrecoverable publish error permanently pauses this
+                # ordering key in the client's OrderedSequencer -- every later
+                # publish on it fails until resumed. The client is built in
+                # setup() and survives bundle retries, so the key stays wedged
+                # forever unless it's resumed here before the error surfaces.
+                self._client.resume_publish(self._topic_path, ordering_key)
+                raise
+
+    def teardown(self) -> None:
+        self._client.stop()
 
 
 class _PubsubOutboxWriter(beam.PTransform):
-    """Publishes keyed payloads to Pub/Sub, preserving per-key order."""
+    """Publishes keyed payloads to Pub/Sub, routed by ordering key."""
 
     def __init__(self, project: str, topic: str) -> None:
         super().__init__()
@@ -153,23 +191,32 @@ class WriteIntentsResult:
     dead_letter: beam.pvalue.PCollection
 
 
+def is_kv_shaped(element_type: object) -> bool:
+    """True if ``element_type`` is absent/erased, or is exactly KV (2-tuple) shaped.
+
+    Shared by ``WriteIntents`` and ``RunAgent``, whose KV-input validation is
+    otherwise identical logic over two different element types.
+    """
+    return (
+        element_type is None
+        or isinstance(element_type, AnyTypeConstraint)
+        or (
+            isinstance(element_type, TupleHint.TupleConstraint)
+            and len(element_type.tuple_types) == _KV_ARITY
+        )
+    )
+
+
 def _validate_kv_input(pcoll: beam.pvalue.PCollection) -> None:
     """Raise ``ValueError`` if ``pcoll`` is positively not KV-shaped.
 
     An absent/erased element type is allowed to pass; only a definite
     non-pair type is rejected.
     """
-    element_type = pcoll.element_type
-    if element_type is None or isinstance(element_type, AnyTypeConstraint):
-        return
-    is_pair = (
-        isinstance(element_type, TupleHint.TupleConstraint)
-        and len(element_type.tuple_types) == _KV_ARITY
-    )
-    if not is_pair:
+    if not is_kv_shaped(pcoll.element_type):
         raise ValueError(
             "WriteIntents requires a PCollection[KV[bytes, ToolIntent]] input "
-            f"(keyed by entity_key); got element type {element_type!r}. Key upstream "
+            f"(keyed by entity_key); got element type {pcoll.element_type!r}. Key upstream "
             "with beam.WithKeys(lambda intent: intent.entity_key)"
             ".with_output_types(tuple[bytes, ToolIntent]) before WriteIntents."
         )
@@ -188,8 +235,30 @@ class _SerializeIntent(beam.DoFn):
         yield key, payload
 
 
+def encode_intent_dead_letter(element: tuple[tuple[bytes, ToolIntent], str]) -> tuple[bytes, bytes]:
+    """Encode a ``.dead_letter`` element as ``KV[bytes, bytes]``.
+
+    ``.dead_letter`` elements are ``((entity_key, ToolIntent), reason)`` --
+    the shape `RunAgent` needs to route them onward to an `errors_to` sink,
+    which (for the Kafka scheme, the pairing this is exercised against)
+    requires ``KV[bytes, bytes]``. The failed intent's own serialization is
+    what failed, so this carries the identifying fields it does have rather
+    than re-attempting ``SerializeToString``.
+    """
+    (key, intent), reason = element
+    detail = json.dumps(
+        {
+            "reason": reason,
+            "intent_id": intent.intent_id,
+            "seq": intent.seq,
+            "tool_name": intent.tool_name,
+        }
+    )
+    return key, detail.encode("utf-8")
+
+
 class WriteIntents(beam.PTransform):
-    """Writes keyed ``ToolIntent``s to an outbox topic, preserving per-key order.
+    """Writes keyed ``ToolIntent``s to an outbox topic, routed by ``entity_key``.
 
     Consumes ``PCollection[KV[bytes, ToolIntent]]`` keyed by ``entity_key``
     and writes to ``kafka://<brokers>/<topic>`` or ``pubsub://<project>/<topic>``.

@@ -7,11 +7,8 @@ in isolation.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import apache_beam as beam
 import pytest
-from apache_beam.coders.typecoders import registry as coder_registry
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
 from apache_beam.testing.util import assert_that, equal_to
 
@@ -25,15 +22,6 @@ from tests.core._dofn_helpers import keyed, make_pong_provider, seq_agent
 
 def _event(key: bytes, payload: bytes, t_ms: int = 1000) -> AgentEnvelope:
     return AgentEnvelope(entity_key=key, event_time_ms=t_ms, external_event=payload)
-
-
-@pytest.fixture(autouse=True)
-def _restore_coder_registry() -> Iterator[None]:
-    saved = dict(coder_registry._coders)
-    try:
-        yield
-    finally:
-        coder_registry._coders = saved
 
 
 def _spy(*, return_value: bool) -> tuple[list[int], Matcher]:

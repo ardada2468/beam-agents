@@ -30,12 +30,12 @@
 - **WHEN** `WriteIntents` is constructed with a `kafka://` or `pubsub://` URI missing its brokers/project or topic
 - **THEN** construction raises `ValueError` naming the offending URI and the missing component
 
-### Requirement: WriteIntents preserves per-key intent order in the outbox
-For every intent, `WriteIntents` SHALL set the outbox partition/ordering key to the element's `entity_key` (Kafka message key; Pub/Sub `orderingKey`) so that all intents for a given entity are routed to a single partition and preserve the order in which they were emitted for that key. `WriteIntents` SHALL NOT reorder, batch across keys in a way that interleaves a single key's intents, or coalesce intents that share an `entity_key`. Enabling Pub/Sub ordered delivery (message ordering) SHALL be part of configuring the Pub/Sub writer.
+### Requirement: WriteIntents routes each key to a single outbox partition or ordering key
+For every intent, `WriteIntents` SHALL set the outbox partition/ordering key to the element's `entity_key` (Kafka message key; Pub/Sub `orderingKey`) so that all intents for a given entity are routed to a single partition/ordering key rather than scattered across the topic. `WriteIntents` SHALL NOT itself reorder a key's intents relative to how its input `PCollection` presents them, batch across keys in a way that interleaves a single key's intents, or coalesce intents that share an `entity_key`. Enabling Pub/Sub ordered delivery (message ordering) SHALL be part of configuring the Pub/Sub writer. Beam does not guarantee intra-`PCollection` element order is preserved across bundle retries or splits on a distributed runner, so this routing is what lets a consumer *group* a key's intents together; it is not, by itself, an end-to-end guarantee that wire order equals emission order. A consumer needing a total order for a key SHOULD order by `ToolIntent.seq`.
 
-#### Scenario: Two intents on the same key keep emission order
+#### Scenario: Two intents on the same key route to the same partition
 - **WHEN** intents `i1` then `i2` with the same `entity_key` are written
-- **THEN** both carry that `entity_key` as the outbox ordering key and `i1` is ordered before `i2` on the destination partition
+- **THEN** both carry that `entity_key` as the outbox ordering key, landing on the same destination partition
 
 #### Scenario: Intents on different keys may be independently partitioned
 - **WHEN** intents with distinct `entity_key`s are written

@@ -6,14 +6,12 @@ named `RunAgentOutputs`, and sink-URI attachment.
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterator
 from dataclasses import FrozenInstanceError, dataclass, field
 from typing import Any
 from unittest import mock
 
 import apache_beam as beam
 import pytest
-from apache_beam.coders.typecoders import registry as coder_registry
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Aliased: a bare "TestPipeline" name would be mis-collected by pytest.
@@ -71,18 +69,6 @@ def _keyed_stream(p: beam.Pipeline, *envelopes: AgentEnvelope) -> beam.pvalue.PC
         | stream
         | beam.WithKeys(lambda e: e.entity_key).with_output_types(tuple[bytes, AgentEnvelope])
     )
-
-
-@pytest.fixture(autouse=True)
-def _restore_coder_registry() -> Iterator[None]:
-    """Snapshot and restore the global coder registry (``RunAgent.expand`` calls
-    ``register_coders()``); see the identical fixture in test_dofn_pipeline.py.
-    """
-    saved = dict(coder_registry._coders)
-    try:
-        yield
-    finally:
-        coder_registry._coders = saved
 
 
 @dataclass

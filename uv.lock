@@ -283,6 +283,10 @@ integration = [
 lint = [
     { name = "ruff" },
 ]
+precommit = [
+    { name = "grpcio-tools" },
+    { name = "pre-commit" },
+]
 test = [
     { name = "hypothesis" },
     { name = "mutmut" },
@@ -324,6 +328,10 @@ dev = [
 docs = []
 integration = [{ name = "testcontainers", extras = ["kafka", "redis"] }]
 lint = [{ name = "ruff" }]
+precommit = [
+    { name = "grpcio-tools" },
+    { name = "pre-commit" },
+]
 test = [
     { name = "hypothesis" },
     { name = "mutmut" },
