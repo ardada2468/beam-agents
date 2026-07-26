@@ -12,6 +12,25 @@ dependencies = [
   "protobuf",
 ]
 
+# The reference effector (`beam_agents.effector`) is a separate service, not part
+# of the pipeline: it runs outside Beam and needs transport/dedup clients the
+# runtime itself never imports. Keeping them here means the core install — and
+# the offline unit lane — stays free of all four, and the effector's adapters
+# import them lazily so `import beam_agents.effector` works without any of them.
+[project.optional-dependencies]
+effector = [
+  "aiokafka",
+  "google-cloud-pubsub",
+  "redis",
+  "google-cloud-bigtable",
+]
+
+# The effector is a service, so it gets a console entry point. It is the only
+# executable this package ships; the runtime itself is a library embedded in a
+# Beam pipeline.
+[project.scripts]
+beam-agents-effector = "beam_agents.effector.__main__:main"
+
 [dependency-groups]
 dev = [
   { include-group = "test" },
@@ -39,6 +58,14 @@ typecheck = [
 ]
 integration = [
   "testcontainers[kafka,redis]",
+  # The effector's live-broker/live-store tests need the same clients the
+  # `effector` extra ships. Mirrored here (rather than depending on the extra)
+  # so the `integration` lane installs them while the `ci` unit lane — which
+  # syncs only lint/typecheck/test — still proves the offline import boundary.
+  "aiokafka",
+  "google-cloud-pubsub",
+  "redis",
+  "google-cloud-bigtable",
 ]
 bench = [
   "pyperf",
@@ -89,6 +116,13 @@ ignore = [
 # import Kafka/Pub/Sub IO clients until expand() actually builds the writer;
 # same PLC0415-is-the-point rationale as core/transform.py above.
 "src/beam_agents/actions/write_intents.py" = ["PLC0415"]
+# The effector's adapters import their client libraries (aiokafka, pubsub,
+# redis, bigtable) inside the adapter constructor, on purpose: those are
+# optional dependencies and `import beam_agents.effector` must succeed with
+# none of them installed. Same PLC0415-is-the-point rationale as above.
+"src/beam_agents/effector/sources.py" = ["PLC0415"]
+"src/beam_agents/effector/sinks.py" = ["PLC0415"]
+"src/beam_agents/effector/dedup.py" = ["PLC0415"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -107,6 +141,13 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "google.*"
+ignore_missing_imports = true
+
+# The effector's transport/dedup clients are optional dependencies (the
+# `effector` extra) and are deliberately absent from the `ci` lane's environment,
+# where mypy runs. Their lazy imports must not read as missing-module errors.
+[[tool.mypy.overrides]]
+module = ["aiokafka.*", "redis.*"]
 ignore_missing_imports = true
 
 # Generated protobuf stubs use bare `Mapping` in a few __init__ signatures,

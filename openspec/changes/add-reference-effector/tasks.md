@@ -1,55 +1,55 @@
 ## 1. Package scaffolding and dependencies
 
-- [ ] 1.1 Add an optional `effector` dependency group to `pyproject.toml` (`aiokafka`, `google-cloud-pubsub`, `redis`, `google-cloud-bigtable`); keep it out of the default install and out of `test`, and note the per-file `PLC0415` ignore for the adapter modules that import clients lazily.
-- [ ] 1.2 Create `src/beam_agents/effector/__init__.py` exporting the service, config, protocol, and runner types; confirm it is NOT re-exported from `beam_agents/__init__.py`.
-- [ ] 1.3 Create `tests/effector/__init__.py`.
-- [ ] 1.4 Write the import-boundary test first (spec: "The package imports with Beam unavailable" / "with no optional client libraries installed" / "absent from the public API"): import every effector module with `apache_beam` and all four client libraries blocked from `sys.modules`, and assert `beam_agents.__all__` carries no effector symbol.
-- [ ] 1.5 Add a `beam-agents-effector` console entry point in `pyproject.toml` pointing at `effector/__main__.py`.
+- [x] 1.1 Add an optional `effector` dependency group to `pyproject.toml` (`aiokafka`, `google-cloud-pubsub`, `redis`, `google-cloud-bigtable`); keep it out of the default install and out of `test`, and note the per-file `PLC0415` ignore for the adapter modules that import clients lazily.
+- [x] 1.2 Create `src/beam_agents/effector/__init__.py` exporting the service, config, protocol, and runner types; confirm it is NOT re-exported from `beam_agents/__init__.py`.
+- [x] 1.3 Create `tests/effector/__init__.py`.
+- [x] 1.4 Write the import-boundary test first (spec: "The package imports with Beam unavailable" / "with no optional client libraries installed" / "absent from the public API"): import every effector module with `apache_beam` and all four client libraries blocked from `sys.modules`, and assert `beam_agents.__all__` carries no effector symbol.
+- [x] 1.5 Add a `beam-agents-effector` console entry point in `pyproject.toml` pointing at `effector/__main__.py`.
 
 ## 2. Configuration
 
-- [ ] 2.1 Write config tests first (spec: unknown source scheme rejected; `lease_ms <= tool_timeout_ms` rejected; validation performs no client imports).
-- [ ] 2.2 Implement `effector/config.py`: frozen `EffectorConfig` with intents/results/approval/dedup URIs, consumer group id, `lease_ms`, `result_ttl_ms`, `tool_timeout_ms`, publish retry budget, `max_concurrent_partitions`.
-- [ ] 2.3 Implement import-free URI parsing for `kafka://<brokers>/<topic>`, `pubsub://<project>/<subscription|topic>`, `redis://`, `bigtable://<project>/<instance>/<table>`, `memory://`, reusing the grammar and error semantics from `core/transform.py::DefaultSinkResolver`.
-- [ ] 2.4 Implement `validate()` raising actionable `ValueError`s for malformed/unknown-scheme URIs and for `lease_ms <= tool_timeout_ms`; call it from `__post_init__`.
+- [x] 2.1 Write config tests first (spec: unknown source scheme rejected; `lease_ms <= tool_timeout_ms` rejected; validation performs no client imports).
+- [x] 2.2 Implement `effector/config.py`: frozen `EffectorConfig` with intents/results/approval/dedup URIs, consumer group id, `lease_ms`, `result_ttl_ms`, `tool_timeout_ms`, publish retry budget, `max_concurrent_partitions`.
+- [x] 2.3 Implement import-free URI parsing for `kafka://<brokers>/<topic>`, `pubsub://<project>/<subscription|topic>`, `redis://`, `bigtable://<project>/<instance>/<table>`, `memory://`, reusing the grammar and error semantics from `core/transform.py::DefaultSinkResolver`.
+- [x] 2.4 Implement `validate()` raising actionable `ValueError`s for malformed/unknown-scheme URIs and for `lease_ms <= tool_timeout_ms`; call it from `__post_init__`.
 
 ## 3. Dedup protocol and in-memory store
 
-- [ ] 3.1 Write dedup protocol tests first (spec: first claim granted; concurrent claims yield one owner; `Done` carries the stored result; non-owner completion refused; release frees the intent; expired lease re-claimable; unexpired lease not re-claimable; expired terminal record reads as unseen).
-- [ ] 3.2 Implement `effector/dedup.py`: the `DedupStore` protocol plus the `Claimed` / `InFlight` / `Done` outcome types (frozen dataclasses, `Claimed` carrying an opaque token, `Done` carrying a `ToolResult`).
-- [ ] 3.3 Implement `InMemoryDedupStore` with an injectable clock, so lease and TTL expiry are testable without sleeping.
-- [ ] 3.4 Run the protocol test suite against the in-memory store as the shared conformance suite that the Redis and Bigtable stores will also be run against.
+- [x] 3.1 Write dedup protocol tests first (spec: first claim granted; concurrent claims yield one owner; `Done` carries the stored result; non-owner completion refused; release frees the intent; expired lease re-claimable; unexpired lease not re-claimable; expired terminal record reads as unseen).
+- [x] 3.2 Implement `effector/dedup.py`: the `DedupStore` protocol plus the `Claimed` / `InFlight` / `Done` outcome types (frozen dataclasses, `Claimed` carrying an opaque token, `Done` carrying a `ToolResult`).
+- [x] 3.3 Implement `InMemoryDedupStore` with an injectable clock, so lease and TTL expiry are testable without sleeping.
+- [x] 3.4 Run the protocol test suite against the in-memory store as the shared conformance suite that the Redis and Bigtable stores will also be run against.
 
 ## 4. Execution: EffectorToolRunner and `Tool.unwrap()`
 
-- [ ] 4.1 Write tests first for `Tool.unwrap()` (spec: returns the original callable; available for both tool kinds) and for the unchanged in-pipeline guard.
-- [ ] 4.2 Add `Tool.unwrap()` to `tools/registry.py` with a docstring naming the effector as its only sanctioned caller.
-- [ ] 4.3 Write `EffectorToolRunner` tests first (spec: side-effecting tool executes; read-only tool refused; async tool awaited; argument validation before invocation; malformed `args_json` rejected; timeout cancels and reports `ERROR`).
-- [ ] 4.4 Implement `effector/runner.py`: `EffectorToolRunner.run` — require `side_effect=True`, parse `args_json`, validate against the tool's Pydantic model, invoke via `unwrap()`, await awaitable results, wrap in `asyncio.wait_for(tool_timeout_ms)`.
-- [ ] 4.5 Implement the total intent → `ToolResult` status mapping (`OK`/`ERROR`/`EXPIRED`/`REJECTED`) with `REJECTED` reserved for never-invoked cases, plus canonical-JSON payload encoding and an `ERROR` result on encoding failure.
+- [x] 4.1 Write tests first for `Tool.unwrap()` (spec: returns the original callable; available for both tool kinds) and for the unchanged in-pipeline guard.
+- [x] 4.2 Add `Tool.unwrap()` to `tools/registry.py` with a docstring naming the effector as its only sanctioned caller.
+- [x] 4.3 Write `EffectorToolRunner` tests first (spec: side-effecting tool executes; read-only tool refused; async tool awaited; argument validation before invocation; malformed `args_json` rejected; timeout cancels and reports `ERROR`).
+- [x] 4.4 Implement `effector/runner.py`: `EffectorToolRunner.run` — require `side_effect=True`, parse `args_json`, validate against the tool's Pydantic model, invoke via `unwrap()`, await awaitable results, wrap in `asyncio.wait_for(tool_timeout_ms)`.
+- [x] 4.5 Implement the total intent → `ToolResult` status mapping (`OK`/`ERROR`/`EXPIRED`/`REJECTED`) with `REJECTED` reserved for never-invoked cases, plus canonical-JSON payload encoding and an `ERROR` result on encoding failure.
 
 ## 5. Sources and sinks
 
-- [ ] 5.1 Write source/sink protocol tests first against in-memory implementations (spec: the loop runs against in-memory implementations; results published under the originating entity key).
-- [ ] 5.2 Implement `effector/sources.py`: the `IntentSource` protocol (async iteration yielding intent + ack handle, plus `commit`), an `InMemoryIntentSource` with a recording `commit`, and a crash-injecting fake that raises at a named phase boundary.
-- [ ] 5.3 Implement `effector/sinks.py`: the `ResultSink` protocol, an `InMemoryResultSink`, and a raw-message sink for the approval channel.
-- [ ] 5.4 Implement the Kafka source adapter: consumer group with the configured group id, manual offset commit, one processing task per assigned partition, and a rebalance/revocation hook that releases unexecuted claims.
-- [ ] 5.5 Implement the Kafka result/approval sink adapter: publish keyed by `entity_key` with an idempotent producer.
-- [ ] 5.6 Implement the Pub/Sub source adapter: ordered subscription, one in-flight message per `ordering_key`, ack only on commit; log a warning at startup when the subscription's ordering flag is readable and false.
-- [ ] 5.7 Implement the Pub/Sub sink adapter: publish with `enable_message_ordering=True` and `ordering_key` derived from `entity_key`, matching `WriteIntents`' hex convention.
+- [x] 5.1 Write source/sink protocol tests first against in-memory implementations (spec: the loop runs against in-memory implementations; results published under the originating entity key).
+- [x] 5.2 Implement `effector/sources.py`: the `IntentSource` protocol (async iteration yielding intent + ack handle, plus `commit`) and an `InMemoryIntentSource` with a recording `commit`. The crash-injecting fake landed in `tests/effector/_fakes.py` rather than `src/`: it wraps the dedup store and the sinks (the phase boundaries that matter are `complete` and `publish`, not the source), and it raises a `BaseException` so the service's own retry wrapper cannot catch it — behavior that belongs to the test suite, not the shipped service.
+- [x] 5.3 Implement `effector/sinks.py`: the `ResultSink` protocol, an `InMemoryResultSink`, and a raw-message sink for the approval channel.
+- [x] 5.4 Implement the Kafka source adapter: consumer group with the configured group id, manual offset commit, one processing task per assigned partition, and a rebalance/revocation hook that releases unexecuted claims.
+- [x] 5.5 Implement the Kafka result/approval sink adapter: publish keyed by `entity_key` with an idempotent producer.
+- [x] 5.6 Implement the Pub/Sub source adapter: ordered subscription, one in-flight message per `ordering_key`, ack only on commit; log a warning at startup when the subscription's ordering flag is readable and false.
+- [x] 5.7 Implement the Pub/Sub sink adapter: publish with `enable_message_ordering=True` and `ordering_key` derived from `entity_key`, matching `WriteIntents`' hex convention.
 
 ## 6. Service loop
 
-- [ ] 6.1 Write phase-order tests first (spec: expiry decided before the dedup store is touched; crash between completion and publication does not re-execute; crash before publication does not commit; in-flight is waited on, never skipped; `Done` republishes byte-identically).
-- [ ] 6.2 Write ordering tests first (spec: intents for one key execute in emission order; distinct partitions progress concurrently; a revoked partition releases unexecuted claims).
-- [ ] 6.3 Write retry tests first (spec: transient publish failure retried then committed; failed tool not re-invoked; exhausted publish retries leave the offset uncommitted).
-- [ ] 6.4 Implement `effector/service.py`: per-intent phases in order — `refuse_expired` → `claim` → route-or-execute → `complete` → publish → commit.
-- [ ] 6.5 Implement the `InFlight` wait loop with bounded exponential backoff, resolving to `Claimed` (lease expired) or `Done` (owner completed); never skip-and-commit.
-- [ ] 6.6 Implement approval-kind routing: publish the intent verbatim to the approval channel keyed by `entity_key`, mark terminal in the dedup store with a sentinel record, publish no `ToolResult`; treat `TOOL_KIND_UNSPECIFIED` as `TOOL`.
-- [ ] 6.7 Implement one task per assigned partition with sequential in-partition processing, bounded by `max_concurrent_partitions`.
-- [ ] 6.8 Implement bounded exponential-backoff retry for dedup RPCs and result publication only; ensure no code path re-invokes a tool callable within a claim.
-- [ ] 6.9 Implement the injectable metrics sink (counters for claimed / deduped / expired / rejected / errored and per-tool latency) with a no-op default.
-- [ ] 6.10 Implement `effector/__main__.py`: build `EffectorConfig` from CLI args/env, construct adapters, run the service with graceful shutdown (drain in-flight, release unexecuted claims, no uncommitted publish loss).
+- [x] 6.1 Write phase-order tests first (spec: expiry decided before the dedup store is touched; crash between completion and publication does not re-execute; crash before publication does not commit; in-flight is waited on, never skipped; `Done` republishes byte-identically).
+- [x] 6.2 Write ordering tests first (spec: intents for one key execute in emission order; distinct partitions progress concurrently; a revoked partition releases unexecuted claims).
+- [x] 6.3 Write retry tests first (spec: transient publish failure retried then committed; failed tool not re-invoked; exhausted publish retries leave the offset uncommitted).
+- [x] 6.4 Implement `effector/service.py`: per-intent phases in order — `refuse_expired` → `claim` → route-or-execute → `complete` → publish → commit.
+- [x] 6.5 Implement the `InFlight` wait loop with bounded exponential backoff, resolving to `Claimed` (lease expired) or `Done` (owner completed); never skip-and-commit.
+- [x] 6.6 Implement approval-kind routing: publish the intent verbatim to the approval channel keyed by `entity_key`, mark terminal in the dedup store with a sentinel record, publish no `ToolResult`; treat `TOOL_KIND_UNSPECIFIED` as `TOOL`.
+- [x] 6.7 Implement one task per assigned partition with sequential in-partition processing, bounded by `max_concurrent_partitions`.
+- [x] 6.8 Implement bounded exponential-backoff retry for dedup RPCs and result publication only; ensure no code path re-invokes a tool callable within a claim.
+- [x] 6.9 Implement the injectable metrics sink (counters for claimed / deduped / expired / rejected / errored and per-tool latency) with a no-op default.
+- [x] 6.10 Implement `effector/__main__.py`: build `EffectorConfig` from CLI args/env, construct adapters, run the service with graceful shutdown (drain in-flight, release unexecuted claims, no uncommitted publish loss).
 
 ## 7. Redis dedup store
 
