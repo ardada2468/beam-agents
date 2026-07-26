@@ -70,31 +70,45 @@ jobs:
         run: echo "GCP_PROJECT_ID is not set; skipping nightly Dataflow run."
 
   smoke:
-    # secrets.* is not accessible in jobs.<job_id>.if (only github/needs/vars/inputs
-    # are), so gating is done step-by-step below instead of at the job level.
+    # `secrets` is not a recognized named-value in `if:` at all (job- or
+    # step-level) -- it's only usable in `env:`/`with:` mappings. Map it into
+    # an env var on one step and compute a step *output* from that instead;
+    # every other step gates on the output, which `if:` can reference.
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
+      - name: Check for provider credentials
+        id: creds
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [[ -n "$ANTHROPIC_API_KEY" || -n "$OPENAI_API_KEY" ]]; then
+            echo "has_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_creds=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: No provider credentials configured
-        if: secrets.ANTHROPIC_API_KEY == '' && secrets.OPENAI_API_KEY == ''
+        if: steps.creds.outputs.has_creds == 'false'
         run: echo "Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is set; skipping nightly smoke run."
 
       - uses: actions/checkout@v4
-        if: secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != ''
+        if: steps.creds.outputs.has_creds == 'true'
 
       - uses: astral-sh/setup-uv@v5
-        if: secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != ''
+        if: steps.creds.outputs.has_creds == 'true'
         with:
           python-version: "3.11"
           enable-cache: true
           cache-dependency-glob: uv.lock
 
       - name: Install dependencies
-        if: secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != ''
+        if: steps.creds.outputs.has_creds == 'true'
         run: uv sync --locked --group test
 
       - name: Real-provider smoke tests
-        if: secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != ''
+        if: steps.creds.outputs.has_creds == 'true'
         run: make test-smoke
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
