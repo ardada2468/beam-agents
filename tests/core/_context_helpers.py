@@ -8,6 +8,7 @@ from __future__ import annotations
 import random
 
 from beam_agents.core.context import AgentContext
+from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from beam_agents.memory import Memory
 from beam_agents.model import CircuitBreaker, FakeLLM, LLMClient, ReplayCache, RetryPolicy
 from beam_agents.model.facade import Decode, DecodedResponse, Sleep, TokenUsage
@@ -49,6 +50,8 @@ def make_context(
     breaker: CircuitBreaker | None = None,
     retry_policy: RetryPolicy | None = None,
     decode: Decode | None = None,
+    intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
+    approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
 ) -> AgentContext:
     """Build an `AgentContext` with sensible defaults for tests that don't
     care about a particular knob.
@@ -70,4 +73,6 @@ def make_context(
         else RetryPolicy(max_attempts=3, base_ms=100, max_ms=1_000),
         decode=decode if decode is not None else decode_len_based,
         tool_registry=tool_registry if tool_registry is not None else ToolRegistry(),
+        intent_ttl_ms=intent_ttl_ms,
+        approval_channel=approval_channel,
     )

@@ -31,6 +31,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from beam_agents._protos import (
+    AgentEnvelope,
     Continuation,
     LlmCacheBlob,
     MemoryBlob,
@@ -39,6 +40,7 @@ from beam_agents._protos import (
     TraceEvent,
 )
 from beam_agents.core.agent import intent_id_for
+from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from beam_agents.memory.facade import Compactor, Memory
 from beam_agents.model.client import LLMClient, LlmRequest, LlmResponse
 from beam_agents.model.facade import (
@@ -104,10 +106,14 @@ class AgentContext:
         decode: Decode,
         tool_registry: ToolRegistry,
         tool_runner: ToolRunner | None = None,
+        intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
+        approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
     ) -> None:
         self._entity_key = entity_key
         self._seq = seq
         self._now_ms = now_ms
+        self._intent_ttl_ms = intent_ttl_ms
+        self._approval_channel = approval_channel
         self.memory = memory
         self._replay_cache = replay_cache
         self._tool_registry = tool_registry
@@ -168,6 +174,38 @@ class AgentContext:
                 f"tool {tool_name!r} is side_effect=False; call it via run_tool(...) "
                 "instead of act(...)"
             )
+        self._stage_intent(tool_name, arguments, ToolIntent.TOOL, self._intent_ttl_ms)
+
+    def request_approval(
+        self,
+        arguments: Mapping[str, object],
+        *,
+        channel: str | None = None,
+        ttl_ms: int | None = None,
+    ) -> str:
+        """Stage a `kind = APPROVAL` intent and return its deterministic ID.
+
+        The approval channel is *not* a registered tool -- it names where the
+        effector routes the request (a queue, a pager) -- so no registry lookup
+        happens and nothing is executed. Everything else matches `act`: the
+        same canonical-JSON encoding, the same `intent_id_for` derivation, and
+        the same monotonic step sequence, so an approval and a tool intent
+        within one activation can never share an ID.
+        """
+        return self._stage_intent(
+            channel if channel is not None else self._approval_channel,
+            arguments,
+            ToolIntent.APPROVAL,
+            ttl_ms if ttl_ms is not None else self._intent_ttl_ms,
+        )
+
+    def _stage_intent(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, object],
+        kind: ToolIntent.Kind,
+        ttl_ms: int,
+    ) -> str:
         step_index = self._step_index
         args_json = json.dumps(
             dict(arguments),
@@ -186,9 +224,12 @@ class AgentContext:
                 tool_name=tool_name,
                 args_json=args_json,
                 created_at_ms=self._now_ms,
+                expires_at_ms=self._now_ms + ttl_ms,
+                kind=kind,
             )
         )
         self._step_index += 1
+        return intent_id
 
     # -- read-only tools ----------------------------------------------------
 
@@ -266,9 +307,12 @@ class ActivationContext:
         cache_blob: LlmCacheBlob | None,
         event: bytes = b"",
         resume_result: ToolResult | None = None,
-        resume_approval: object | None = None,
+        resume_approval: AgentEnvelope.Approval | None = None,
         snapshot: bytes = b"",
         compactor: Compactor | None = None,
+        step_index: int = 0,
+        intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
+        approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
     ) -> None:
         self.entity_key = entity_key
         self.seq = seq
@@ -281,8 +325,14 @@ class ActivationContext:
         self._provider = provider
         self._memory = Memory(memory_blob, now_ms=now_ms, compactor=compactor)
         self._replay_cache = ReplayCache(cache_blob, now_ms=now_ms)
+        self._intent_ttl_ms = intent_ttl_ms
+        self._approval_channel = approval_channel
 
-        self._step_index = 0
+        # Seeded from the resumed Continuation's step_index, not reset to 0: a
+        # resumed activation shares its suspended activation's `seq`, so
+        # restarting the counter would re-mint an intent_id the suspension
+        # already used and the effector would dedup the new effect away.
+        self._step_index = step_index
         self._intents: list[ToolIntent] = []
         self._traces: list[TraceEvent] = []
 
@@ -323,13 +373,45 @@ class ActivationContext:
         self._stage_llm_trace(step, cache_hit=False, model_id=request.model_id)
         return response
 
-    def act(self, tool_name: str, args_json: str, *, ttl_ms: int) -> str:
+    def act(self, tool_name: str, args_json: str, *, ttl_ms: int | None = None) -> str:
         """Stage a side-effect ``ToolIntent`` and return its deterministic ID.
 
         This is the ONLY effect path (correctness invariant 5): the intent is
         emitted on ``.intents`` at commit and its result re-enters on the same
         key. ``intent_id`` is a pure function of ``(key, seq, step_index)``.
+        ``ttl_ms`` defaults to the configured intent TTL; the resulting
+        ``expires_at_ms`` is what both the effector guard and the resume
+        admission check read.
         """
+        return self._stage_intent(tool_name, args_json, ToolIntent.TOOL, ttl_ms)
+
+    def request_approval(
+        self,
+        args_json: str,
+        *,
+        channel: str | None = None,
+        ttl_ms: int | None = None,
+    ) -> str:
+        """Stage a ``kind = APPROVAL`` intent and return its deterministic ID.
+
+        The channel names where the effector routes the request; it is not a
+        registered tool and nothing is executed. Shares the step sequence and
+        ID derivation with :meth:`act`, so IDs cannot collide.
+        """
+        return self._stage_intent(
+            channel if channel is not None else self._approval_channel,
+            args_json,
+            ToolIntent.APPROVAL,
+            ttl_ms,
+        )
+
+    def _stage_intent(
+        self,
+        tool_name: str,
+        args_json: str,
+        kind: ToolIntent.Kind,
+        ttl_ms: int | None,
+    ) -> str:
         step = self._advance_step()
         intent_id = intent_id_for(self.entity_key, self.seq, step)
         self._intents.append(
@@ -341,8 +423,9 @@ class ActivationContext:
                 tool_name=tool_name,
                 args_json=args_json,
                 created_at_ms=self.now_ms,
-                expires_at_ms=self.now_ms + ttl_ms,
+                expires_at_ms=self.now_ms + (ttl_ms if ttl_ms is not None else self._intent_ttl_ms),
                 attempt=0,
+                kind=kind,
             )
         )
         return intent_id

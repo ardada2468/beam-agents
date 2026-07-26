@@ -13,13 +13,21 @@ import dataclasses
 import pytest
 
 import beam_agents.core.context as context_module
-from beam_agents._protos import LlmCacheBlob, MemoryBlob, ToolResult, TraceEvent
+from beam_agents._protos import (
+    AgentEnvelope,
+    LlmCacheBlob,
+    MemoryBlob,
+    ToolIntent,
+    ToolResult,
+    TraceEvent,
+)
 from beam_agents.core.agent import intent_id_for
 from beam_agents.core.context import (
     ActivationContext,
     AgentContext,
     AgentResult,
 )
+from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from beam_agents.model import FakeLLM, LlmRequest, StagingSink, TokenUsage, match_any, respond_with
 from beam_agents.model.replay_cache import compute_cache_key as real_compute_cache_key
 from beam_agents.tools import SideEffectToolError, ToolRegistry, tool
@@ -204,9 +212,26 @@ def test_act_stages_an_intent_without_executing_the_tool() -> None:
     assert intent.tool_name == "charge_card"
     assert intent.args_json == '{"amount":5}'
     assert intent.created_at_ms == 1234
-    assert intent.expires_at_ms == 0
+    assert intent.expires_at_ms == 1234 + DEFAULT_INTENT_TTL_MS
     assert intent.attempt == 0
+    assert intent.kind == ToolIntent.TOOL
     assert calls == []
+
+
+def test_act_stamps_a_positive_expiry_from_the_intent_ttl() -> None:
+    # Scenario: Intents staged through the authoring surface carry an expiry.
+    # A non-positive expires_at_ms means "already expired" to every consumer,
+    # so this surface may never leave it at zero.
+    calls: list[object] = []
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, calls)
+    ctx = make_context(now_ms=5_000, intent_ttl_ms=90_000, tool_registry=registry)
+
+    ctx.act("charge_card", {"amount": 5})
+
+    intent = ctx.drain().intents[0]
+    assert intent.expires_at_ms == 95_000
+    assert intent.expires_at_ms > 0
 
 
 def test_act_preserves_unicode_and_rejects_non_finite_numbers() -> None:
@@ -259,6 +284,145 @@ def test_agent_context_and_activation_context_mint_the_same_intent_id() -> None:
 
     assert agent_result.intents[0].intent_id == activation_intent_id
     assert agent_result.intents[0].intent_id == intent_id_for(b"key-y", 4, 0)
+
+
+# --- Requirement: An activation can request a human approval -----------------
+
+
+def test_request_approval_stages_an_approval_intent() -> None:
+    # Scenario: Requesting an approval stages an APPROVAL intent.
+    ctx = make_context(
+        entity_key=b"entity-a",
+        seq=7,
+        now_ms=1234,
+        approval_channel="pager",
+        intent_ttl_ms=60_000,
+    )
+
+    intent_id = ctx.request_approval({"amount": 5, "reason": "refund"})
+
+    intent = ctx.drain().intents[0]
+    assert intent.kind == ToolIntent.APPROVAL
+    assert intent.tool_name == "pager"
+    assert intent.args_json == '{"amount":5,"reason":"refund"}'
+    assert intent.created_at_ms == 1234
+    assert intent.expires_at_ms == 1234 + 60_000
+    assert intent.intent_id == intent_id == intent_id_for(b"entity-a", 7, 0)
+
+
+def test_request_approval_looks_up_and_executes_nothing() -> None:
+    # Scenario: Requesting an approval executes nothing.
+    # The approval channel is not a registered tool: an empty registry must be
+    # no obstacle, and a same-named registered tool must never be invoked.
+    calls: list[object] = []
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, calls)
+    ctx = make_context(approval_channel="charge_card", tool_registry=registry)
+
+    ctx.request_approval({"amount": 5})
+
+    assert calls == []
+    assert ctx.drain().intents[0].kind == ToolIntent.APPROVAL
+
+    # And with nothing registered at all.
+    bare = make_context(approval_channel="nowhere", tool_registry=ToolRegistry())
+    bare.request_approval({"amount": 5})
+    assert bare.drain().intents[0].tool_name == "nowhere"
+
+
+def test_request_approval_shares_the_step_sequence_with_act() -> None:
+    # Approval and tool intents draw from one monotonic step sequence, so their
+    # IDs cannot collide within an activation.
+    calls: list[object] = []
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, calls)
+    ctx = make_context(entity_key=b"k", seq=3, tool_registry=registry)
+
+    ctx.act("charge_card", {"amount": 5})
+    ctx.request_approval({"amount": 5})
+
+    intents = ctx.drain().intents
+    assert [i.step_index for i in intents] == [0, 1]
+    assert intents[0].intent_id != intents[1].intent_id
+
+
+def test_replayed_activation_produces_byte_identical_approval_intents() -> None:
+    # Scenario: Approval requests are deterministic under replay.
+    def run_once() -> AgentResult:
+        ctx = make_context(entity_key=b"key-x", seq=9, now_ms=77)
+        ctx.request_approval({"amount": 5})
+        return ctx.drain()
+
+    first, second = run_once(), run_once()
+
+    assert first.intents == second.intents
+    assert first.intents[0].SerializeToString(deterministic=True) == second.intents[
+        0
+    ].SerializeToString(deterministic=True)
+
+
+def test_both_surfaces_mint_identical_approval_intents() -> None:
+    # The two entry points must agree field-for-field, not just on the ID.
+    agent_ctx = make_context(
+        entity_key=b"key-y", seq=4, now_ms=100, approval_channel="pager", intent_ttl_ms=60_000
+    )
+    agent_ctx.request_approval({"amount": 5})
+    agent_intent = agent_ctx.drain().intents[0]
+
+    activation_ctx = ActivationContext(
+        entity_key=b"key-y",
+        seq=4,
+        now_ms=100,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+        approval_channel="pager",
+        intent_ttl_ms=60_000,
+    )
+    activation_ctx.request_approval('{"amount":5}')
+
+    assert agent_intent == activation_ctx.staged_intents[0]
+
+
+def test_activation_context_request_approval_stages_an_approval_intent() -> None:
+    # Scenario: Requesting an approval stages an APPROVAL intent (runtime surface).
+    ctx = ActivationContext(
+        entity_key=b"key",
+        seq=8,
+        now_ms=123,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    intent_id = ctx.request_approval('{"amount":5}', ttl_ms=60_000)
+
+    intent = ctx.staged_intents[0]
+    assert intent.kind == ToolIntent.APPROVAL
+    assert intent.tool_name == DEFAULT_APPROVAL_CHANNEL
+    assert intent.args_json == '{"amount":5}'
+    assert intent.expires_at_ms == 123 + 60_000
+    assert intent.intent_id == intent_id == intent_id_for(b"key", 8, 0)
+    assert ctx.step_index == 1
+
+
+def test_activation_context_act_defaults_its_ttl_and_marks_kind_tool() -> None:
+    # Scenario: Every staged intent carries a positive expiry.
+    ctx = ActivationContext(
+        entity_key=b"key",
+        seq=8,
+        now_ms=123,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+        intent_ttl_ms=45_000,
+    )
+
+    ctx.act("charge", '{"amount":5}')
+
+    intent = ctx.staged_intents[0]
+    assert intent.kind == ToolIntent.TOOL
+    assert intent.expires_at_ms == 123 + 45_000
 
 
 def test_replayed_activation_produces_byte_identical_intents() -> None:
@@ -506,7 +670,7 @@ def test_activation_context_preserves_inputs_and_wires_state_facades(
     memory_blob = MemoryBlob(state_schema_version=1)
     cache_blob = LlmCacheBlob(state_schema_version=1)
     resume_result = ToolResult(intent_id="intent-1", status=ToolResult.OK)
-    resume_approval = object()
+    resume_approval = AgentEnvelope.Approval(intent_id="intent-1", approved=True)
     compactor = object()
 
     ctx = ActivationContext(

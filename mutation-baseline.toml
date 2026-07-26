@@ -1,7 +1,20 @@
 # Maximum number of mutants not reached by the mutation test selection, by
 # source module. Missing modules have an implicit baseline of zero, and each
 # module is compared independently so improvements cannot mask regressions.
+#
+# add-human-in-the-loop moved both numbers:
+#   dofn.py 263 -> 261. The HITL admission predicate (`_admission_failure`) and
+#     the timer callback are pure functions tested directly, in the mutation
+#     selection (tests/core/test_dofn_admission.py, test_dofn_hitl_timer.py),
+#     so the new fail-closed logic is mutation-covered rather than added to the
+#     gap -- and it pulled the gap down below where it started.
+#   transform.py 196 -> 198. `AgentConfig.hitl_policy` and its `validate()` call
+#     sit in `__post_init__`, which only test_transform.py reaches, and that
+#     suite is deselected under mutmut (it drives TestPipeline/TestStream; see
+#     the [tool.mutmut] comment in pyproject.toml). The two mutants are the
+#     field default and the validate() call; both are covered by
+#     test_transform.py's construction-validation tests in the normal suite.
 [no_tests]
 "context.py" = 0
-"dofn.py" = 263
-"transform.py" = 196
+"dofn.py" = 261
+"transform.py" = 198

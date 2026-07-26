@@ -21,6 +21,7 @@ from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
 from beam_agents._protos import AgentEnvelope
+from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.core.transform import (
     AgentConfig,
     DefaultSinkResolver,
@@ -29,6 +30,7 @@ from beam_agents.core.transform import (
     UnknownSinkSchemeError,
     _validate_kv_input,
 )
+from beam_agents.hitl import HitlPolicy
 from tests.core._dofn_helpers import (
     append_agent,
     make_pong_provider,
@@ -114,6 +116,52 @@ def test_non_positive_knob_is_rejected(knob: str, bad_value: float) -> None:
     kwargs: dict[str, Any] = {knob: bad_value}
     with pytest.raises(ValueError, match=knob):
         AgentConfig(provider_factory=make_pong_provider, **kwargs)
+
+
+def test_config_carries_a_default_hitl_policy() -> None:
+    config = AgentConfig(provider_factory=make_pong_provider)
+    assert config.hitl_policy == HitlPolicy()
+    assert config.hitl_policy.max_escalations == 0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "field_name"),
+    [
+        ({"timeout_ms": 0}, "timeout_ms"),
+        ({"timeout_ms": -1}, "timeout_ms"),
+        ({"intent_ttl_ms": 0}, "intent_ttl_ms"),
+        ({"max_escalations": -1}, "max_escalations"),
+        ({"approval_channel": ""}, "approval_channel"),
+    ],
+)
+def test_invalid_hitl_policy_is_rejected_at_config_construction(
+    kwargs: dict[str, Any], field_name: str
+) -> None:
+    # Scenarios: A non-positive timeout / an empty approval channel is rejected
+    # at construction, before any pipeline exists.
+    with pytest.raises(ValueError, match=field_name):
+        policy = HitlPolicy(**kwargs)
+        AgentConfig(provider_factory=make_pong_provider, hitl_policy=policy)
+
+
+def test_config_revalidates_a_policy_that_evaded_its_own_constructor() -> None:
+    # A frozen dataclass can still be bypassed via object.__setattr__; the
+    # config re-checks rather than trusting the instance it is handed.
+    policy = HitlPolicy()
+    object.__setattr__(policy, "approval_channel", "")
+    with pytest.raises(ValueError, match="approval_channel"):
+        AgentConfig(provider_factory=make_pong_provider, hitl_policy=policy)
+
+
+def test_hitl_policy_reaches_the_dofn() -> None:
+    policy = HitlPolicy(timeout_ms=1_234, approval_channel="pager")
+    config = AgentConfig(provider_factory=make_pong_provider, hitl_policy=policy)
+    dofn = _AgentDoFn(
+        seq_agent,
+        provider_factory=config.provider_factory,
+        hitl_policy=config.hitl_policy,
+    )
+    assert dofn._hitl_policy is policy
 
 
 @pytest.mark.parametrize("field_name", ["intents_to", "traces_to", "errors_to"])

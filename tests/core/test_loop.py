@@ -10,10 +10,11 @@ from __future__ import annotations
 import pytest
 
 import beam_agents.core.loop as loop_module
-from beam_agents._protos import LlmCacheBlob, MemoryBlob, ToolResult, TraceEvent
+from beam_agents._protos import AgentEnvelope, LlmCacheBlob, MemoryBlob, ToolResult, TraceEvent
 from beam_agents.core.agent import Complete, Suspend
 from beam_agents.core.context import ActivationContext
 from beam_agents.core.loop import DEFAULT_HITL_TIMEOUT_MS, run_activation
+from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from tests.core._dofn_helpers import (
     append_agent,
     make_pong_provider,
@@ -172,7 +173,7 @@ async def test_loop_forwards_every_activation_context_input(
     cache_blob = LlmCacheBlob(state_schema_version=1)
     provider = object()
     resume_result = ToolResult(intent_id="intent-1")
-    resume_approval = object()
+    resume_approval = AgentEnvelope.Approval(intent_id="intent-1", approved=True)
     compactor = object()
 
     class FakeContext:
@@ -230,6 +231,9 @@ async def test_loop_forwards_every_activation_context_input(
         "resume_approval": resume_approval,
         "snapshot": b"snapshot",
         "compactor": compactor,
+        "step_index": 0,
+        "intent_ttl_ms": DEFAULT_INTENT_TTL_MS,
+        "approval_channel": DEFAULT_APPROVAL_CHANNEL,
     }
     assert result.memory_blob is memory_blob
     assert result.cache_blob is cache_blob
@@ -273,6 +277,84 @@ async def test_suspend_without_timeout_uses_configured_default() -> None:
     assert result.continuation is not None
     assert result.continuation.deadline_ms == 1321
     assert DEFAULT_HITL_TIMEOUT_MS == 86_400_000
+
+
+async def test_short_intent_expiry_shortens_the_suspension_deadline() -> None:
+    # Scenario: A short intent TTL shortens the suspension deadline.
+    # Waiting 24h for a result the effector will refuse after 60s is a
+    # fail-open stall: the deadline is the earliest moment nothing can arrive.
+    async def agent(ctx: ActivationContext) -> Suspend:
+        ctx.act("http.post", "{}", ttl_ms=60_000)
+        return Suspend(snapshot=b"state", adapter="adapter", timeout_ms=86_400_000)
+
+    result = await run_activation(
+        agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    assert result.hitl_deadline_ms == 61_000
+    assert result.continuation is not None
+    assert result.continuation.deadline_ms == 61_000
+
+
+async def test_deadline_uses_the_earliest_expiry_across_staged_intents() -> None:
+    async def agent(ctx: ActivationContext) -> Suspend:
+        ctx.act("slow", "{}", ttl_ms=90_000)
+        ctx.act("fast", "{}", ttl_ms=30_000)
+        return Suspend(snapshot=b"state", adapter="adapter", timeout_ms=86_400_000)
+
+    result = await run_activation(
+        agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    assert result.hitl_deadline_ms == 31_000
+
+
+async def test_suspension_with_no_intents_uses_its_timeout() -> None:
+    # Scenario: A suspension with no intents uses its timeout.
+    async def agent(_ctx: object) -> Suspend:
+        return Suspend(snapshot=b"state", adapter="adapter", timeout_ms=5_000)
+
+    result = await run_activation(
+        agent,  # type: ignore[arg-type]
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    assert result.hitl_deadline_ms == 6_000
+
+
+async def test_timeout_wins_when_it_is_the_earlier_bound() -> None:
+    async def agent(ctx: ActivationContext) -> Suspend:
+        ctx.act("http.post", "{}", ttl_ms=90_000)
+        return Suspend(snapshot=b"state", adapter="adapter", timeout_ms=5_000)
+
+    result = await run_activation(
+        agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    assert result.hitl_deadline_ms == 6_000
 
 
 async def test_non_outcome_error_includes_the_returned_value() -> None:

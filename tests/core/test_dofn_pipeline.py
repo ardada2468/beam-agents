@@ -20,7 +20,12 @@ from apache_beam.testing.util import assert_that, equal_to
 
 from beam_agents._protos import AgentEnvelope, ToolResult
 from beam_agents.core.coders import DeterministicProtoCoder, register_coders
-from beam_agents.core.dofn import REASON_ORPHANED, ActivationError, _AgentDoFn
+from beam_agents.core.dofn import (
+    DETAIL_NO_CONTINUATION,
+    REASON_ORPHANED,
+    ActivationError,
+    _AgentDoFn,
+)
 from beam_agents.core.transform import AgentConfig, RunAgent
 from tests.core._dofn_helpers import append_agent, keyed, make_pong_provider, seq_agent
 
@@ -85,7 +90,7 @@ def test_orphaned_result_routes_to_errors() -> None:
         assert_that(out.output, equal_to([]), label="no-output")
         assert_that(
             out.errors,
-            equal_to([ActivationError(b"k", REASON_ORPHANED, "ghost")]),
+            equal_to([ActivationError(b"k", REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:ghost")]),
             label="orphaned-error",
         )
 
@@ -105,7 +110,7 @@ def test_orphaned_approval_routes_to_errors() -> None:
         assert_that(out.output, equal_to([]), label="no-output")
         assert_that(
             out.errors,
-            equal_to([ActivationError(b"k", REASON_ORPHANED, "ghost")]),
+            equal_to([ActivationError(b"k", REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:ghost")]),
             label="orphaned-approval",
         )
 

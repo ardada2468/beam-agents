@@ -43,6 +43,7 @@ from beam_agents.actions.write_intents import (
 )
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
+from beam_agents.hitl import HitlPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -200,6 +201,7 @@ class AgentConfig:
     activation_timeout_s: float = field(default=_DEFAULT_ACTIVATION_TIMEOUT_S, kw_only=True)
     ttl_ms: int = field(default=_DEFAULT_TTL_MS, kw_only=True)
     cancel_grace_s: float = field(default=_DEFAULT_CANCEL_GRACE_S, kw_only=True)
+    hitl_policy: HitlPolicy = field(default_factory=HitlPolicy, kw_only=True)
     intents_to: str | None = field(default=None, kw_only=True)
     traces_to: str | None = field(default=None, kw_only=True)
     errors_to: str | None = field(default=None, kw_only=True)
@@ -209,6 +211,11 @@ class AgentConfig:
         _require_positive("activation_timeout_s", self.activation_timeout_s)
         _require_positive("ttl_ms", self.ttl_ms)
         _require_positive("cancel_grace_s", self.cancel_grace_s)
+        # `HitlPolicy` validates itself on construction; re-checking here covers
+        # an instance that reached us another way (a frozen dataclass is still
+        # mutable through `object.__setattr__`) and keeps every misconfiguration
+        # surfacing at the same place: the config's construction site.
+        self.hitl_policy.validate()
         for field_name in _SINK_FIELDS:
             uri = getattr(self, field_name)
             if uri is not None:
@@ -266,6 +273,7 @@ class RunAgent(beam.PTransform):
             activation_timeout_s=self._config.activation_timeout_s,
             ttl_ms=self._config.ttl_ms,
             cancel_grace_s=self._config.cancel_grace_s,
+            hitl_policy=self._config.hitl_policy,
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
