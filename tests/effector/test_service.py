@@ -645,3 +645,117 @@ async def test_the_loop_runs_against_in_memory_implementations() -> None:
     await service.run()
 
     assert calls == [100]
+
+
+async def test_a_dispatcher_failure_aborts_the_partitions_rather_than_waiting() -> None:
+    # A shutdown must not hang behind a tool that never returns: aborting
+    # cancels the partitions, and nothing was committed, so their intents are
+    # redelivered.
+    blocked = asyncio.Event()
+
+    @tool(side_effect=True)
+    async def charge(amount_cents: int) -> str:
+        await blocked.wait()
+        return "ok"
+
+    class _FailingSource(InMemoryIntentSource):
+        async def __aiter__(self):  # type: ignore[no-untyped-def]
+            yield DeliveredIntent(intent=an_intent(), partition="p-0", handle=0)
+            # Let the worker pick the delivery up before the dispatcher dies.
+            for _ in range(10):
+                await asyncio.sleep(0)
+            raise ConnectionError("broker connection lost")
+
+    harness = build_harness(registry=registry_with(charge), intents=[])
+    harness.service._source = _FailingSource()
+
+    with pytest.raises(ConnectionError):
+        await harness.service.run()
+
+    assert harness.committed_intent_ids == []
+
+
+async def test_an_approval_publish_failure_is_retried() -> None:
+    # The approval channel gets the same retry budget as the results topic: a
+    # dropped notification would leave a human unaware until the HITL timer.
+    attempts: list[int] = []
+
+    class _FlakyApprovals(InMemoryMessageSink):
+        async def publish(self, key: bytes, payload: bytes) -> None:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise ConnectionError("broker unavailable")
+            await super().publish(key, payload)
+
+    harness = build_harness(
+        registry=ToolRegistry(),
+        intents=[an_intent(kind=ToolIntent.APPROVAL, tool_name="approval")],
+    )
+    harness.service._approval_sink = _FlakyApprovals()
+
+    await harness.service.run()
+
+    assert len(attempts) == 2
+    assert harness.committed_intent_ids == ["intent-1"]
+
+
+async def test_a_lost_claim_on_an_approval_neither_notifies_twice_nor_commits() -> None:
+    class _LosingDedup(_ScriptedDedup):
+        async def complete(self, intent_id: str, token: str, result: object, ttl_ms: int) -> bool:
+            return False
+
+    harness = build_harness(
+        registry=ToolRegistry(),
+        intents=[an_intent(kind=ToolIntent.APPROVAL, tool_name="approval")],
+        dedup=_LosingDedup([Claimed(token="t-1")]),  # type: ignore[arg-type]
+    )
+
+    await harness.service.run()
+
+    assert harness.committed_intent_ids == []
+    assert harness.service.metrics.counters["claims_lost"] == 1  # type: ignore[attr-defined]
+
+
+async def test_revoking_an_unknown_partition_is_a_no_op() -> None:
+    # Rebalances are noisy: a revocation for a partition this worker never had
+    # (or already finished) must not raise.
+    harness = build_harness(registry=registry_with(charging_tool([])), intents=[an_intent()])
+    await harness.service.run()
+
+    await harness.source.revoke("p-does-not-exist")
+
+    assert harness.statuses == [ToolResult.OK]
+
+
+async def test_closing_the_service_closes_every_collaborator() -> None:
+    harness = build_harness(registry=registry_with(charging_tool([])), intents=[an_intent()])
+    await harness.service.run()
+
+    await harness.service.aclose()
+
+    assert harness.source.closed
+    assert harness.results.closed
+    assert harness.approvals.closed
+
+
+async def test_metrics_count_each_terminal_status() -> None:
+    @tool(side_effect=True)
+    def charge(amount_cents: int) -> str:
+        return "ok"
+
+    harness = build_harness(
+        registry=registry_with(charge),
+        intents=[
+            an_intent("intent-ok"),
+            an_intent("intent-rejected", tool_name="nope"),
+            an_intent("intent-expired", expires_at_ms=NOW_MS - 1),
+        ],
+    )
+
+    await harness.service.run()
+
+    counters = harness.service.metrics.counters  # type: ignore[attr-defined]
+    assert counters["results_ok"] == 1
+    assert counters["results_rejected"] == 1
+    assert counters["intents_expired"] == 1
+    assert any(name.startswith("tool_latency_ms.") for name in harness.service.metrics.observations)  # type: ignore[attr-defined]

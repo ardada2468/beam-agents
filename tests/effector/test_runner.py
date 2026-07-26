@@ -304,3 +304,19 @@ async def test_the_in_pipeline_guard_still_refuses_the_same_tool() -> None:
 
     with pytest.raises(SideEffectToolError):
         charge(amount_cents=1)
+
+
+async def test_a_sync_tool_returning_an_awaitable_is_awaited() -> None:
+    # A sync factory that hands back a coroutine is a real shape (a client whose
+    # `.send()` is sync but returns an awaitable); the runner must not publish a
+    # coroutine object as the result.
+    @tool(side_effect=True)
+    def charge(amount_cents: int) -> object:
+        async def _later() -> str:
+            return f"receipt-{amount_cents}"
+
+        return _later()
+
+    result = await EffectorToolRunner(tool_timeout_ms=1_000).run(charge, {"amount_cents": 100})
+
+    assert result == "receipt-100"

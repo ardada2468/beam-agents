@@ -53,30 +53,30 @@
 
 ## 7. Redis dedup store
 
-- [ ] 7.1 Write Redis-specific tests first (spec: claim/complete/re-claim round-trip; a stale owner cannot clobber the new owner's record) and register the store against the shared conformance suite from 3.4.
-- [ ] 7.2 Implement `RedisDedupStore.claim` as `SET <intent_id> <tagged value> NX PX lease_ms`, decoding the existing value's tag to distinguish `InFlight` from `Done`.
-- [ ] 7.3 Implement `complete` and `release` as server-side compare-and-set / compare-and-delete scripts against the ownership token; store the terminal result with `PX result_ttl_ms`.
-- [ ] 7.4 Run the conformance suite plus the Redis-specific tests under `-m integration` against the compose Redis service.
+- [x] 7.1 Write Redis-specific tests first (spec: claim/complete/re-claim round-trip; a stale owner cannot clobber the new owner's record) and register the store against the shared conformance suite from 3.4.
+- [x] 7.2 Implement `RedisDedupStore.claim` as `SET <intent_id> <tagged value> NX PX lease_ms`, decoding the existing value's tag to distinguish `InFlight` from `Done`.
+- [x] 7.3 Implement `complete` and `release` as server-side compare-and-set / compare-and-delete scripts against the ownership token; store the terminal result with `PX result_ttl_ms`.
+- [x] 7.4 Run the conformance suite plus the Redis-specific tests under `-m integration` against the compose Redis service. **Run live and passing** (17 tests): this sandbox has no docker daemon, so they were executed against a local `redis-server` on the compose port (16379), which is the same server image's protocol surface.
 
 ## 8. Bigtable dedup store
 
-- [ ] 8.1 Write Bigtable-specific tests first (spec: claiming is conditional in a single conditional mutation; lease expiry expressed as a value-range predicate; a completed row reports `Done`) and register the store against the shared conformance suite.
-- [ ] 8.2 Implement the row layout: row key `intent_id`, column family `d`, columns `claim` (big-endian int64 lease expiry ‖ token) and `result` (serialized `ToolResult`); document the `maxage` GC rule matching `result_ttl_ms`.
-- [ ] 8.3 Implement `claim` via `CheckAndMutateRow` with a live-claim filter chain (claim column present + `ValueRange` lower-bounded at big-endian `now_ms`); true branch → `InFlight`, false branch writes the claim, with a `result`-column check distinguishing `Done`.
-- [ ] 8.4 Implement `complete` via `CheckAndMutateRow` conditional on the claim column still carrying the caller's token.
-- [ ] 8.5 Verify big-endian encoding makes lexicographic value comparison agree with numeric comparison across the lease range used, with a property test.
+- [x] 8.1 Write Bigtable-specific tests first (spec: claiming is conditional in a single conditional mutation; lease expiry expressed as a value-range predicate; a completed row reports `Done`) and register the store against the shared conformance suite. **Not executed here** — no docker daemon and no local Bigtable emulator; the call shapes, filter construction, and both conditional-mutation branches are covered offline in `tests/effector/test_adapters.py` against a fake client, and every API signature was verified against the installed `google-cloud-bigtable` 2.41.
+- [x] 8.2 Implement the row layout: row key `intent_id`, column family `d`, columns `claim` (big-endian int64 lease expiry ‖ token) and `result` (serialized `ToolResult`); document the `maxage` GC rule matching `result_ttl_ms`.
+- [x] 8.3 Implement `claim` via `CheckAndMutateRow` with a live-claim filter chain (claim column present + `ValueRange` lower-bounded at big-endian `now_ms`); true branch → `InFlight`, false branch writes the claim, with a `result`-column check distinguishing `Done`.
+- [x] 8.4 Implement `complete` via `CheckAndMutateRow` conditional on the claim column still carrying the caller's token.
+- [x] 8.5 Verify big-endian encoding makes lexicographic value comparison agree with numeric comparison across the lease range used, with a property test.
 
 ## 9. Integration and semantics gates
 
-- [ ] 9.1 Integration test (Redpanda + Redis): publish intents for two keys to the outbox topic, run the effector, assert per-key execution order, exactly one execution per `intent_id`, and one result per intent on the results topic.
-- [ ] 9.2 Integration test (Pub/Sub emulator): ordered subscription end-to-end, asserting per-`ordering_key` sequencing and ack-after-publish.
-- [ ] 9.3 Semantics gate (`semantics and not integration`, offline): replay an intent stream with kills injected at every phase boundary against the in-memory adapters; assert at most one tool invocation and exactly one terminal `ToolResult` status per `intent_id`.
-- [ ] 9.4 Semantics gate: an expired intent never reaches the dedup store or a tool, for both `TOOL` and `APPROVAL` kinds.
+- [x] 9.1 Integration test (Redpanda + Redis): publish intents for two keys to the outbox topic, run the effector, assert per-key execution order, exactly one execution per `intent_id`, and one result per intent on the results topic. **Written, not executed** — no docker daemon in this environment. Also covers a replay through a second consumer group, which is the redelivery the dedup store has to absorb.
+- [x] 9.2 Integration test (Pub/Sub emulator): ordered subscription end-to-end, asserting per-`ordering_key` sequencing and ack-after-publish. **Written, not executed** — no docker daemon; the callback threading, ordering-key derivation, and ack-on-commit paths are covered offline against a fake client.
+- [x] 9.3 Semantics gate (`semantics and not integration`, offline): replay an intent stream with kills injected at every phase boundary against the in-memory adapters; assert at most one tool invocation and exactly one terminal `ToolResult` status per `intent_id`.
+- [x] 9.4 Semantics gate: an expired intent never reaches the dedup store or a tool, for both `TOOL` and `APPROVAL` kinds.
 
 ## 10. Docs, quality, and wiring
 
-- [ ] 10.1 Add `docs/effector.md`: deployment preconditions (topic keying, ordered subscription, dedup store provisioning and GC rule), the lease/TTL budget rules, the residual double-execution window, and the recommendation that tools use `intent_id` as their own idempotency key.
-- [ ] 10.2 Update `docker/compose.yaml` only if the integration lane needs a Bigtable emulator service; otherwise note that Bigtable coverage is emulator-optional and conformance-tested in-memory.
-- [ ] 10.3 Run `ruff` (incl. ASYNC), `mypy --strict` over `src/beam_agents/effector/`, and the offline unit suite with no docker; confirm all clean.
-- [ ] 10.4 Re-check `mutation-baseline.toml` / `mutation-exclusions.toml` if `tools/registry.py` (a mutation-gated file) shifted with `Tool.unwrap()`, and update the ceiling if the gate requires it.
-- [ ] 10.5 Confirm the coverage ratchet does not regress and that `make test-unit` passes with the `effector` dependency group uninstalled.
+- [x] 10.1 Add `docs/effector.md`: deployment preconditions (topic keying, ordered subscription, dedup store provisioning and GC rule), the lease/TTL budget rules, the residual double-execution window, and the recommendation that tools use `intent_id` as their own idempotency key.
+- [x] 10.2 Added a `bigtable-emulator` service to `docker/compose.yaml` (the `google/cloud-sdk` image already used for Pub/Sub), so the conditional-claim semantics run against a real emulator in the integration lane rather than only against fakes.
+- [x] 10.3 Run `ruff` (incl. ASYNC), `mypy --strict` over `src/beam_agents/effector/`, and the offline unit suite with no docker; confirm all clean. All green: ruff clean, mypy strict clean across 127 files, 600 unit tests + 20 offline semantics tests passing.
+- [x] 10.4 No change needed: the mutation gate is scoped to `src/beam_agents/core/*` (`only_mutate` in `pyproject.toml`) and `quality.yml` runs it only when `src/beam_agents/core` or `tests/core` change. `tools/registry.py` and `effector/` are both outside that scope, so no baseline moves.
+- [x] 10.5 Verified in the `ci` lane's exact environment (`uv sync --group test --group lint --group typecheck`, which leaves `aiokafka`/`redis` uninstalled): unit and offline-semantics tiers pass, mypy is clean. This caught two real defects — integration-only test modules importing optional clients at collection time (marker deselection happens after import), now deferred via `pytest.importorskip`. Branch coverage rose 92.70% → 93.46%; `coverage-baseline.toml` ratcheted to lock the gain in.

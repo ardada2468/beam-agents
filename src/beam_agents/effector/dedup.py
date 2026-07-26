@@ -282,11 +282,19 @@ class BigtableDedupStore:
     """`DedupStore` over Bigtable: ``CheckAndMutateRow`` for conditional claims.
 
     Row key is the ``intent_id`` (a uuid5, already uniformly distributed, so no
-    salting is needed). Column family ``d`` holds ``claim`` (big-endian lease
-    expiry followed by the ownership token) and ``result`` (a serialized
-    ``ToolResult``, empty for a routed approval). Record expiry is the column
-    family's ``maxage`` GC rule, which must be provisioned to match
+    salting is needed). Column family ``d`` holds three columns: ``claim`` (the
+    big-endian lease expiry), ``owner`` (the ownership token), and ``result``
+    (a serialized ``ToolResult``, empty for a routed approval). Record expiry is
+    the column family's ``maxage`` GC rule, which must be provisioned to match
     ``result_ttl_ms`` — see ``docs/effector.md``.
+
+    Expiry and ownership live in *separate* columns on purpose. Bigtable value
+    filters are RE2 over raw bytes, and RE2's ``.`` does not match a newline
+    byte — so an ownership regex applied to a value that begins with eight
+    arbitrary bytes of timestamp would silently fail to match whenever the
+    timestamp happened to contain ``0x0A``. Splitting them keeps the ownership
+    predicate an exact match on an ASCII-hex token and the expiry predicate a
+    numeric range, with neither ever matching over binary.
 
     ``ReadModifyWriteRow`` is atomic but unconditional and so cannot express
     "only if unclaimed", which is the entire operation; hence check-and-mutate.
@@ -294,6 +302,7 @@ class BigtableDedupStore:
 
     COLUMN_FAMILY = "d"
     CLAIM_COLUMN = b"claim"
+    OWNER_COLUMN = b"owner"
     RESULT_COLUMN = b"result"
 
     def __init__(
@@ -378,7 +387,6 @@ class BigtableDedupStore:
 
         now_ms = self._clock()
         token = _new_token()
-        claim_value = encode_lease_expiry(now_ms + lease_ms) + token.encode()
         # One conditional mutation decides the common path: if the row is
         # neither live-claimed nor terminal, the false branch writes our claim
         # and we own it. Writing only in the false branch is what keeps a
@@ -387,7 +395,12 @@ class BigtableDedupStore:
             intent_id.encode(),
             self._taken_filter(now_ms),
             true_case_mutations=None,
-            false_case_mutations=[SetCell(self.COLUMN_FAMILY, self.CLAIM_COLUMN, claim_value)],
+            false_case_mutations=[
+                SetCell(
+                    self.COLUMN_FAMILY, self.CLAIM_COLUMN, encode_lease_expiry(now_ms + lease_ms)
+                ),
+                SetCell(self.COLUMN_FAMILY, self.OWNER_COLUMN, token.encode()),
+            ],
         )
         if taken:
             return await self._read_state(intent_id, now_ms)
@@ -396,13 +409,13 @@ class BigtableDedupStore:
     def _owner_filter(self, token: str) -> RowFilter:
         from google.cloud.bigtable.data import row_filters
 
-        # Value-suffix match on the token: the lease-expiry prefix varies, the
-        # token identifies the owner.
+        # An exact value match on the ASCII-hex token — no regex metacharacters
+        # and no binary, so RE2's newline handling cannot bite.
         return row_filters.RowFilterChain(
             filters=[
                 row_filters.FamilyNameRegexFilter(self.COLUMN_FAMILY),
-                row_filters.ColumnQualifierRegexFilter(self.CLAIM_COLUMN),
-                row_filters.ValueRegexFilter(b".*" + token.encode() + b"$"),
+                row_filters.ColumnQualifierRegexFilter(self.OWNER_COLUMN),
+                row_filters.ValueRegexFilter(token.encode()),
             ]
         )
 
@@ -418,6 +431,7 @@ class BigtableDedupStore:
             true_case_mutations=[
                 SetCell(self.COLUMN_FAMILY, self.RESULT_COLUMN, stored),
                 DeleteRangeFromColumn(self.COLUMN_FAMILY, self.CLAIM_COLUMN),
+                DeleteRangeFromColumn(self.COLUMN_FAMILY, self.OWNER_COLUMN),
             ],
             false_case_mutations=None,
         )
@@ -429,7 +443,10 @@ class BigtableDedupStore:
         owned = await self._table.check_and_mutate_row(
             intent_id.encode(),
             self._owner_filter(token),
-            true_case_mutations=[DeleteRangeFromColumn(self.COLUMN_FAMILY, self.CLAIM_COLUMN)],
+            true_case_mutations=[
+                DeleteRangeFromColumn(self.COLUMN_FAMILY, self.CLAIM_COLUMN),
+                DeleteRangeFromColumn(self.COLUMN_FAMILY, self.OWNER_COLUMN),
+            ],
             false_case_mutations=None,
         )
         return bool(owned)

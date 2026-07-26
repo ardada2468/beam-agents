@@ -125,3 +125,8 @@ def test_the_config_is_frozen() -> None:
     config = _config()
     with pytest.raises(Exception, match=r"cannot assign|frozen"):
         config.lease_ms = 5  # type: ignore[misc]
+
+
+def test_a_malformed_redis_uri_is_rejected() -> None:
+    with pytest.raises(EffectorConfigError, match="redis"):
+        parse_dedup_uri("dedup", "redis://")

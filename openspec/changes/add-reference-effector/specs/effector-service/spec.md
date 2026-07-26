@@ -2,13 +2,20 @@
 
 ### Requirement: The effector is a standalone service with no pipeline dependency
 
-The reference effector SHALL live in `beam_agents.effector` and SHALL be importable and runnable without Apache Beam and without any of the optional transport or dedup client libraries installed. It SHALL depend only on `beam_agents.tools`, `beam_agents.hitl`, and `beam_agents._protos`. Concrete client libraries (Kafka, Pub/Sub, Redis, Bigtable) SHALL be imported lazily inside their adapters, never at module import time. Effector symbols SHALL NOT be re-exported from `beam_agents/__init__.py`.
+The reference effector SHALL live in `beam_agents.effector`, and its own import closure SHALL contain neither Apache Beam nor `beam_agents.core`: it SHALL depend only on `beam_agents.tools`, `beam_agents.hitl`, and `beam_agents._protos`, each of which is already Beam-free. It SHALL be importable and runnable without any of the optional transport or dedup client libraries installed. Concrete client libraries (Kafka, Pub/Sub, Redis, Bigtable) SHALL be imported lazily inside their adapters, never at module import time. Effector symbols SHALL NOT be re-exported from `beam_agents/__init__.py`.
+
+The closure is the guarantee, not the import statement: importing `beam_agents.effector` through the normal machinery also executes the parent `beam_agents/__init__.py`, which re-exports the Beam-facing pipeline surface. That is a property of the package layout — a standalone deployment of these modules never evaluates it — so the requirement is stated over, and verified against, the effector's own dependencies.
+
+#### Scenario: No effector module imports Beam or the pipeline runtime
+
+- **WHEN** every module under `beam_agents.effector` is inspected for its imports
+- **THEN** none imports `apache_beam` or any module under `beam_agents.core`, whether at module level or lazily inside a function
 
 #### Scenario: The package imports with Beam unavailable
 
-- **GIVEN** `apache_beam` is made unimportable
+- **GIVEN** `apache_beam` is made unimportable and the parent package's re-export module is not evaluated
 - **WHEN** `beam_agents.effector` and every module under it are imported
-- **THEN** all imports succeed and no module under `beam_agents.effector` appears in `sys.modules` as having imported Beam
+- **THEN** all imports succeed and neither `apache_beam` nor `beam_agents.core` appears in `sys.modules`
 
 #### Scenario: The package imports with no optional client libraries installed
 

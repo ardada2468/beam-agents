@@ -49,6 +49,18 @@ make proto  # regenerate protobuf bindings from protos/*.proto
 
 Run `make help` for the full list.
 
+## Running the effector
+
+Side effects execute outside the pipeline, in the reference effector service:
+`intents → dedup → execute → results → re-injection`. See
+[`docs/effector.md`](docs/effector.md) for deployment preconditions, the
+lease/TTL budgets, and what is (and is not) guaranteed.
+
+```sh
+uv pip install 'beam-agents[effector]'
+beam-agents-effector --registry myapp.agent:TOOLS ...
+```
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the OpenSpec workflow this

@@ -8,15 +8,27 @@ actionable message rather than on the first message.
 from __future__ import annotations
 
 import asyncio
+import sys
+import types
 
 import pytest
 
-from beam_agents.effector.__main__ import build_parser, config_from_args, load_registry, main, serve
+from beam_agents.effector.__main__ import (
+    build_parser,
+    build_service,
+    config_from_args,
+    load_registry,
+    main,
+    serve,
+)
 from beam_agents.effector.dedup import Claimed, InMemoryDedupStore
 from beam_agents.effector.runner import EffectorToolRunner
+from beam_agents.effector.service import EffectorService
+from beam_agents.effector.sources import KafkaIntentSource
 from beam_agents.tools import ToolRegistry, tool
 
 from ._fakes import NOW_MS, RecordingDedupStore, an_intent, build_harness
+from .test_adapters import _FakeConsumer, _FakeProducer, _FakeTopicPartition
 
 TOOLS = ToolRegistry()
 
@@ -147,3 +159,54 @@ async def test_serve_releases_unexecuted_claims_on_shutdown() -> None:
     assert "release" in dedup.calls
     assert isinstance(await store.claim("intent-1", 60_000), Claimed)
     assert harness.committed_intent_ids == []
+
+
+def test_the_service_builder_wires_every_adapter_from_the_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `build_service` is the only place the URIs become live clients; a wrong
+    # dispatch here would surface as a connection error in production, not a
+    # test failure.
+    module = types.ModuleType("aiokafka")
+    module.AIOKafkaConsumer = _FakeConsumer  # type: ignore[attr-defined]
+    module.AIOKafkaProducer = _FakeProducer  # type: ignore[attr-defined]
+    module.TopicPartition = _FakeTopicPartition  # type: ignore[attr-defined]
+    module.ConsumerRebalanceListener = object  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiokafka", module)
+
+    config = config_from_args(_args())  # type: ignore[arg-type]
+    service = build_service(config, TOOLS)
+
+    assert isinstance(service, EffectorService)
+    assert isinstance(service._source, KafkaIntentSource)
+    assert isinstance(service._dedup, InMemoryDedupStore)
+
+
+def test_main_runs_the_service_to_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The happy path returns 0 after the service finishes, so a supervisor sees
+    # a clean exit rather than a crash loop.
+    served: list[object] = []
+
+    async def _fake_serve(service: object) -> None:
+        served.append(service)
+
+    monkeypatch.setattr(
+        "beam_agents.effector.__main__.build_service", lambda config, registry: "svc"
+    )
+    monkeypatch.setattr("beam_agents.effector.__main__.serve", _fake_serve)
+
+    code = main(
+        [
+            "--registry",
+            "tests.effector.test_main:TOOLS",
+            "--intents-from",
+            "kafka://localhost:9092/intents",
+            "--results-to",
+            "kafka://localhost:9092/results",
+            "--approvals-to",
+            "kafka://localhost:9092/approvals",
+        ]
+    )
+
+    assert code == 0
+    assert served == ["svc"]

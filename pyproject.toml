@@ -251,6 +251,13 @@ disable_error_code = ["no-untyped-call"]
 module = "tests.core.test_dofn_hitl_timer"
 disable_error_code = ["no-untyped-call", "type-arg"]
 
+# The classic (non-async) Bigtable admin client used to provision the emulator's
+# table ships no type annotations, so every setup call reads as untyped under
+# strict mode. The store under test uses the typed async data client.
+[[tool.mypy.overrides]]
+module = "tests.effector.test_dedup_bigtable"
+disable_error_code = ["no-untyped-call"]
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config"
 asyncio_mode = "auto"
