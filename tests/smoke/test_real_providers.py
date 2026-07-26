@@ -30,7 +30,7 @@ async def test_anthropic_live_call_returns_a_decodable_response() -> None:
         anthropic_version="2023-06-01",
     )
     request = LlmRequest(
-        model_id="claude-3-5-haiku-latest",
+        model_id="claude-haiku-4-5-20251001",
         messages=_MESSAGES,
         tools_schema=None,
         sampling_params={"max_tokens": 16},
