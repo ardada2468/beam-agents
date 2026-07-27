@@ -14,7 +14,17 @@
 #     the [tool.mutmut] comment in pyproject.toml). The two mutants are the
 #     field default and the validate() call; both are covered by
 #     test_transform.py's construction-validation tests in the normal suite.
+# fix-hitl-ttl-preemption moved dofn.py 261 -> 267. Every one of the six is in
+# `_commit`, whose TTL mark is now derived from the suspension deadline. `_commit`
+# is reachable only from the Beam pipeline suites, which mutmut deselects (see the
+# [tool.mutmut] comment in pyproject.toml), so its mutants can only ever land in
+# this bucket; the branch is covered in the normal suite by the TestStream
+# scenarios in test_dofn_streaming.py. The change's other two touched callbacks
+# did NOT add to the gap: `on_ttl`'s live-continuation branch and `_escalate`'s
+# TTL re-arm are driven by fake state/timer handles in test_dofn_ttl.py and
+# test_dofn_hitl_timer.py, both inside the selection, which is why killed rose
+# 621 -> 624 over the same diff.
 [no_tests]
 "context.py" = 0
-"dofn.py" = 261
+"dofn.py" = 267
 "transform.py" = 198

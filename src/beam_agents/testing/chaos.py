@@ -128,6 +128,7 @@ def fail_first_hitl_fire() -> Iterator[None]:
         continuation: _State = beam.DoFn.StateParam(_AgentDoFn.CONTINUATION),  # noqa: B008
         pending: _State = beam.DoFn.StateParam(_AgentDoFn.PENDING),  # noqa: B008
         hitl_timer: _Timer = beam.DoFn.TimerParam(_AgentDoFn.HITL_TIMER),  # noqa: B008
+        ttl_timer: _Timer = beam.DoFn.TimerParam(_AgentDoFn.TTL_TIMER),  # noqa: B008
     ) -> Iterator[object]:
         nonlocal already_failed
         emitted = list(
@@ -138,6 +139,7 @@ def fail_first_hitl_fire() -> Iterator[None]:
                 continuation=continuation,
                 pending=pending,
                 hitl_timer=hitl_timer,
+                ttl_timer=ttl_timer,
             )
         )
         if not already_failed:

@@ -83,6 +83,12 @@ _DEFAULT_TTL_MS = 3_600_000  # 1 hour of event time
 REASON_TIMEOUT = "activation_timeout"
 REASON_ERROR = "activation_error"
 REASON_ORPHANED = "orphaned_result"
+# Working-memory GC reached a key whose suspension was still awaiting an answer.
+# `_commit` arms `TTL_TIMER` past the suspension's deadline precisely so this
+# cannot happen, but the two timers read different clocks (watermark vs. wall),
+# so a backlog replay can still cross the event-time mark first. The suspension
+# is unrecoverable at that point; this reason makes the loss observable.
+REASON_TTL_WIPED_SUSPENSION = "ttl_wiped_suspension"
 
 # Details distinguishing the four ways a resume can fail admission, carried on
 # the `orphaned_result` record so triage does not have to re-derive them.
@@ -97,6 +103,7 @@ __all__ = [
     "REASON_HITL_TIMEOUT",
     "REASON_ORPHANED",
     "REASON_TIMEOUT",
+    "REASON_TTL_WIPED_SUSPENSION",
     "ActivationError",
 ]
 
@@ -398,11 +405,22 @@ class _AgentDoFn(beam.DoFn):
         # Re-arm working-memory GC on every committed element (event-time). A
         # re-set to a later time supersedes the prior mark, so a live key is
         # never GC'd by a stale earlier timer.
-        ttl_timer.set(_ms_timestamp(now_ms + self._ttl_ms))
+        #
+        # A *suspending* activation measures the mark from its deadline rather
+        # than from the activation clock: the memory a resume will read has to
+        # outlive the wait, and a TTL fire that beat `HITL_TIMER` would clear the
+        # continuation and leave the later HITL fire reading a stale handle --
+        # swallowing the timeout entirely, on no output at all. `max` guards the
+        # deadline being at or before the clock: `Suspend.timeout_ms` and
+        # `act(ttl_ms=...)` are agent-supplied and unvalidated, so a non-positive
+        # one must not pull the mark into the past.
+        ttl_from_ms = now_ms
         if result.status == "suspended" and result.hitl_deadline_ms is not None:
+            ttl_from_ms = max(now_ms, result.hitl_deadline_ms)
             hitl_timer.set(_ms_timestamp(result.hitl_deadline_ms))
         else:
             hitl_timer.clear()
+        ttl_timer.set(_ms_timestamp(ttl_from_ms + self._ttl_ms))
 
         yield from result.outputs
         for intent in result.intents:
@@ -415,14 +433,32 @@ class _AgentDoFn(beam.DoFn):
     @on_timer(TTL_TIMER)
     def on_ttl(
         self,
+        key: bytes = beam.DoFn.KeyParam,  # type: ignore[assignment]
         memory: _State = beam.DoFn.StateParam(MEMORY),
         continuation: _State = beam.DoFn.StateParam(CONTINUATION),
         llm_cache: _State = beam.DoFn.StateParam(LLM_CACHE),
         pending: _State = beam.DoFn.StateParam(PENDING),
         seq: _State = beam.DoFn.StateParam(SEQ),
-    ) -> None:
+    ) -> Iterator[object]:
+        # A live continuation here means working-memory GC reached a key that is
+        # still waiting. `_commit` arms this timer past the suspension deadline
+        # so it should be unreachable -- but the mark is compared against the
+        # watermark while the deadline is compared against the wall clock, and a
+        # backlog replay can cross the event-time mark while real time is still
+        # short of the deadline. The suspension cannot be rescued (the memory it
+        # would resume against is genuinely event-time garbage); dead-letter it
+        # so it is not lost in silence.
+        cont = continuation.read()
+        if cont is not None:
+            yield _error(
+                key,
+                REASON_TTL_WIPED_SUSPENSION,
+                f"seq={cont.seq},deadline_ms={cont.deadline_ms}",
+            )
+
         # Working memory is event-time garbage: wipe every spec so an idle key
-        # leaves zero residue. No emit, no SEQ change.
+        # leaves zero residue. Unconditional -- reporting the loss above does not
+        # rescue the key. No SEQ change beyond the wipe.
         memory.clear()
         continuation.clear()
         llm_cache.clear()
@@ -437,6 +473,7 @@ class _AgentDoFn(beam.DoFn):
         continuation: _State = beam.DoFn.StateParam(CONTINUATION),
         pending: _State = beam.DoFn.StateParam(PENDING),
         hitl_timer: _Timer = beam.DoFn.TimerParam(HITL_TIMER),
+        ttl_timer: _Timer = beam.DoFn.TimerParam(TTL_TIMER),
     ) -> Iterator[object]:
         cont = continuation.read()
         fired_at_ms = timestamp.micros // 1000
@@ -451,11 +488,16 @@ class _AgentDoFn(beam.DoFn):
         route, detail = self._route_timeout(key, cont, fired_at_ms)
 
         if isinstance(route, Escalate):
-            yield self._escalate(key, cont, fired_at_ms, route, continuation, pending, hitl_timer)
+            yield self._escalate(
+                key, cont, fired_at_ms, route, continuation, pending, hitl_timer, ttl_timer
+            )
             return
 
         # Deny/Drop end the suspension: clear the dangling continuation and its
-        # pending intents. SEQ is unchanged (this is not a committed activation).
+        # pending intents. The working-memory mark is left alone -- the wait is
+        # over, so the mark `_commit` armed is already correct and letting it
+        # fire later is the GC we want. SEQ is unchanged (this is not a
+        # committed activation).
         continuation.clear()
         pending.clear()
         hitl_timer.clear()
@@ -500,6 +542,7 @@ class _AgentDoFn(beam.DoFn):
         continuation: _State,
         pending: _State,
         hitl_timer: _Timer,
+        ttl_timer: _Timer,
     ) -> beam.pvalue.TaggedOutput:
         """Ask again, louder: stage an approval intent and extend the deadline.
 
@@ -534,6 +577,12 @@ class _AgentDoFn(beam.DoFn):
         # expires_at_ms, which the resume admission check enforces.
         pending.add(intent)
         hitl_timer.set(_ms_timestamp(deadline_ms))
+        # Carry the working-memory mark forward with the deadline. Escalation
+        # walks the deadline past the mark `_commit` sized against the *original*
+        # suspension, so without this a bounded escalation chain would outlive
+        # working memory and be GC'd mid-wait -- the same preemption `_commit`
+        # guards against, reintroduced one route later.
+        ttl_timer.set(_ms_timestamp(deadline_ms + self._ttl_ms))
         return beam.pvalue.TaggedOutput("intents", intent)
 
 
