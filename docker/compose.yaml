@@ -39,6 +39,27 @@ services:
       retries: 10
       start_period: 10s
 
+  # The effector's Bigtable dedup store is exercised against the emulator: it
+  # implements CheckAndMutateRow and the filter set the conditional claim
+  # depends on, which is the part that has to be atomic for real.
+  bigtable-emulator:
+    image: google/cloud-sdk@sha256:5fa0e7f1a6eadda7144614c3c6c737651e69fbd9b547a7e1372006ee5cc5e005
+    command:
+      - gcloud
+      - beta
+      - emulators
+      - bigtable
+      - start
+      - --host-port=0.0.0.0:8086
+    ports:
+      - "8086:8086"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8086"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     ports:

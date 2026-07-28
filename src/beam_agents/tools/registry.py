@@ -75,6 +75,18 @@ class Tool:
             raise SideEffectToolError(self.name)
         return self._func(*args, **kwargs)
 
+    def unwrap(self) -> Callable[..., object]:
+        """Return the wrapped callable, bypassing the `side_effect` guard.
+
+        The effector's ``EffectorToolRunner`` is the **only** sanctioned caller:
+        side-effecting tools must execute outside the pipeline, and that path
+        needs a way past :meth:`__call__`'s guard. Keeping it a named accessor
+        rather than a private-attribute poke is deliberate — the one permitted
+        bypass of correctness invariant 5 should be greppable, documented, and
+        testable. Nothing inside the pipeline may call this.
+        """
+        return self._func
+
 
 @overload
 def tool(func: Callable[..., object]) -> Tool: ...

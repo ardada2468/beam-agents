@@ -2,4 +2,9 @@
 # (generated protobuf omitted -- see [tool.coverage.run] omit in pyproject.toml).
 # Ratcheted by hand: scripts/coverage_ratchet.py tells you to raise this when
 # coverage improves, so a gain is locked in deliberately rather than silently.
-branch_rate = 0.9275
+#
+# Merge resolution (add-reference-effector 0.9346 vs fix-hitl-ttl-preemption
+# 0.9275): neither side's number survives the merge. Each was measured against
+# its own tree, and the rate is a ratio over the whole project, so the combined
+# tree has to be re-measured rather than have one side picked. 402/430 branches.
+branch_rate = 0.9349
