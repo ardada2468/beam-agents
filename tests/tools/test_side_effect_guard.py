@@ -38,3 +38,28 @@ def test_calling_a_side_effecting_tool_directly_raises() -> None:
         charge(amount_cents=100)
 
     assert calls == []
+
+
+def test_unwrap_returns_the_original_callable() -> None:
+    # Scenario: unwrap returns the original callable.
+    calls: list[object] = []
+
+    def charge(amount_cents: int) -> str:
+        calls.append(amount_cents)
+        return "charged"
+
+    wrapped = tool(side_effect=True)(charge)
+
+    assert wrapped.unwrap() is charge
+    assert wrapped.unwrap()(amount_cents=100) == "charged"
+    assert calls == [100]
+
+
+def test_unwrap_is_available_for_side_effecting_and_read_only_tools_alike() -> None:
+    # Scenario: unwrap is available for side-effecting and read-only tools alike.
+    def effecting(amount_cents: int) -> None: ...
+
+    def read_only(customer_id: str) -> None: ...
+
+    assert tool(side_effect=True)(effecting).unwrap() is effecting
+    assert tool(read_only).unwrap() is read_only
