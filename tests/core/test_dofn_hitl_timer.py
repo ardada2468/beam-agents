@@ -106,7 +106,12 @@ def _fire(
     cont: Continuation | None,
     fired_at_ms: int = _DEADLINE_MS,
     pending: list[ToolIntent] | None = None,
+    ttl_timer: _FakeTimer | None = None,
 ) -> tuple[list[Any], _FakeValueState, _FakeBagState, _FakeTimer]:
+    # `ttl_timer` is an optional out-param rather than a fifth return value:
+    # only the escalation scenarios care what the callback does with the
+    # working-memory mark, and the other dozen call sites should not have to
+    # unpack a handle they ignore.
     continuation = _FakeValueState(cont)
     bag = _FakeBagState(pending)
     timer = _FakeTimer()
@@ -117,6 +122,7 @@ def _fire(
             continuation=continuation,
             pending=bag,
             hitl_timer=timer,
+            ttl_timer=ttl_timer if ttl_timer is not None else _FakeTimer(),
         )
     )
     return emitted, continuation, bag, timer
@@ -296,6 +302,39 @@ def test_escalate_stages_a_deterministic_intent_and_rearms_the_deadline() -> Non
     assert bag.items == [*pending, intent]
     assert timer.set_to == Timestamp(micros=7_500 * 1000)
     assert timer.cleared is False
+
+
+def test_escalate_carries_the_memory_ttl_mark_past_the_new_deadline() -> None:
+    # Scenario: An escalation carries the memory TTL forward with the deadline.
+    # Escalation walks `deadline_ms` past the mark the original suspension armed
+    # `TTL_TIMER` at; without re-arming, working-memory GC would fire mid-wait
+    # and wipe the very continuation the escalation is waiting on.
+    policy = HitlPolicy(on_timeout=_escalate, max_escalations=2)
+    ttl_timer = _FakeTimer()
+    dofn = _AgentDoFn(_unused_agent, provider_factory=FakeLLM, ttl_ms=100, hitl_policy=policy)
+    _, cont_state, _, _ = _fire(dofn, cont=_continuation(), fired_at_ms=2_500, ttl_timer=ttl_timer)
+
+    updated = cont_state.value
+    assert updated is not None
+    assert updated.deadline_ms == 7_500
+    # Strictly after the new deadline, so the GC cannot beat the HITL timer.
+    assert ttl_timer.set_to == Timestamp(micros=(7_500 + 100) * 1000)
+    assert ttl_timer.cleared is False
+
+
+def test_deny_and_drop_leave_the_memory_ttl_mark_alone() -> None:
+    # Deny/Drop end the suspension, so the mark armed at commit is already
+    # correct and firing it later is the desired GC -- only Escalate re-arms.
+    for route in (Deny(b"denied"), Drop("gave_up")):
+        ttl_timer = _FakeTimer()
+        _fire(
+            _dofn(HitlPolicy(on_timeout=lambda _f, r=route: r)),  # type: ignore[misc]
+            cont=_continuation(),
+            ttl_timer=ttl_timer,
+        )
+
+        assert ttl_timer.set_to is None, route
+        assert ttl_timer.cleared is False, route
 
 
 def test_escalating_twice_mints_distinct_deterministic_intents() -> None:

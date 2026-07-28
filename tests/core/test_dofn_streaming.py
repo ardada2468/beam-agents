@@ -465,6 +465,89 @@ def test_escalated_suspension_is_resumed_by_an_answer_to_the_escalation() -> Non
         )
 
 
+# --- Requirement: working-memory GC never preempts a live suspension ----------
+
+# Deliberately *smaller* than the suspensions under test (whose deadline is
+# event_time + 1000ms). Every other scenario in this file pins `_BIG_TTL_MS`, so
+# the two timers are never in contention -- which is exactly why the preemption
+# below went unnoticed. These scenarios invert that.
+_SHORT_TTL_MS = 100
+
+
+def test_a_hitl_window_longer_than_the_memory_ttl_still_reports_its_timeout() -> None:
+    # Scenario: A HITL window longer than the memory TTL still reports its
+    # timeout. The watermark crosses the suspension's own TTL mark before the
+    # real-time HITL timer fires; if working-memory GC is allowed to win, it
+    # clears the continuation and the later HITL fire reads a stale handle and
+    # returns -- the timeout vanishes with nothing on any output.
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 0)])  # suspends, deadline = 1000ms
+        .advance_watermark_to(0.5)  # past now+ttl (100ms), before deadline+ttl (1100ms)
+        .advance_processing_time(2)  # -> fires the real-time HITL timer
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            approval_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_SHORT_TTL_MS),
+        )
+        assert_that(out.output, equal_to([HITL_TIMEOUT_OUTPUT]), label="timeout-reported")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+
+def test_the_timeout_is_reported_regardless_of_which_clock_advances_first() -> None:
+    # Scenario: The timeout is reported regardless of which clock advances
+    # first. Mirror of the scenario above with the two advances swapped -- the
+    # ordering that happens to work today. Both must produce the same output,
+    # or the outcome is a coin flip decided by the runner.
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 0)])  # suspends, deadline = 1000ms
+        .advance_processing_time(2)  # -> fires the real-time HITL timer first
+        .advance_watermark_to(0.5)
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            approval_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_SHORT_TTL_MS),
+        )
+        assert_that(out.output, equal_to([HITL_TIMEOUT_OUTPUT]), label="timeout-reported")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+
+def test_an_escalation_carries_the_memory_ttl_forward_with_the_deadline() -> None:
+    # Scenario: An escalation carries the memory TTL forward with the deadline.
+    # The escalation moves the deadline to 6000ms, well past the mark the
+    # original suspension armed; the watermark then crosses that original mark.
+    # If the escalation does not carry the TTL forward, GC wipes the
+    # continuation mid-wait and the answer is orphaned instead of resuming.
+    escalation_intent_id = intent_id_for(b"k", 0, 1)  # next free step after the suspension
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_event(b"k", b"go", 0)])  # suspends, deadline = 1000ms
+        .advance_processing_time(2)  # -> fires the timer; escalates to 6000ms
+        .advance_watermark_to(2.0)  # past the pre-escalation mark (1100ms)
+        .add_elements([_approval(b"k", escalation_intent_id, approved=False, t_ms=3000)])
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            approval_agent,
+            config=AgentConfig(
+                provider_factory=make_pong_provider,
+                ttl_ms=_SHORT_TTL_MS,
+                hitl_policy=HitlPolicy(on_timeout=escalate_once, max_escalations=1),
+            ),
+        )
+        assert_that(out.output, equal_to([b"rejected"]), label="resumed-by-escalation")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+
 def test_expired_result_reinjected_into_a_live_suspension_resumes() -> None:
     # Scenario: An EXPIRED result re-injected into a live suspension resumes
     # the agent. The effector refused the intent (layer 2) and published its
