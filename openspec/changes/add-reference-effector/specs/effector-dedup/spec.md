@@ -109,7 +109,11 @@ The Redis implementation SHALL take a claim with a single `SET <intent_id> <clai
 
 ### Requirement: The Bigtable dedup store implements the protocol with CheckAndMutateRow
 
-The Bigtable implementation SHALL use `CheckAndMutateRow` on a row keyed by `intent_id` to make claiming conditional: the predicate SHALL match a live claim (the claim column present with a lease expiry not yet reached, encoded big-endian so lexicographic value comparison agrees with numeric comparison), the true branch SHALL report `InFlight`, and the false branch SHALL write the new claim. A stored terminal result SHALL be reported as `Done`. `complete` SHALL be conditional on the claim column still carrying the caller's token. Record expiry SHALL be provided by the column family's age-based garbage-collection rule.
+The Bigtable implementation SHALL use `CheckAndMutateRow` on a row keyed by `intent_id` to make claiming conditional: the predicate SHALL match a live claim (the claim column present with a lease expiry not yet reached, encoded big-endian so lexicographic value comparison agrees with numeric comparison), the true branch SHALL report `InFlight`, and the false branch SHALL write the new claim. A stored terminal result SHALL be reported as `Done` only while it is unexpired. `complete` SHALL be conditional on the claim column still carrying the caller's token.
+
+Terminal-record expiry SHALL be decided by a read-time predicate over an explicit expiry column, encoded big-endian exactly as the lease expiry is, and `complete` SHALL write that column from its `ttl_ms` argument. The column family's age-based garbage-collection rule reclaims the space afterwards; it SHALL NOT be the mechanism that decides expiry. A GC rule is table-level, so it cannot express a per-call `result_ttl_ms`, and it is asynchronous and best-effort, so a record can be served arbitrarily long after its TTL has elapsed — neither is compatible with "an expired terminal record reads as unseen".
+
+Every value predicate SHALL be evaluated against the most recent cell version only. Bigtable columns are versioned, and a re-claim after a lease expiry leaves the superseded owner token in place as an older cell; an ownership predicate that can match any version would let a worker whose lease expired complete over its successor's claim.
 
 #### Scenario: Claiming is conditional in a single conditional mutation
 
@@ -128,3 +132,15 @@ The Bigtable implementation SHALL use `CheckAndMutateRow` on a row keyed by `int
 - **GIVEN** a row whose result column holds a serialized `ToolResult`
 - **WHEN** `claim` is called for that `intent_id`
 - **THEN** the outcome is `Done` and the parsed result compares field-equal to the stored one
+
+#### Scenario: Terminal-record expiry is a read-time predicate, not a GC rule
+
+- **GIVEN** a terminal record completed with a `ttl_ms` shorter than the column family's GC `maxage`, so garbage collection cannot have removed it
+- **WHEN** `ttl_ms` has elapsed and the intent is redelivered
+- **THEN** the live-result predicate does not match, the false branch writes a new claim, and the outcome is `Claimed`
+
+#### Scenario: A superseded owner cell cannot satisfy the ownership predicate
+
+- **GIVEN** a row re-claimed after a lease expiry, so the claim and owner columns each carry the new cell over the superseded one
+- **WHEN** the worker holding the superseded token calls `complete`
+- **THEN** the ownership predicate matches only the most recent cell, the conditional mutation takes its false branch, and `complete` returns false

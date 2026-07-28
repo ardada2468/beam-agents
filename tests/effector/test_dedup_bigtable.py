@@ -140,6 +140,51 @@ async def test_a_completed_row_reports_done() -> None:
         await store.close()
 
 
+async def test_terminal_expiry_is_a_read_time_predicate_not_a_gc_rule() -> None:
+    # Scenario: Terminal-record expiry is a read-time predicate, not a GC rule.
+    # The table's GC maxage is an hour and the TTL here is 600ms, so garbage
+    # collection cannot be what expires this record. Driving the store's clock
+    # instead of sleeping makes that airtight: no wall time passes at all, so
+    # only the encoded `rexp` value can decide the outcome.
+    now = [1_700_000_000_000]
+    store = _store(clock=lambda: now[0])
+    try:
+        claimed = await store.claim("i-ttl", LEASE_MS)
+        assert isinstance(claimed, Claimed)
+        assert await store.complete("i-ttl", claimed.token, a_result("i-ttl"), TTL_MS)
+        assert isinstance(await store.claim("i-ttl", LEASE_MS), Done)
+
+        now[0] += TTL_MS + 1
+
+        assert isinstance(await store.claim("i-ttl", LEASE_MS), Claimed)
+    finally:
+        await store.close()
+
+
+async def test_a_superseded_owner_cell_cannot_satisfy_the_ownership_predicate() -> None:
+    # Scenario: A superseded owner cell cannot satisfy the ownership predicate.
+    # Bigtable keeps every cell version, so the re-claim below leaves the stale
+    # token in the owner column underneath the fresh one. A predicate that can
+    # match any version lets the expired worker complete over its successor.
+    now = [1_700_000_000_000]
+    store = _store(clock=lambda: now[0])
+    try:
+        stale = await store.claim("i-stale", LEASE_MS)
+        assert isinstance(stale, Claimed)
+        now[0] += LEASE_MS + 1
+        fresh = await store.claim("i-stale", LEASE_MS)
+        assert isinstance(fresh, Claimed)
+        assert fresh.token != stale.token
+
+        assert not await store.complete("i-stale", stale.token, a_result("i-stale"), TTL_MS)
+
+        # The fresh owner's claim is untouched, and still completable.
+        assert isinstance(await store.claim("i-stale", LEASE_MS), InFlight)
+        assert await store.complete("i-stale", fresh.token, a_result("i-stale"), TTL_MS)
+    finally:
+        await store.close()
+
+
 async def test_a_completed_row_never_collects_a_stray_claim() -> None:
     # The conditional mutation writes a claim only on the false branch, so a
     # terminal row is never re-claimed and then reported Done — which would

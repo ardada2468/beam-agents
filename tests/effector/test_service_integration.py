@@ -277,8 +277,14 @@ async def test_intents_flow_from_an_ordered_pubsub_subscription() -> None:
 
     subscriber = pubsub_v1.SubscriberClient()
     subscription_path = subscriber.subscription_path(PROJECT, subscription_id)
+    # `create_subscription`'s flattened kwargs are only (name, topic, push_config,
+    # ack_deadline_seconds); every other Subscription field -- including
+    # `enable_message_ordering`, which this test is entirely about -- has to
+    # travel in a request object.
     subscriber.create_subscription(
-        name=subscription_path, topic=topic_path, enable_message_ordering=True
+        request=pubsub_v1.types.Subscription(
+            name=subscription_path, topic=topic_path, enable_message_ordering=True
+        )
     )
 
     order: list[int] = []

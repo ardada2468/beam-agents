@@ -721,11 +721,19 @@ async def test_the_bigtable_lease_predicate_is_an_exclusive_value_range(
 
     await store.claim("intent-1", 5_000)
 
-    (range_call,) = [c for c in calls if c[0] == "ValueRangeFilter"]
-    assert range_call[2]["start_value"] == encode_lease_expiry(NOW_MS)
-    # Exclusive, so a lease expiring exactly now reads as expired — matching
-    # the in-memory store and hitl.intent_expired.
-    assert range_call[2]["inclusive_start"] is False
+    # Two expiry predicates now: the claim's lease and the terminal record's
+    # `rexp`. Both are the same exclusive value range, so a lease *or* a result
+    # expiring exactly now reads as expired — matching the in-memory store and
+    # hitl.intent_expired.
+    range_calls = [c for c in calls if c[0] == "ValueRangeFilter"]
+    assert len(range_calls) == 2
+    for range_call in range_calls:
+        assert range_call[2]["start_value"] == encode_lease_expiry(NOW_MS)
+        assert range_call[2]["inclusive_start"] is False
+
+    # Every value predicate is pinned to the latest cell version; a superseded
+    # cell must never satisfy one.
+    assert [c[1] for c in calls if c[0] == "CellsColumnLimitFilter"] == [(1,), (1,)]
 
 
 async def test_the_bigtable_ownership_predicate_matches_the_token_column_exactly(
@@ -759,9 +767,12 @@ async def test_bigtable_completion_clears_the_claim_and_writes_the_result(
 
     _, _, true_case, false_case = table.checks[0]
     assert false_case is None
-    assert len(true_case) == 3
-    set_call = next(c for c in calls if c[0] == "SetCell")
-    assert set_call[1] == ("d", b"result", result.SerializeToString(deterministic=True))
+    assert len(true_case) == 4
+    sets = [c[1] for c in calls if c[0] == "SetCell"]
+    assert sets[0] == ("d", b"result", result.SerializeToString(deterministic=True))
+    # The record stamps its own expiry: `rexp` is what every read gates on, so
+    # a lagging GC rule can never serve a result past its TTL.
+    assert sets[1] == ("d", b"rexp", encode_lease_expiry(NOW_MS + 60_000))
     deletes = [c[1] for c in calls if c[0] == "DeleteRangeFromColumn"]
     assert deletes == [("d", b"claim"), ("d", b"owner")]
 
@@ -779,7 +790,10 @@ async def test_a_taken_bigtable_row_is_read_back_to_distinguish_done(
             cells=[
                 types.SimpleNamespace(
                     qualifier=b"result", value=result.SerializeToString(deterministic=True)
-                )
+                ),
+                types.SimpleNamespace(
+                    qualifier=b"rexp", value=encode_lease_expiry(NOW_MS + 60_000)
+                ),
             ]
         )
     ]
@@ -789,6 +803,32 @@ async def test_a_taken_bigtable_row_is_read_back_to_distinguish_done(
     assert isinstance(outcome, Done)
     assert outcome.result is not None
     assert outcome.result.intent_id == "intent-1"
+
+
+async def test_a_bigtable_row_whose_result_expired_is_not_read_back_as_done(
+    fake_bigtable: tuple[Any, list[Any]],
+) -> None:
+    # The read-back gates on `rexp`, not on the presence of a result cell. A
+    # terminal record past its TTL must not be reported Done just because the
+    # GC rule has not gotten around to removing the cell yet.
+    holder, _ = fake_bigtable
+    store = BigtableDedupStore("proj", "inst", "table", clock=lambda: NOW_MS)
+    table = holder["client"].table
+    table.predicate_result = True
+    table.rows = [
+        types.SimpleNamespace(
+            cells=[
+                types.SimpleNamespace(
+                    qualifier=b"result", value=a_result().SerializeToString(deterministic=True)
+                ),
+                types.SimpleNamespace(qualifier=b"rexp", value=encode_lease_expiry(NOW_MS)),
+            ]
+        )
+    ]
+
+    outcome = await store.claim("intent-1", 5_000)
+
+    assert isinstance(outcome, InFlight)
 
 
 async def test_a_taken_bigtable_row_with_no_result_reads_as_in_flight(

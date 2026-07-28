@@ -282,11 +282,23 @@ class BigtableDedupStore:
     """`DedupStore` over Bigtable: ``CheckAndMutateRow`` for conditional claims.
 
     Row key is the ``intent_id`` (a uuid5, already uniformly distributed, so no
-    salting is needed). Column family ``d`` holds three columns: ``claim`` (the
-    big-endian lease expiry), ``owner`` (the ownership token), and ``result``
-    (a serialized ``ToolResult``, empty for a routed approval). Record expiry is
-    the column family's ``maxage`` GC rule, which must be provisioned to match
-    ``result_ttl_ms`` — see ``docs/effector.md``.
+    salting is needed). Column family ``d`` holds four columns: ``claim`` (the
+    big-endian lease expiry), ``owner`` (the ownership token), ``result`` (a
+    serialized ``ToolResult``, empty for a routed approval), and ``rexp`` (the
+    big-endian terminal-record expiry).
+
+    **Terminal expiry is a read-time predicate, not the GC rule.** The column
+    family's ``maxage`` rule reclaims space, but it cannot be what decides
+    expiry: it is table-level, so a per-call ``result_ttl_ms`` is
+    unrepresentable, and it is asynchronous and best-effort, so a record can be
+    served long after its TTL elapsed. ``complete`` therefore stamps ``rexp``
+    and every read filters on it, exactly as the lease does.
+
+    Every value predicate is limited to the **most recent cell version**.
+    Bigtable columns are versioned: re-claiming after a lease expiry leaves the
+    superseded owner token behind as an older cell, and a predicate free to
+    match any version would let a worker whose lease expired ``complete`` over
+    its successor's claim.
 
     Expiry and ownership live in *separate* columns on purpose. Bigtable value
     filters are RE2 over raw bytes, and RE2's ``.`` does not match a newline
@@ -304,6 +316,7 @@ class BigtableDedupStore:
     CLAIM_COLUMN = b"claim"
     OWNER_COLUMN = b"owner"
     RESULT_COLUMN = b"result"
+    RESULT_EXPIRY_COLUMN = b"rexp"
 
     def __init__(
         self,
@@ -320,32 +333,40 @@ class BigtableDedupStore:
         self._clock = clock
 
     def _live_claim_filter(self, now_ms: int) -> RowFilter:
-        from google.cloud.bigtable.data import row_filters
-
         # claim column present AND its value (lease expiry, big-endian) is
         # strictly past `now` — i.e. the lease has not run out yet. The
         # exclusive lower bound matches the in-memory store, where a lease
         # expiring exactly at `now` reads as expired.
+        return self._live_expiry_filter(self.CLAIM_COLUMN, now_ms)
+
+    def _live_expiry_filter(self, column: bytes, now_ms: int) -> RowFilter:
+        """Match ``column`` when its latest cell holds an expiry past ``now_ms``.
+
+        ``CellsColumnLimitFilter(1)`` is load-bearing, not tidiness: the column
+        keeps every superseded version, so without it a stale cell can satisfy
+        the predicate on behalf of a record that has since moved on.
+        """
+        from google.cloud.bigtable.data import row_filters
+
         return row_filters.RowFilterChain(
             filters=[
                 row_filters.FamilyNameRegexFilter(self.COLUMN_FAMILY),
-                row_filters.ColumnQualifierRegexFilter(self.CLAIM_COLUMN),
+                row_filters.ColumnQualifierRegexFilter(column),
+                row_filters.CellsColumnLimitFilter(1),
                 row_filters.ValueRangeFilter(
                     start_value=encode_lease_expiry(now_ms), inclusive_start=False
                 ),
             ]
         )
 
-    def _result_filter(self) -> RowFilter:
-        from google.cloud.bigtable.data import row_filters
+    def _live_result_filter(self, now_ms: int) -> RowFilter:
+        """Match a terminal record that has not yet reached its ``rexp``.
 
-        return row_filters.RowFilterChain(
-            filters=[
-                row_filters.FamilyNameRegexFilter(self.COLUMN_FAMILY),
-                row_filters.ColumnQualifierRegexFilter(self.RESULT_COLUMN),
-                row_filters.CellsColumnLimitFilter(1),
-            ]
-        )
+        Gated on the expiry column rather than on `result`'s presence: an
+        expired terminal record has to read as unseen, and a `ToolResult` whose
+        serialization is empty (a routed approval) cannot carry its own expiry.
+        """
+        return self._live_expiry_filter(self.RESULT_EXPIRY_COLUMN, now_ms)
 
     def _taken_filter(self, now_ms: int) -> RowFilter:
         """Matches a row that is either live-claimed or already terminal.
@@ -356,7 +377,7 @@ class BigtableDedupStore:
         from google.cloud.bigtable.data import row_filters
 
         return row_filters.RowFilterUnion(
-            filters=[self._live_claim_filter(now_ms), self._result_filter()]
+            filters=[self._live_claim_filter(now_ms), self._live_result_filter(now_ms)]
         )
 
     async def _read_state(self, intent_id: str, now_ms: int) -> ClaimOutcome:
@@ -372,10 +393,16 @@ class BigtableDedupStore:
             ),
         )
         for row in await self._table.read_rows(query):
+            cells: dict[bytes, bytes] = {}
             for cell in row.cells:
-                if cell.qualifier == self.RESULT_COLUMN:
-                    # A terminal record wins over any claim cell still present.
-                    return _decode_done(bytes(cell.value))
+                cells[bytes(cell.qualifier)] = bytes(cell.value)
+            stored = cells.get(self.RESULT_COLUMN)
+            expiry = cells.get(self.RESULT_EXPIRY_COLUMN)
+            # A *live* terminal record wins over any claim cell still present.
+            # An expired one does not: the row was re-claimable, so the caller
+            # is mid-claim against it, not looking at a real result.
+            if stored is not None and expiry is not None and now_ms < decode_lease_expiry(expiry):
+                return _decode_done(stored)
         # Otherwise the row is live-claimed (the common case), or its claim
         # expired between the conditional mutation and this read. Both are
         # safest reported as InFlight: the caller waits and re-claims rather
@@ -410,11 +437,15 @@ class BigtableDedupStore:
         from google.cloud.bigtable.data import row_filters
 
         # An exact value match on the ASCII-hex token — no regex metacharacters
-        # and no binary, so RE2's newline handling cannot bite.
+        # and no binary, so RE2's newline handling cannot bite. Limited to the
+        # latest cell: a re-claim after a lease expiry leaves the previous
+        # owner's token behind as an older version, and matching that would let
+        # a worker whose lease expired complete over its successor's claim.
         return row_filters.RowFilterChain(
             filters=[
                 row_filters.FamilyNameRegexFilter(self.COLUMN_FAMILY),
                 row_filters.ColumnQualifierRegexFilter(self.OWNER_COLUMN),
+                row_filters.CellsColumnLimitFilter(1),
                 row_filters.ValueRegexFilter(token.encode()),
             ]
         )
@@ -430,6 +461,13 @@ class BigtableDedupStore:
             self._owner_filter(token),
             true_case_mutations=[
                 SetCell(self.COLUMN_FAMILY, self.RESULT_COLUMN, stored),
+                # The record's own expiry. Every read gates on this; the GC rule
+                # only reclaims the space afterwards.
+                SetCell(
+                    self.COLUMN_FAMILY,
+                    self.RESULT_EXPIRY_COLUMN,
+                    encode_lease_expiry(self._clock() + ttl_ms),
+                ),
                 DeleteRangeFromColumn(self.COLUMN_FAMILY, self.CLAIM_COLUMN),
                 DeleteRangeFromColumn(self.COLUMN_FAMILY, self.OWNER_COLUMN),
             ],

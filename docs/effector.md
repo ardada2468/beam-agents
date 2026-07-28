@@ -38,7 +38,7 @@ guarantees silently.
 | Intents are written keyed by `entity_key` | `WriteIntents` does this. It is what confines a key to one partition, which is what makes per-key order survive scale-out. |
 | Pub/Sub subscriptions have **message ordering enabled** | Without it Pub/Sub delivers a key's intents concurrently and per-key order is gone. The effector logs a warning at startup when it can read the flag and it is off. |
 | The dedup store is shared by every replica | Two replicas pointed at different stores dedup independently, so an `intent_id` can execute twice. `memory://` is single-process only. |
-| Bigtable: the table has column family `d` with a `maxage` GC rule | The GC rule *is* the terminal-record TTL. Set it to at least `--result-ttl-ms`. |
+| Bigtable: the table has column family `d` with a `maxage` GC rule | Space reclamation only — expiry itself is decided at read time against the record's own `rexp` column, so a lagging GC never serves an expired result. Set `maxage` comfortably above `--result-ttl-ms` so GC never removes a record the store still considers live. |
 | Kafka replicas share one `--consumer-group` | Partition assignment is the exclusivity mechanism. Separate groups each get the whole topic and both execute every intent (dedup collapses it, but only if they share a store). |
 
 Bigtable table provisioning, for reference:
