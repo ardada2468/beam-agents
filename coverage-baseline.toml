@@ -25,8 +25,13 @@
 # coverage — its remaining partials are contextvar/isinstance guards exercised
 # only one way per test — pulling the project rate up).
 #
+# add-trace-exporters: 0.9491 (the OTLP mapping/DoFn, the sink-URI grammar,
+# and the schema'd BigQuery writer arm are exercised by offline unit tests in
+# the ci lane).
+#
 # Merge resolution (add-errors-sink-encoding 0.9424, add-langgraph-adapter
-# 0.9433, add-trace-exporters 0.9491): same rule as the merges above — the
-# combined tree is re-measured, not picked from a side. Measured on the
-# combined tree: RATE_PLACEHOLDER.
-branch_rate = RATE_PLACEHOLDER
+# 0.9433, add-trace-exporters 0.9491): same rule as the merges above — each
+# number was measured against its own tree and the rate is a ratio over the
+# whole project, so the combined tree is re-measured rather than having one
+# side picked. Measured on the combined tree: 0.9484.
+branch_rate = 0.9484

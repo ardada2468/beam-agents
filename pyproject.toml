@@ -31,6 +31,15 @@ langgraph = [
   "langgraph>=1.0,<2",
   "langchain-core>=1.0,<2",
 ]
+# The OTLP trace exporter (`otlp://` traces sink) builds ExportTraceServiceRequest
+# messages from opentelemetry-proto's generated classes and POSTs them over the
+# core httpx dependency. Pure generated protos — no OTel SDK, no grpc — but still
+# optional: `DefaultSinkResolver.validate` stays import-free and only `resolve()`
+# (pipeline expansion) imports it, so the core install works without the extra.
+# Version floor: 1.x ships the stable/frozen trace signal.
+otlp = [
+  "opentelemetry-proto>=1.20",
+]
 
 # The effector is a service, so it gets a console entry point. It is the only
 # executable this package ships; the runtime itself is a library embedded in a
@@ -61,6 +70,12 @@ test = [
   # blocking the import, not by the package's absence from the environment.
   "langgraph>=1.0,<2",
   "langchain-core>=1.0,<2",
+  # The OTLP exporter's mapping/DoFn tests are plain offline unit tests (they
+  # exercise generated proto classes and httpx.MockTransport, no network), so
+  # they run — and are coverage-counted — in the required ci unit lane. This
+  # mirrors the `otlp` extra rather than depending on it; the import-boundary
+  # test proves the runtime still imports and validates without it installed.
+  "opentelemetry-proto>=1.20",
 ]
 lint = [
   "ruff",
@@ -134,6 +149,12 @@ ignore = [
 # import Kafka/Pub/Sub IO clients until expand() actually builds the writer;
 # same PLC0415-is-the-point rationale as core/transform.py above.
 "src/beam_agents/actions/write_intents.py" = ["PLC0415"]
+# The OTLP exporter imports opentelemetry-proto (the optional `otlp` extra)
+# inside the mapping/encoding functions, on purpose: sink-URI validation and
+# `import beam_agents` must succeed without the extra installed, and the lazy
+# import is what raises the actionable install-the-extra error at resolution.
+# Same PLC0415-is-the-point rationale as core/transform.py above.
+"src/beam_agents/observability/otlp.py" = ["PLC0415"]
 # The effector's adapters import their client libraries (aiokafka, pubsub,
 # redis, bigtable) inside the adapter constructor, on purpose: those are
 # optional dependencies and `import beam_agents.effector` must succeed with
@@ -275,6 +296,19 @@ disable_error_code = ["no-untyped-call", "type-arg"]
 [[tool.mypy.overrides]]
 module = "beam_agents.core.transform"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation for the OTLP export DoFn/transform (ParDo,
+# unparameterized PTransform/PCollection, untyped metric handles), plus the
+# lazily-imported opentelemetry-proto constructors reading as Any.
+[[tool.mypy.overrides]]
+module = "beam_agents.observability.otlp"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Beam's TestPipeline/Create are untyped; same relaxation the other
+# pipeline-driving test modules get, for the exporter's dead-collector test.
+[[tool.mypy.overrides]]
+module = "tests.observability.test_otlp"
+disable_error_code = ["no-untyped-call"]
 
 # Same Beam-untyped-API relaxation as core/transform.py and core/dofn.py: every
 # ParDo/PTransform/PubsubMessage call and Beam's unparameterized generics read
