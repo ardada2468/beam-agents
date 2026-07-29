@@ -13,7 +13,10 @@ free by construction. The DoFn:
   cancelling and routing to ``.errors`` with zero state mutation on timeout;
 - stages all effects and commits them in a fixed order only on success,
   incrementing ``SEQ`` exactly once per committed activation;
-- garbage-collects all state when ``TTL_TIMER`` fires and fails HITL closed.
+- garbage-collects all state when ``TTL_TIMER`` fires and fails HITL closed;
+- records the runtime metrics (``beam_agents.runtime``) on the Beam thread, from
+  the tally the activation staged — a metric update made from the bridge thread
+  would be discarded by Beam with no error.
 
 Constructing the state-spec coders here has no global side effects (they are
 plain ``Coder`` instances, not registry mutations); importing this module is
@@ -49,6 +52,7 @@ from beam_agents._protos import (
 from beam_agents.core.agent import FallbackContext, intent_id_for
 from beam_agents.core.bridge import ActivationTimeout, AsyncBridge
 from beam_agents.core.coders import DeterministicProtoCoder
+from beam_agents.core.context import MonotonicNs
 from beam_agents.core.loop import ActivationResult, run_activation
 from beam_agents.hitl import (
     HITL_TIMEOUT_OUTPUT,
@@ -61,7 +65,24 @@ from beam_agents.hitl import (
     intent_expired,
 )
 from beam_agents.observability import ROLE_TIMER, ActivationTrace
-from beam_agents.observability.metrics import record_activation, record_activation_failure
+from beam_agents.observability.metrics import (
+    COUNTER_ACTIVATIONS,
+    COUNTER_AGENT_ERRORS,
+    COUNTER_INTENTS_EMITTED,
+    COUNTER_LLM_CALLS,
+    COUNTER_ORPHANED_RESULTS,
+    COUNTER_SUSPENSIONS,
+    COUNTER_TOOL_CALLS,
+    DISTRIBUTION_ACTIVATION_MS,
+    DISTRIBUTION_ITERATIONS,
+    DISTRIBUTION_LLM_MS,
+    DISTRIBUTION_MEMORY_BYTES,
+    DISTRIBUTION_OVERHEAD_MS,
+    DISTRIBUTION_TOKENS,
+    MetricsSink,
+    RuntimeMetrics,
+)
+from beam_agents.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -80,6 +101,8 @@ _Timer = Any
 # -level with per-construction override; agents can shorten HITL via Suspend.
 _DEFAULT_ACTIVATION_TIMEOUT_S = 30.0
 _DEFAULT_TTL_MS = 3_600_000  # 1 hour of event time
+
+_NS_PER_MS = 1_000_000
 
 # Error reasons routed to the .errors output. `HITL_TIMEOUT_OUTPUT` and
 # `REASON_HITL_TIMEOUT` live in `hitl` (with the policy that produces them) and
@@ -172,7 +195,9 @@ class _AgentDoFn(beam.DoFn):
         cancel_grace_s: float = 5.0,
         hitl_policy: HitlPolicy | None = None,
         decode: Decode | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
+        tool_registry: ToolRegistry | None = None,
+        metrics: MetricsSink | None = None,
+        monotonic_ns: MonotonicNs | None = None,
     ) -> None:
         self._agent = agent
         self._provider_factory = provider_factory
@@ -184,10 +209,17 @@ class _AgentDoFn(beam.DoFn):
         # counts are unknown, and the trace omits them rather than reporting
         # zeros that would be summed as real (design D4).
         self._decode = decode
-        # Latency clock for Beam metrics only. Injectable for tests; NEVER
-        # threaded into the activation, whose clock stays the element's event
-        # time so replayed bundles emit byte-identical records (design D7).
-        self._monotonic = monotonic
+        # The read-only tools `ctx.run_tool` executes inline; empty by default,
+        # so an unconfigured pipeline refuses every inline call by name.
+        self._tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
+        # `metrics`/`monotonic_ns` are test seams, not user configuration: there
+        # is no `AgentConfig` knob for either, and metrics are always published.
+        # Built here rather than in `setup()` so the timer callbacks (which a
+        # unit test drives without a bundle) always have a recorder.
+        self._metrics: MetricsSink = metrics if metrics is not None else RuntimeMetrics()
+        self._monotonic_ns: MonotonicNs = (
+            monotonic_ns if monotonic_ns is not None else time.monotonic_ns
+        )
         self._bridge: AsyncBridge | None = None
         self._provider: LLMClient | None = None
 
@@ -278,7 +310,7 @@ class _AgentDoFn(beam.DoFn):
         cache_blob = llm_cache.read()
 
         try:
-            result = self._activate(
+            result, activation_ms = self._activate(
                 key=key,
                 seq=current_seq,
                 now_ms=now_ms,
@@ -287,19 +319,28 @@ class _AgentDoFn(beam.DoFn):
                 event=event,
             )
         except ActivationTimeout:
-            yield _error(key, REASON_TIMEOUT)
+            yield self._dead_letter(key, REASON_TIMEOUT)
             yield _error_trace(key, current_seq, now_ms, REASON_TIMEOUT)
             return
         except Exception as exc:
             # Any activation failure fails closed: route to errors, commit nothing.
-            yield _error(key, REASON_ERROR, repr(exc))
+            yield self._dead_letter(key, REASON_ERROR, repr(exc))
             yield _error_trace(
                 key, current_seq, now_ms, REASON_ERROR, error_type=type(exc).__name__
             )
             return
 
         yield from self._commit(
-            result, now_ms, memory, continuation, llm_cache, pending, seq, ttl_timer, hitl_timer
+            result,
+            now_ms,
+            activation_ms,
+            memory,
+            continuation,
+            llm_cache,
+            pending,
+            seq,
+            ttl_timer,
+            hitl_timer,
         )
 
     def _resume(
@@ -322,7 +363,8 @@ class _AgentDoFn(beam.DoFn):
         detail = _admission_failure(cont, pending_intents, intent_id, now_ms)
         if detail is not None:
             # No live, unexpired continuation matches: orphaned. Mutate nothing.
-            yield _error(key, REASON_ORPHANED, f"{detail}:{intent_id}")
+            # No agent runs, so there is no duration to sample either.
+            yield self._dead_letter(key, REASON_ORPHANED, f"{detail}:{intent_id}")
             # Scope the trace to the continuation's activation when there is
             # one; a genuinely orphaned result has no activation to belong to,
             # so the key's current seq is the closest true scope.
@@ -340,7 +382,7 @@ class _AgentDoFn(beam.DoFn):
         memory_blob = memory.read()
         cache_blob = llm_cache.read()
         try:
-            result = self._activate(
+            result, activation_ms = self._activate(
                 key=key,
                 seq=cont.seq,
                 now_ms=now_ms,
@@ -352,17 +394,26 @@ class _AgentDoFn(beam.DoFn):
                 step_index=cont.step_index,
             )
         except ActivationTimeout:
-            yield _error(key, REASON_TIMEOUT)
+            yield self._dead_letter(key, REASON_TIMEOUT)
             yield _error_trace(key, cont.seq, now_ms, REASON_TIMEOUT)
             return
         except Exception as exc:
             # Any activation failure fails closed: route to errors, commit nothing.
-            yield _error(key, REASON_ERROR, repr(exc))
+            yield self._dead_letter(key, REASON_ERROR, repr(exc))
             yield _error_trace(key, cont.seq, now_ms, REASON_ERROR, error_type=type(exc).__name__)
             return
 
         yield from self._commit(
-            result, now_ms, memory, continuation, llm_cache, pending, seq, ttl_timer, hitl_timer
+            result,
+            now_ms,
+            activation_ms,
+            memory,
+            continuation,
+            llm_cache,
+            pending,
+            seq,
+            ttl_timer,
+            hitl_timer,
         )
 
     def _activate(
@@ -378,14 +429,21 @@ class _AgentDoFn(beam.DoFn):
         resume_approval: AgentEnvelope.Approval | None = None,
         snapshot: bytes = b"",
         step_index: int = 0,
-    ) -> ActivationResult:
+    ) -> tuple[ActivationResult, int]:
         assert self._bridge is not None and self._provider is not None, "setup() not called"
         provider = self._provider
         policy = self._hitl_policy
         decode = self._decode
-        # Latency is measured here — around the bridge, with a wall clock —
-        # and reported as Beam metrics, never written into trace bytes (D7).
-        started = self._monotonic()
+        monotonic_ns = self._monotonic_ns
+        # `activation_ms` brackets the bounded bridge submission -- what the
+        # caller actually waits for, submission overhead included -- and is
+        # sampled in a `finally` so all three exits are covered by one site: a
+        # commit, an `ActivationTimeout`, and any other failure. The timeout tail
+        # is the most interesting part of the distribution, so it must not be
+        # the exit that skips the sample. The clock is read on the Beam thread;
+        # inside the activation it is the same injected callable, forwarded so
+        # one clock times the whole element.
+        started_ns = monotonic_ns()
         try:
             result = self._bridge.run(
                 lambda: run_activation(
@@ -405,19 +463,25 @@ class _AgentDoFn(beam.DoFn):
                     intent_ttl_ms=policy.intent_ttl_ms,
                     approval_channel=policy.approval_channel,
                     decode=decode,
+                    monotonic_ns=monotonic_ns,
+                    tool_registry=self._tool_registry,
                 ),
                 self._activation_timeout_s,
             )
-        except Exception:
-            record_activation_failure()
-            raise
-        record_activation(result.status, int((self._monotonic() - started) * 1000))
-        return result
+        finally:
+            # The elapsed reading is taken in the finally so all three exits --
+            # commit, ActivationTimeout, any other failure -- share the one
+            # sample site; on success it is also what `overhead_ms` subtracts
+            # the tally's call durations from.
+            elapsed_ms = (monotonic_ns() - started_ns) // _NS_PER_MS
+            self._metrics.observe(DISTRIBUTION_ACTIVATION_MS, elapsed_ms)
+        return result, elapsed_ms
 
     def _commit(
         self,
         result: ActivationResult,
         now_ms: int,
+        activation_ms: int,
         memory: _State,
         continuation: _State,
         llm_cache: _State,
@@ -426,8 +490,9 @@ class _AgentDoFn(beam.DoFn):
         ttl_timer: _Timer,
         hitl_timer: _Timer,
     ) -> Iterator[object]:
-        # Fixed commit order (design D3): MEMORY, LLM_CACHE, CONTINUATION,
-        # PENDING, SEQ, timers, emits. Reached only on activation success.
+        # Fixed commit order (design D3, extended by add-runtime-metrics):
+        # MEMORY, LLM_CACHE, CONTINUATION, PENDING, SEQ, timers, metrics, emits.
+        # Reached only on activation success.
         memory.write(result.memory_blob)
         llm_cache.write(result.cache_blob)
 
@@ -441,6 +506,8 @@ class _AgentDoFn(beam.DoFn):
             pending.add(intent)
 
         # Exactly one increment per committed activation, here and nowhere else.
+        # `activations` counts the same event; it is recorded below with the
+        # rest of the metrics so the commit keeps one metrics step, not two.
         seq.add(1)
 
         # Re-arm working-memory GC on every committed element (event-time). A
@@ -463,11 +530,58 @@ class _AgentDoFn(beam.DoFn):
             hitl_timer.clear()
         ttl_timer.set(_ms_timestamp(ttl_from_ms + self._ttl_ms))
 
+        # Recorded before the yields, not after: `_commit` is a generator, and
+        # recording placed after them would be contingent on how the consumer
+        # drains it. Beam always drains fully, but the ordering must not depend
+        # on that.
+        self._record_commit(result, activation_ms)
+
         yield from result.outputs
         for intent in result.intents:
             yield beam.pvalue.TaggedOutput("intents", intent)
         for trace in result.traces:
             yield beam.pvalue.TaggedOutput("traces", trace)
+
+    def _record_commit(self, result: ActivationResult, activation_ms: int) -> None:
+        """Record one committed activation's metrics, on the Beam thread.
+
+        Everything here comes from the staged `ActivationResult`: the counts and
+        durations were accumulated on the async bridge thread, where Beam's
+        thread-local state sampler does not exist and an update would have been
+        discarded with no error.
+
+        A failed or refused activation never reaches this method, so the
+        commit-path metrics obey the same all-or-nothing rule the state
+        mutations do.
+        """
+        metrics = self._metrics
+        tally = result.tally
+        metrics.incr(COUNTER_ACTIVATIONS)
+        if result.status == "suspended":
+            metrics.incr(COUNTER_SUSPENSIONS)
+        if result.intents:
+            # Keeps `intents_emitted` equal to the element count on `.intents`;
+            # `_escalate` counts the one intent it mints outside this path.
+            metrics.incr(COUNTER_INTENTS_EMITTED, len(result.intents))
+        if tally.llm_calls:
+            metrics.incr(COUNTER_LLM_CALLS, tally.llm_calls)
+        if tally.tool_calls:
+            metrics.incr(COUNTER_TOOL_CALLS, tally.tool_calls)
+        metrics.observe(DISTRIBUTION_MEMORY_BYTES, result.memory_blob.total_value_bytes)
+        metrics.observe(DISTRIBUTION_ITERATIONS, tally.iterations)
+        if tally.usage_observed:
+            # Only when a provider response was actually decoded: a zero sample
+            # from a path that never decodes would deflate the distribution.
+            metrics.observe(DISTRIBUTION_TOKENS, tally.total_tokens)
+        for duration_ms in tally.llm_ms:
+            metrics.observe(DISTRIBUTION_LLM_MS, duration_ms)
+        # The release-gate figure: the activation's wall time with its model
+        # and inline-tool time subtracted out. Clamped -- an agent that awaits
+        # calls concurrently can make the subtrahend exceed the wall time.
+        metrics.observe(
+            DISTRIBUTION_OVERHEAD_MS,
+            max(0, activation_ms - sum(tally.llm_ms) - sum(tally.tool_ms)),
+        )
 
     # -- timers ---------------------------------------------------------------
 
@@ -492,7 +606,7 @@ class _AgentDoFn(beam.DoFn):
         # so it is not lost in silence.
         cont = continuation.read()
         if cont is not None:
-            yield _error(
+            yield self._dead_letter(
                 key,
                 REASON_TTL_WIPED_SUSPENSION,
                 f"seq={cont.seq},deadline_ms={cont.deadline_ms}",
@@ -551,9 +665,10 @@ class _AgentDoFn(beam.DoFn):
         pending.clear()
         hitl_timer.clear()
         if isinstance(route, Deny):
+            # An ordinary output, not a dead letter: nothing to count.
             yield route.output
         else:
-            yield _error(key, route.reason, detail)
+            yield self._dead_letter(key, route.reason, detail)
         # Both routes end the wait without an answer; the trace records it
         # either way, in the suspended activation's own trace.
         yield _error_trace(key, cont.seq, fired_at_ms, REASON_HITL_TIMEOUT, role=ROLE_TIMER)
@@ -647,6 +762,9 @@ class _AgentDoFn(beam.DoFn):
         # working memory and be GC'd mid-wait -- the same preemption `_commit`
         # guards against, reintroduced one route later.
         ttl_timer.set(_ms_timestamp(deadline_ms + self._ttl_ms))
+        # This intent reaches `.intents` without passing through `_commit`, so
+        # it is counted here or `intents_emitted` stops matching the output.
+        self._metrics.incr(COUNTER_INTENTS_EMITTED)
         yield beam.pvalue.TaggedOutput("intents", intent)
         yield beam.pvalue.TaggedOutput(
             "traces",
@@ -658,6 +776,23 @@ class _AgentDoFn(beam.DoFn):
                 expires_at_ms=deadline_ms,
             ),
         )
+
+    # -- metrics --------------------------------------------------------------
+
+    def _dead_letter(self, key: bytes, reason: str, detail: str = "") -> beam.pvalue.TaggedOutput:
+        """Build a dead-letter record and count it. The single chokepoint.
+
+        Every `.errors` emission in this DoFn goes through here, including the
+        two timer callbacks, so `agent_errors + orphaned_results` equals the
+        element count on `.errors` by construction. A new emission site that
+        called the pure `_error` builder directly would be a visibly different
+        call, not an invisible omission.
+        """
+        if reason == REASON_ORPHANED:
+            self._metrics.incr(COUNTER_ORPHANED_RESULTS)
+        else:
+            self._metrics.incr(COUNTER_AGENT_ERRORS)
+        return _error(key, reason, detail)
 
 
 def _admission_failure(

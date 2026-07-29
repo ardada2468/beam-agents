@@ -8,9 +8,9 @@
 # its own tree, and the rate is a ratio over the whole project, so the combined
 # tree has to be re-measured rather than have one side picked. 402/430 branches.
 #
-# add-trace-events: 0.9349 -> 0.9397. The new observability package is branch-
-# light and fully covered, and the fake-handle DoFn suites the change added
-# (failure routes, then the commit/routing surface the mutation gate exposed)
-# reach `process`/`_start`/`_resume`/`_commit` branches that only the
-# Beam-pipeline suites had ever executed.
-branch_rate = 0.9397
+# Merge resolution (add-trace-events 0.9397 vs add-runtime-metrics 0.9369):
+# same rule as above — the combined tree is re-measured, not picked from a
+# side. The two changes' fake-handle DoFn suites overlap heavily (both drove
+# `process`/`_start`/`_resume`/`_commit` for the first time), so the union is
+# not additive. Measured on the combined tree: 0.9416.
+branch_rate = 0.9416

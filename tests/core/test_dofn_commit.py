@@ -519,7 +519,7 @@ def test_the_commit_arms_hitl_on_status_not_on_the_presence_of_a_deadline() -> N
         hitl_deadline_ms=_NOW_MS + 900_000,
     )
 
-    list(dofn._commit(result, _NOW_MS, **handles.as_kwargs()))
+    list(dofn._commit(result, _NOW_MS, 5, **handles.as_kwargs()))
 
     assert handles.hitl_timer.cleared is True
     assert handles.hitl_timer.set_to is None

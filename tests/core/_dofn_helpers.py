@@ -18,6 +18,7 @@ from beam_agents.core.context import ActivationContext
 from beam_agents.hitl import Escalate, Route
 from beam_agents.model.client import LlmRequest, ProviderError
 from beam_agents.model.fake import FakeLLM, match_any, raise_error, respond_with
+from beam_agents.tools import ToolRegistry, tool
 
 # Tool intents get a fixed TTL in tests; the value only feeds expires_at.
 _TTL_MS = 60_000
@@ -107,6 +108,51 @@ async def conditional_append_agent(ctx: ActivationContext) -> Complete:
     ctx.memory.append("log", ctx.event, max_items=64)
     ring = b",".join(ctx.memory.ring("log"))
     return Complete(output=ring + b"#" + str(ctx.seq).encode())
+
+
+@tool
+def lookup(customer_id: str) -> str:
+    """Uppercase a customer id: the read-only test tool for inline execution."""
+    return customer_id.upper()
+
+
+def make_tool_registry() -> ToolRegistry:
+    """Registry holding the module-level `lookup` tool.
+
+    A fresh registry per call (never a module-global instance), honoring the
+    no-global-mutable-state convention; the `Tool` itself is module-level so it
+    pickles by reference into the DoFn for DirectRunner tests.
+    """
+    registry = ToolRegistry()
+    registry.register(lookup)
+    return registry
+
+
+async def inline_tool_agent(ctx: ActivationContext) -> Complete:
+    """Run the read-only `lookup` tool inline and complete with its value."""
+    value = await ctx.run_tool("lookup", {"customer_id": ctx.event.decode() or "x"})
+    return Complete(output=str(value).encode())
+
+
+async def outcome_routing_agent(ctx: ActivationContext) -> Complete:
+    """Pick an outcome from the event payload, so one bounded pipeline can
+    exercise several of them at once (each on its own key).
+
+    Deliberately has no suspending branch: a suspension left unresumed in a
+    *bounded* pipeline meets the end-of-input watermark advance and the
+    real-time HITL timer at once, and which fires first is the runner's choice.
+    Suspension counting is asserted under `TestStream`, where both clocks are
+    scripted (see test_dofn_streaming).
+    """
+    if ctx.event == b"FAIL":
+        raise RuntimeError("routed failure")
+    if ctx.event == b"ACT":
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+        return Complete(output=b"acted")
+    if ctx.event == b"MODEL":
+        response = await ctx.call_model(request())
+        return Complete(output=response.response)
+    return Complete(output=ctx.event)
 
 
 async def raising_agent(ctx: ActivationContext) -> Complete:

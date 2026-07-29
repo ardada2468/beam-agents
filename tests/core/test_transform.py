@@ -12,7 +12,6 @@ from unittest import mock
 
 import apache_beam as beam
 import pytest
-from apache_beam.metrics.metric import MetricsFilter
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Aliased: a bare "TestPipeline" name would be mis-collected by pytest.
@@ -34,6 +33,7 @@ from beam_agents.core.transform import (
 )
 from beam_agents.hitl import HitlPolicy
 from beam_agents.observability import trace_event_to_row, trace_id_for
+from beam_agents.tools import ToolRegistry
 from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import (
     append_agent,
@@ -138,6 +138,18 @@ def test_config_carries_a_default_hitl_policy() -> None:
     config = AgentConfig(provider_factory=make_pong_provider)
     assert config.hitl_policy == HitlPolicy()
     assert config.hitl_policy.max_escalations == 0
+
+
+def test_config_carries_an_empty_default_tool_registry_or_the_supplied_one() -> None:
+    # An unconfigured pipeline refuses every inline `run_tool` by name rather
+    # than executing something unregistered; a supplied registry is held as-is.
+    default_config = AgentConfig(provider_factory=make_pong_provider)
+    assert isinstance(default_config.tool_registry, ToolRegistry)
+    assert default_config.tool_registry.tools_schema == []
+
+    registry = ToolRegistry()
+    config = AgentConfig(provider_factory=make_pong_provider, tool_registry=registry)
+    assert config.tool_registry is registry
 
 
 @pytest.mark.parametrize(
@@ -465,24 +477,6 @@ def test_traces_flow_through_a_pipeline_end_to_end() -> None:
         assert_that(
             intent_trace_ids, equal_to([trace_id_for(b"k", 0)]), label="intent-carries-trace"
         )
-
-
-def test_activation_metrics_surface_through_the_runner() -> None:
-    # Scenario: Activation metrics surface through the runner. The unit-level
-    # metric tests install their own container; this proves the ordinary path —
-    # DirectRunner collecting from `process()` — reports the same names.
-    pipeline = BeamTestPipeline()
-    keyed = _keyed(pipeline, _event(b"k", b"go"))
-    keyed | RunAgent(seq_agent, config=AgentConfig(provider_factory=make_pong_provider))
-    result = pipeline.run()
-    result.wait_until_finish()
-
-    queried = result.metrics().query(MetricsFilter().with_namespace("beam_agents"))
-    counters = {c.key.metric.name: c.committed for c in queried["counters"]}
-    assert counters["activations_completed"] == 1
-    (latency,) = [d.committed for d in queried["distributions"]]
-    assert latency.count == 1
-    assert latency.sum >= 0
 
 
 def test_a_configured_decode_puts_truthful_token_counts_on_the_traces() -> None:

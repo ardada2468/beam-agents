@@ -1,16 +1,17 @@
-"""Observability for the agent runtime: correlated `TraceEvent` emission.
+"""Observability for the agent runtime: correlated traces and runner metrics.
 
-Every activation is one trace, scoped to ``(entity_key, seq)`` so a suspend →
-effector → resume cycle stays a single trace with nothing but ``ToolIntent``'s
-``trace_id`` on the wire. Identity is derived, never generated: trace and span
-IDs are ``uuid5`` of activation scope, the same rule ``intent_id_for`` follows,
-so a replayed bundle emits byte-identical events and downstream dedup on
+Two complementary surfaces live here:
+
+**Traces** (:mod:`.traces`, :mod:`.exporters`): every activation is one trace,
+scoped to ``(entity_key, seq)`` so a suspend → effector → resume cycle stays a
+single trace with nothing but ``ToolIntent``'s ``trace_id`` on the wire.
+Identity is derived, never generated: trace and span IDs are ``uuid5`` of
+activation scope, the same rule ``intent_id_for`` follows, so a replayed bundle
+emits byte-identical events and downstream dedup on
 ``(trace_id, span_id, event_type)`` collapses the at-least-once duplicates a
-bundle retry produces.
-
-Correlation is stamped by the activation contexts, not by the producers: the
-model facade, the tool path, and the loop driver stage plain events and the
-context fills in the identity (design D3).
+bundle retry produces. Correlation is stamped by the activation contexts, not
+by the producers: the model facade, the tool path, and the loop driver stage
+plain events and the context fills in the identity (design D3).
 
 The event kinds and what each carries:
 
@@ -36,14 +37,28 @@ from new provider spend, so both "what did this activation consume" and "what
 did we pay for" are answerable from one stream.
 
 Timestamps come from the injected activation clock, so spans are zero-width by
-design (D7); latency lives in :mod:`beam_agents.observability.metrics` — a
-``beam_agents/activation_ms`` distribution plus per-outcome counters, measured
-by the DoFn with an injected monotonic clock — never in these records.
+design (D7): *duration* belongs to the metrics surface below, never to trace
+bytes, which stay byte-identical under replay.
+
+**Metrics** (:mod:`.metrics`, the ``runtime-metrics`` capability): the
+runner-visible counters and distributions an operator reads off a Dataflow job
+page or a Flink metrics reporter — including ``activation_ms`` and the
+release-gating ``overhead_ms`` — recorded at commit from the per-activation
+:class:`~beam_agents.observability.metrics.ActivationTally`, because a metric
+update off the Beam worker thread is silently discarded.
+
+This package is internal: nothing here is re-exported from ``beam_agents``.
 
 Importing this package has no side effects.
 """
 
 from beam_agents.observability.exporters import serialize_trace_event, trace_event_to_row
+from beam_agents.observability.metrics import (
+    ActivationTally,
+    MetricsSink,
+    NullMetrics,
+    RuntimeMetrics,
+)
 from beam_agents.observability.traces import (
     ACTIVATION_KIND,
     ACTIVATION_STATUS,
@@ -97,7 +112,11 @@ __all__ = [
     "TOOL_NAME",
     "USAGE_INPUT_TOKENS",
     "USAGE_OUTPUT_TOKENS",
+    "ActivationTally",
     "ActivationTrace",
+    "MetricsSink",
+    "NullMetrics",
+    "RuntimeMetrics",
     "role_for_event_type",
     "serialize_trace_event",
     "span_id_for",

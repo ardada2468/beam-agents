@@ -17,6 +17,7 @@ pair (same seq), not a raw single-shot activation's own retry.
 from __future__ import annotations
 
 import pytest
+from apache_beam.metrics.metric import MetricResults, MetricsFilter
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
 from apache_beam.testing.test_stream import TestStream
@@ -28,6 +29,7 @@ from beam_agents.core.agent import intent_id_for
 from beam_agents.core.loop import ActivationResult
 from beam_agents.core.transform import AgentConfig, RunAgent
 from beam_agents.observability import trace_id_for
+from beam_agents.observability.metrics import NAMESPACE
 from beam_agents.testing.chaos import fail_first_matching_commit
 from tests.core._dofn_helpers import keyed, make_pong_provider
 from tests.semantics._helpers import suspend_then_recall_agent
@@ -169,6 +171,47 @@ def test_chaos_forced_resume_retry_adds_zero_calls_and_commits_deterministic_int
         assert_that(out.intents, _check_committed_intent, label="intents")
         assert_that(out.traces, _assert_zero_additional_calls, label="traces")
         assert_that(out.traces, _check_one_trace_spans_the_suspension, label="trace-id")
+
+
+def test_measurement_does_not_change_what_a_retried_bundle_commits() -> None:
+    # Scenario: Replay determinism is unaffected by measurement.
+    #
+    # Durations are read from a monotonic clock *inside* the activation, so this
+    # gate is where that has to be shown harmless: across a chaos-forced bundle
+    # retry, with the two attempts measuring different elapsed times, the
+    # committed side must be identical -- one real provider call, one
+    # byte-identical intent, one output. Measurement is not a decision input.
+    #
+    # The counters themselves are deliberately not asserted on. This pipeline
+    # runs on the classic DirectRunner (a REAL_TIME timer spec rules out the
+    # FnApiRunner), whose metrics implementation reports one bundle's updates
+    # and drops the rest, so the retried resume's increments are not visible
+    # here regardless of what the code does. What the retry *does* to counters
+    # -- attempted values, so a double count is expected and harmless -- is a
+    # documented property of Beam metrics, not something this runner can
+    # demonstrate.
+    with fail_first_matching_commit(_is_resume_commit), _streaming_pipeline() as p:
+        stream = (
+            TestStream()
+            .advance_watermark_to(0)
+            .add_elements([_event(_ENTITY_KEY, b"go", 1000)])
+            .add_elements([_tool_result(_ENTITY_KEY, _EXPECTED_INTENT_ID, 2000)])
+            .advance_watermark_to_infinity()
+        )
+        out = keyed(p | stream) | RunAgent(
+            suspend_then_recall_agent,
+            config=AgentConfig(provider_factory=make_pong_provider),
+        )
+        assert_that(out.output, _check_output, label="output")
+        assert_that(out.errors, _check_no_errors, label="errors")
+        assert_that(out.intents, _check_committed_intent, label="intents")
+        assert_that(out.traces, _assert_zero_additional_calls, label="traces")
+
+    # The metric surface is live in this pipeline (not stubbed out), so the
+    # determinism above is measured *with* recording switched on.
+    query = p.result.metrics().query(MetricsFilter().with_namespace(NAMESPACE))
+    counters = {m.key.metric.name: m.result for m in query[MetricResults.COUNTERS]}
+    assert counters["activations"] >= 1
 
 
 def test_assertion_helper_catches_a_broken_cache_first_path() -> None:

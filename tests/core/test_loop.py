@@ -7,6 +7,8 @@ and error propagation (which leaves nothing to commit).
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 import beam_agents.core.loop as loop_module
@@ -21,6 +23,7 @@ from beam_agents.observability import (
     span_id_for,
     trace_id_for,
 )
+from beam_agents.observability.metrics import ActivationTally
 from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import (
     append_agent,
@@ -28,8 +31,15 @@ from tests.core._dofn_helpers import (
     model_agent,
     raising_agent,
     seq_agent,
+    suspend_then_act_again_agent,
     suspend_then_complete_agent,
 )
+
+
+def _scripted_clock(*readings_ns: int) -> Callable[[], int]:
+    """Monotonic-clock double returning `readings_ns` in order, then raising."""
+    remaining = iter(readings_ns)
+    return lambda: next(remaining)
 
 
 async def test_completed_activation_stages_output_and_seq() -> None:
@@ -341,6 +351,9 @@ async def test_loop_forwards_every_activation_context_input(
     resume_result = ToolResult(intent_id="intent-1")
     resume_approval = AgentEnvelope.Approval(intent_id="intent-1", approved=True)
     compactor = object()
+    monotonic_ns = _scripted_clock()
+    tool_registry = object()
+    tool_runner = object()
 
     class FakeContext:
         def __init__(self) -> None:
@@ -357,6 +370,9 @@ async def test_loop_forwards_every_activation_context_input(
 
         def cache_blob(self) -> LlmCacheBlob:
             return cache_blob
+
+        def tally(self) -> ActivationTally:
+            return ActivationTally()
 
     fake_context = FakeContext()
 
@@ -384,8 +400,13 @@ async def test_loop_forwards_every_activation_context_input(
         resume_approval=resume_approval,
         snapshot=b"snapshot",
         compactor=compactor,  # type: ignore[arg-type]
+        monotonic_ns=monotonic_ns,
+        tool_registry=tool_registry,  # type: ignore[arg-type]
+        tool_runner=tool_runner,  # type: ignore[arg-type]
     )
 
+    # The measurement clock is forwarded like every other injected dependency,
+    # so the DoFn's clock times the whole activation, model calls included.
     assert captured == {
         "entity_key": b"key",
         "seq": 4,
@@ -402,6 +423,9 @@ async def test_loop_forwards_every_activation_context_input(
         "intent_ttl_ms": DEFAULT_INTENT_TTL_MS,
         "approval_channel": DEFAULT_APPROVAL_CHANNEL,
         "decode": None,
+        "monotonic_ns": monotonic_ns,
+        "tool_registry": tool_registry,
+        "tool_runner": tool_runner,
     }
     assert result.memory_blob is memory_blob
     assert result.cache_blob is cache_blob
@@ -523,6 +547,96 @@ async def test_timeout_wins_when_it_is_the_earlier_bound() -> None:
     )
 
     assert result.hitl_deadline_ms == 6_000
+
+
+# --- Requirement: the activation result carries the metric tally -------------
+
+
+async def test_a_completed_activation_carries_its_tally() -> None:
+    provider = make_pong_provider()
+    result = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=provider,
+        memory_blob=None,
+        cache_blob=None,
+        monotonic_ns=_scripted_clock(0, 4_000_000),
+    )
+
+    assert result.status == "completed"
+    assert result.tally.llm_calls == 1
+    assert result.tally.llm_ms == [4]
+    assert result.tally.iterations == 1
+
+
+async def test_a_suspended_activation_carries_its_tally() -> None:
+    result = await run_activation(
+        suspend_then_complete_agent,
+        entity_key=b"k",
+        seq=3,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    assert result.status == "suspended"
+    # The staged intent consumed exactly one step.
+    assert result.tally.iterations == 1
+    assert result.tally.llm_calls == 0
+
+
+async def test_a_resumed_activation_reports_only_its_own_iterations() -> None:
+    resume = ToolResult(intent_id="i", entity_key=b"k", seq=3, payload=b"done")
+    result = await run_activation(
+        suspend_then_act_again_agent,
+        entity_key=b"k",
+        seq=3,
+        now_ms=2000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        resume_result=resume,
+        step_index=1,
+    )
+
+    assert result.status == "completed"
+    assert result.tally.iterations == 1
+
+
+async def test_the_tally_does_not_change_the_committed_blobs() -> None:
+    # Scenario: The tally never reaches keyed state, at the driver's boundary:
+    # the blobs the DoFn commits are what they would be with no measurement.
+    first = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        monotonic_ns=_scripted_clock(0, 1_000_000),
+    )
+    second = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        monotonic_ns=_scripted_clock(0, 900_000_000),
+    )
+
+    assert first.tally.llm_ms != second.tally.llm_ms
+    assert first.memory_blob.SerializeToString(
+        deterministic=True
+    ) == second.memory_blob.SerializeToString(deterministic=True)
+    assert first.cache_blob.SerializeToString(
+        deterministic=True
+    ) == second.cache_blob.SerializeToString(deterministic=True)
 
 
 async def test_non_outcome_error_includes_the_returned_value() -> None:

@@ -204,6 +204,12 @@ disable_error_code = ["override"]
 module = "beam_agents.memory.facade"
 disable_error_code = ["no-untyped-call"]
 
+# Same Beam-untyped-metrics relaxation for the runtime metric recorder, which
+# calls `inc`/`update` on Beam's delegating handles.
+[[tool.mypy.overrides]]
+module = "beam_agents.observability.metrics"
+disable_error_code = ["no-untyped-call"]
+
 # The stateful DoFn and its transform are the densest Beam surface in the repo:
 # every state/timer/output call routes through Beam's untyped API, and Beam's
 # generics (PTransform, TaggedOutput) ship without parameters. Relax those Beam-

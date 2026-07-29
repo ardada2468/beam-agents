@@ -45,6 +45,7 @@ from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.hitl import HitlPolicy
 from beam_agents.observability import serialize_trace_event, trace_event_to_row
+from beam_agents.tools import ToolRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -238,6 +239,10 @@ class AgentConfig:
     ttl_ms: int = field(default=_DEFAULT_TTL_MS, kw_only=True)
     cancel_grace_s: float = field(default=_DEFAULT_CANCEL_GRACE_S, kw_only=True)
     hitl_policy: HitlPolicy = field(default_factory=HitlPolicy, kw_only=True)
+    # The read-only tools `ctx.run_tool` executes inline on the fast path.
+    # Defaults to an empty registry: an unconfigured pipeline refuses every
+    # inline call by name rather than executing something unregistered.
+    tool_registry: ToolRegistry = field(default_factory=ToolRegistry, kw_only=True)
     intents_to: str | None = field(default=None, kw_only=True)
     traces_to: str | None = field(default=None, kw_only=True)
     errors_to: str | None = field(default=None, kw_only=True)
@@ -311,6 +316,7 @@ class RunAgent(beam.PTransform):
             cancel_grace_s=self._config.cancel_grace_s,
             hitl_policy=self._config.hitl_policy,
             decode=self._config.decode,
+            tool_registry=self._config.tool_registry,
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"

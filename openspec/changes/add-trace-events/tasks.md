@@ -63,9 +63,8 @@
 - [x] 9.5 `make mutation` passes; re-check `mutation-baseline.toml`'s `dofn.py` and `context.py` ceilings and document any move in the file's comment. (The fake-handle failure-route tests reach `process()` from inside the mutation selection, which moved 264 `dofn.py` mutants out of the "no tests" bucket; `tests/core/test_dofn_commit.py` was added to kill them. Ceilings: `dofn.py` 267 -> 3, `transform.py` 198 -> 240.)
 - [x] 9.6 `uv run pre-commit run --all-files` clean.
 
-## 10. Activation-latency metrics (resolution of D7's open question)
+## 10. Zero-width spans get their latency counterpart (resolution of D7's open question)
 
-- [x] 10.1 Write `tests/core/test_dofn_metrics.py` first (inside the mutation selection, container installed via Beam's `for_test` state sampler): a completed activation records exactly one `activation_ms` sample and one `activations_completed`; a suspension counts as suspended; a failure counts as failed with no latency sample; a refused resume records nothing; recording without a container is a silent no-op; the metric names are pinned as dashboard wire surface.
-- [x] 10.2 Add `observability/metrics.py`: `METRICS_NAMESPACE`, the `MetricName` constants, `record_activation(status, elapsed_ms)` and `record_activation_failure()`.
-- [x] 10.3 Instrument `_AgentDoFn._activate` around the bridge call with an injected `monotonic` clock (defaulting to `time.monotonic`), so no wall clock reaches the activation, the facade, or any trace byte.
-- [x] 10.4 Add a `TestPipeline` assertion that the runner surfaces the metrics (`result.metrics().query`), and re-run every gate (mutation ceilings included) over the instrumented `dofn.py`.
+- [x] 10.1 Originally: ship a small activation-latency metrics module in this change. Superseded mid-implementation when `add-runtime-metrics` (C18) merged from `main` with the full capability — `activation_ms`, `overhead_ms`, `llm_ms`, per-outcome counters, tally-at-commit; this change's duplicate module, tests, and DoFn seam were dropped in its favor during the merge.
+- [x] 10.2 Reconcile the two capabilities where they touch: `ActivationContext.run_tool` (theirs) now stages this change's `TOOL_CALL` trace event on its own `tool_index` counter; the failure routes emit this change's `ERROR` traces through their `_dead_letter` counting chokepoint; the escalation intent is counted (`intents_emitted`) and traced (`INTENT_EMITTED`) at the same site.
+- [x] 10.3 Re-run every gate on the merged tree and re-measure both baselines (per the merge-resolution convention documented in each file).
