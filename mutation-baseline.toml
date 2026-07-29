@@ -24,7 +24,28 @@
 # TTL re-arm are driven by fake state/timer handles in test_dofn_ttl.py and
 # test_dofn_hitl_timer.py, both inside the selection, which is why killed rose
 # 621 -> 624 over the same diff.
+# add-runtime-metrics moved dofn.py 267 -> 3, by far the largest move this file
+# has seen. The metrics work needed the DoFn's *element* path driven outside a
+# pipeline (a metric recorded on the async bridge thread is silently dropped by
+# Beam, so the tally has to be staged and recorded on the Beam thread, and that
+# had to be asserted). Driving `process`/`_commit` with fake state and timer
+# handles -- tests/core/_dofn_fakes.py, used by test_dofn_metrics.py and
+# test_dofn_activation.py -- put nearly all of `process`, `_start`, `_resume`,
+# `_activate`, and `_commit` inside the mutation selection for the first time.
+# Those mutants had always been unkillable-by-construction, not equivalent: the
+# behaviors were covered end to end by the TestPipeline/TestStream suites that
+# mutmut deselects. What the gate demanded once they became reachable was the
+# same assertions in runner-free form, which is what those two files are.
+# The 3 that remain are in `setup`/`teardown` lines no selected test executes.
+#
+# The same change later moved transform.py 198 -> 200: `AgentConfig` gained the
+# `tool_registry` field (supplying the tools `ctx.run_tool` executes inline) and
+# `expand` passes it to the DoFn. Both mutants sit in code only the deselected
+# TestPipeline suites reach -- the identical pattern that moved this ceiling
+# 196 -> 198 for `hitl_policy`. The field and the pass-through are covered in
+# the normal suite by test_transform.py's construction test and end to end by
+# test_dofn_pipeline.py's inline-tool pipeline run.
 [no_tests]
 "context.py" = 0
-"dofn.py" = 267
-"transform.py" = 198
+"dofn.py" = 3
+"transform.py" = 200

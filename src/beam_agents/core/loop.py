@@ -13,7 +13,8 @@ Importing this module has no side effects.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from beam_agents._protos import (
@@ -26,17 +27,20 @@ from beam_agents._protos import (
     TraceEvent,
 )
 from beam_agents.core.agent import Complete, Suspend
-from beam_agents.core.context import ActivationContext
+from beam_agents.core.context import ActivationContext, MonotonicNs
 from beam_agents.hitl import (
     DEFAULT_APPROVAL_CHANNEL,
     DEFAULT_HITL_TIMEOUT_MS,
     DEFAULT_INTENT_TTL_MS,
 )
+from beam_agents.observability.metrics import ActivationTally
 
 if TYPE_CHECKING:
     from beam_agents.core.agent import Agent
     from beam_agents.memory.facade import Compactor
     from beam_agents.model.client import LLMClient
+    from beam_agents.tools.registry import ToolRegistry
+    from beam_agents.tools.runner import ToolRunner
 
 # `DEFAULT_HITL_TIMEOUT_MS` is re-exported from `hitl` (its home, alongside the
 # rest of the HITL policy defaults) so the historical import site keeps working.
@@ -61,6 +65,11 @@ class ActivationResult:
     outputs: list[bytes]
     continuation: Continuation | None
     hitl_deadline_ms: int | None
+    #: Worker-local counts and durations for the metric recorder. Not an effect:
+    #: it is never applied to Beam state, and the DoFn reads it on the Beam
+    #: thread, where a metric update actually lands. Defaulted so historical
+    #: construction sites keep building.
+    tally: ActivationTally = field(default_factory=ActivationTally)
 
 
 async def run_activation(
@@ -81,6 +90,9 @@ async def run_activation(
     step_index: int = 0,
     intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
     approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
+    monotonic_ns: MonotonicNs = time.monotonic_ns,
+    tool_registry: ToolRegistry | None = None,
+    tool_runner: ToolRunner | None = None,
 ) -> ActivationResult:
     """Run one activation to a terminal :class:`ActivationResult`.
 
@@ -102,6 +114,9 @@ async def run_activation(
         step_index=step_index,
         intent_ttl_ms=intent_ttl_ms,
         approval_channel=approval_channel,
+        monotonic_ns=monotonic_ns,
+        tool_registry=tool_registry,
+        tool_runner=tool_runner,
     )
 
     ctx.stage_trace(
@@ -154,6 +169,7 @@ async def run_activation(
             outputs=[],
             continuation=continuation,
             hitl_deadline_ms=deadline_ms,
+            tally=ctx.tally(),
         )
 
     if not isinstance(outcome, Complete):  # pragma: no cover - defensive
@@ -170,4 +186,5 @@ async def run_activation(
         outputs=outputs,
         continuation=None,
         hitl_deadline_ms=None,
+        tally=ctx.tally(),
     )
