@@ -5,7 +5,7 @@ Four workflows under `.github/workflows/`, one per testing tier in
 
 | Workflow           | Trigger                          | Tier                          | Required for merge |
 |---------------------|-----------------------------------|--------------------------------|---------------------|
-| `ci.yml`            | push to `main`, pull request      | lint, type, unit (3.11–3.12 × ubuntu/macos) | yes |
+| `ci.yml`            | push to `main`, pull request      | lint, type, unit (3.11–3.12 × ubuntu) | yes |
 | `integration.yml`   | push to `main`, pull request      | integration + semantics (docker compose) | yes |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
 | `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation unconditionally; dataflow and provider smoke tests when credentials exist | no |
