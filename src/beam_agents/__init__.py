@@ -28,6 +28,27 @@ __all__ = [
     "Escalate",
     "FallbackContext",
     "HitlPolicy",
+    "LangGraphAgent",
     "RunAgent",
     "RunAgentOutputs",
 ]
+
+# Adapter classes are public API, but their framework dependencies are optional
+# extras: resolve them lazily so `import beam_agents` never imports a framework,
+# and absence surfaces as an ImportError naming the extra to install.
+_LANGGRAPH_DISTRIBUTIONS = ("langgraph", "langchain", "langchain_core")
+
+
+def __getattr__(name: str) -> object:
+    if name == "LangGraphAgent":
+        try:
+            from beam_agents.adapters.langgraph import LangGraphAgent
+        except ModuleNotFoundError as exc:
+            if exc.name and exc.name.partition(".")[0] in _LANGGRAPH_DISTRIBUTIONS:
+                raise ImportError(
+                    "beam_agents.LangGraphAgent requires the LangGraph adapter extra; "
+                    "install it with `pip install 'beam-agents[langgraph]'`"
+                ) from exc
+            raise
+        return LangGraphAgent
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
