@@ -491,10 +491,16 @@ def test_a_longer_intent_ttl_leaves_the_suspension_timeout_in_charge() -> None:
 
 
 def test_a_start_failure_dead_letters_the_key_reason_and_exception() -> None:
+    # The detail leads with the original exception's repr and ends with the
+    # failure-position suffix (add-failure-context).
     emitted = _Driver(raising_agent).process(_event())
 
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ERROR, repr(RuntimeError("agent blew up")))
+        ActivationError(
+            _KEY,
+            REASON_ERROR,
+            f"{RuntimeError('agent blew up')!r} failed_at_step=0 after=ACTIVATION_START",
+        )
     ]
 
 
@@ -522,8 +528,14 @@ def test_a_resume_failure_dead_letters_the_key_reason_and_exception() -> None:
 
     emitted = driver.process(_tool_result(cont.pending_intent_ids[0]))
 
+    # The cursor sits at the continuation's seed; nothing past the driver's
+    # ACTIVATION_START was staged before the raise.
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ERROR, repr(RuntimeError("resume blew up")))
+        ActivationError(
+            _KEY,
+            REASON_ERROR,
+            f"{RuntimeError('resume blew up')!r} failed_at_step=1 after=ACTIVATION_START",
+        )
     ]
     # Fail-closed: the continuation the resume was running against is untouched.
     assert driver.continuation.value == cont

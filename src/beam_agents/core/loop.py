@@ -5,8 +5,12 @@ a wall clock. It builds an :class:`~beam_agents.core.context.ActivationContext`
 from the loaded state blobs, runs the agent, and returns an
 :class:`ActivationResult` holding the staged blobs, intents, traces, and outcome.
 The stateful DoFn submits :func:`run_activation` to the async bridge and, on
-success, commits the result atomically. An exception propagates out unchanged so
-the DoFn can route the element to ``.errors`` having committed nothing.
+success, commits the result atomically. An agent failure propagates as
+:class:`ActivationFailed` — the original exception attached as the cause, plus a
+:class:`FailureContext` naming where the activation was — so the DoFn can route
+the element to ``.errors`` having committed nothing, without losing the
+position. ``CancelledError`` and other ``BaseException``s pass through
+unwrapped.
 
 Importing this module has no side effects.
 """
@@ -34,6 +38,12 @@ from beam_agents.hitl import (
     DEFAULT_INTENT_TTL_MS,
 )
 from beam_agents.observability.metrics import ActivationTally
+from beam_agents.observability.traces import (
+    FAILURE_LAST_EVENT,
+    FAILURE_LLM_CALLS,
+    FAILURE_STAGED_INTENTS,
+    FAILURE_STEP,
+)
 
 if TYPE_CHECKING:
     from beam_agents.core.agent import Agent
@@ -45,7 +55,70 @@ if TYPE_CHECKING:
 
 # `DEFAULT_HITL_TIMEOUT_MS` is re-exported from `hitl` (its home, alongside the
 # rest of the HITL policy defaults) so the historical import site keeps working.
-__all__ = ["DEFAULT_HITL_TIMEOUT_MS", "ActivationResult", "run_activation"]
+__all__ = [
+    "DEFAULT_HITL_TIMEOUT_MS",
+    "ActivationFailed",
+    "ActivationResult",
+    "FailureContext",
+    "run_activation",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class FailureContext:
+    """Where a failed activation was when its agent raised.
+
+    Four scalars, each a pure function of the activation's deterministic walk —
+    cursor advances, staged lists, the tally's call count — never a clock or the
+    discarded payloads, so a replayed bundle that fails identically reports a
+    byte-identical position. This is position metadata *about* the rolled-back
+    context, never its contents: no staged event, intent, output, or blob rides
+    along (correctness invariant 1 is untouched).
+    """
+
+    #: The intent-step cursor at failure.
+    step_index: int
+    #: ``EventType`` name of the last staged trace event, ``""`` if none.
+    last_event: str
+    #: Count of staged intents.
+    staged_intents: int
+    #: Provider-reached model calls (a cache hit is not a call).
+    llm_calls: int
+
+    def trace_attributes(self) -> dict[str, str]:
+        """The `beam_agents.failure.*` attributes for the ERROR trace event."""
+        return {
+            FAILURE_STEP: str(self.step_index),
+            FAILURE_LAST_EVENT: self.last_event,
+            FAILURE_STAGED_INTENTS: str(self.staged_intents),
+            FAILURE_LLM_CALLS: str(self.llm_calls),
+        }
+
+    def detail_suffix(self) -> str:
+        """The dead-letter detail tail, appended after the cause's ``repr``.
+
+        Built from the same fields as :meth:`trace_attributes`, so the two
+        records cannot disagree about the position.
+        """
+        return f" failed_at_step={self.step_index} after={self.last_event}"
+
+
+class ActivationFailed(Exception):
+    """An agent raise wrapped with its failure position, raised ``from`` it.
+
+    Runtime-internal: agents never see it (they are inside the wrap), and the
+    stateful DoFn consumes it immediately — reading :attr:`context` and
+    ``__cause__`` — to build the ``activation_error`` dead letter and ERROR
+    trace event. Wraps ``Exception`` only; ``CancelledError`` and other
+    ``BaseException``s pass through untouched so the bridge's cancellation
+    semantics are unchanged.
+    """
+
+    def __init__(self, context: FailureContext) -> None:
+        super().__init__(
+            f"activation failed at step {context.step_index} after {context.last_event}"
+        )
+        self.context = context
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,8 +171,11 @@ async def run_activation(
 ) -> ActivationResult:
     """Run one activation to a terminal :class:`ActivationResult`.
 
-    Raises whatever the agent raises (or a provider error); the caller commits
-    nothing on failure, preserving the atomic-commit invariant.
+    An agent raise (or a provider error) surfaces as :class:`ActivationFailed`,
+    raised ``from`` the original and carrying a :class:`FailureContext` naming
+    where the activation was; the caller commits nothing on failure, preserving
+    the atomic-commit invariant. Only ``Exception`` is wrapped — cancellation
+    and other ``BaseException``s propagate untouched.
     """
     ctx = ActivationContext(
         entity_key=entity_key,
@@ -122,72 +198,90 @@ async def run_activation(
         tool_runner=tool_runner,
     )
 
-    # The attempt's activation span, taken from the context rather than rebuilt:
-    # a second `ActivationTrace` with the same inputs would be a second source of
-    # truth for identity, free to drift from the one the child events use. A
-    # resume shares the suspended activation's `seq`, so it recomputes the same
-    # trace ID and hangs its own span under the initial attempt's (design D2).
-    trace = ctx.trace
-    ctx.stage_trace(trace.activation_start())
+    # Everything after context construction runs inside the failure wrap:
+    # `Exception` only (never `CancelledError` or any other `BaseException`,
+    # which would corrupt the bridge's cancellation semantics), and the context
+    # exists before the `try`, so the position is always readable in the
+    # `except`. Failures before this point reach the DoFn un-enriched via its
+    # generic fallback — correct, since there is no position to report.
+    try:
+        # The attempt's activation span, taken from the context rather than
+        # rebuilt: a second `ActivationTrace` with the same inputs would be a
+        # second source of truth for identity, free to drift from the one the
+        # child events use. A resume shares the suspended activation's `seq`,
+        # so it recomputes the same trace ID and hangs its own span under the
+        # initial attempt's (design D2).
+        trace = ctx.trace
+        ctx.stage_trace(trace.activation_start())
 
-    outcome = await agent(ctx)
+        outcome = await agent(ctx)
 
-    if isinstance(outcome, Suspend):
-        timeout_deadline_ms = now_ms + (
-            outcome.timeout_ms if outcome.timeout_ms is not None else default_hitl_timeout_ms
-        )
-        # The earliest of the suspension timeout and the staged intents'
-        # expiries. Past an intent's expiry the effector refuses it, so no
-        # result can ever arrive; waiting out a longer timeout would be a
-        # fail-open stall. Both layers then agree on one moment after which
-        # nothing is resumable.
-        deadline_ms = min(
-            [timeout_deadline_ms] + [intent.expires_at_ms for intent in ctx.staged_intents]
-        )
-        continuation = ctx.build_continuation(
-            snapshot=outcome.snapshot,
-            adapter=outcome.adapter,
-            deadline_ms=deadline_ms,
-        )
-        # What the suspension is waiting on, and until when: the state an
-        # operator most wants to see, so it gets its own event rather than
-        # living only in an ACTIVATION_END attribute (design D6).
-        ctx.stage_trace(
-            trace.suspended(
-                step_index=ctx.step_index,
-                deadline_ms=deadline_ms,
-                adapter=outcome.adapter,
-                pending_intent_ids=tuple(continuation.pending_intent_ids),
+        if isinstance(outcome, Suspend):
+            timeout_deadline_ms = now_ms + (
+                outcome.timeout_ms if outcome.timeout_ms is not None else default_hitl_timeout_ms
             )
-        )
-        ctx.stage_trace(trace.activation_end(status="suspended", step_index=ctx.step_index))
+            # The earliest of the suspension timeout and the staged intents'
+            # expiries. Past an intent's expiry the effector refuses it, so no
+            # result can ever arrive; waiting out a longer timeout would be a
+            # fail-open stall. Both layers then agree on one moment after which
+            # nothing is resumable.
+            deadline_ms = min(
+                [timeout_deadline_ms] + [intent.expires_at_ms for intent in ctx.staged_intents]
+            )
+            continuation = ctx.build_continuation(
+                snapshot=outcome.snapshot,
+                adapter=outcome.adapter,
+                deadline_ms=deadline_ms,
+            )
+            # What the suspension is waiting on, and until when: the state an
+            # operator most wants to see, so it gets its own event rather than
+            # living only in an ACTIVATION_END attribute (design D6).
+            ctx.stage_trace(
+                trace.suspended(
+                    step_index=ctx.step_index,
+                    deadline_ms=deadline_ms,
+                    adapter=outcome.adapter,
+                    pending_intent_ids=tuple(continuation.pending_intent_ids),
+                )
+            )
+            ctx.stage_trace(trace.activation_end(status="suspended", step_index=ctx.step_index))
+            return ActivationResult(
+                status="suspended",
+                seq=seq,
+                memory_blob=ctx.memory_blob(),
+                cache_blob=ctx.cache_blob(),
+                intents=list(ctx.staged_intents),
+                traces=list(ctx.staged_traces),
+                outputs=[],
+                continuation=continuation,
+                hitl_deadline_ms=deadline_ms,
+                tally=ctx.tally(),
+            )
+
+        if not isinstance(outcome, Complete):  # pragma: no cover - defensive
+            raise TypeError(f"agent returned a non-Outcome value: {outcome!r}")
+
+        ctx.stage_trace(trace.activation_end(status="completed", step_index=ctx.step_index))
+        outputs = [outcome.output] if outcome.output else []
         return ActivationResult(
-            status="suspended",
+            status="completed",
             seq=seq,
             memory_blob=ctx.memory_blob(),
             cache_blob=ctx.cache_blob(),
             intents=list(ctx.staged_intents),
             traces=list(ctx.staged_traces),
-            outputs=[],
-            continuation=continuation,
-            hitl_deadline_ms=deadline_ms,
+            outputs=outputs,
+            continuation=None,
+            hitl_deadline_ms=None,
             tally=ctx.tally(),
         )
-
-    if not isinstance(outcome, Complete):  # pragma: no cover - defensive
-        raise TypeError(f"agent returned a non-Outcome value: {outcome!r}")
-
-    ctx.stage_trace(trace.activation_end(status="completed", step_index=ctx.step_index))
-    outputs = [outcome.output] if outcome.output else []
-    return ActivationResult(
-        status="completed",
-        seq=seq,
-        memory_blob=ctx.memory_blob(),
-        cache_blob=ctx.cache_blob(),
-        intents=list(ctx.staged_intents),
-        traces=list(ctx.staged_traces),
-        outputs=outputs,
-        continuation=None,
-        hitl_deadline_ms=None,
-        tally=ctx.tally(),
-    )
+    except Exception as exc:
+        staged = ctx.staged_traces
+        raise ActivationFailed(
+            FailureContext(
+                step_index=ctx.step_index,
+                last_event=(TraceEvent.EventType.Name(staged[-1].event_type) if staged else ""),
+                staged_intents=len(ctx.staged_intents),
+                llm_calls=ctx.tally().llm_calls,
+            )
+        ) from exc

@@ -13,4 +13,7 @@
 # side. The two changes' fake-handle DoFn suites overlap heavily (both drove
 # `process`/`_start`/`_resume`/`_commit` for the first time), so the union is
 # not additive. Measured on the combined tree: 0.9416.
-branch_rate = 0.9416
+#
+# add-failure-context: 0.9418 (the wrapper and the enriched DoFn route are
+# fully branch-covered by the loop and fake-handle suites).
+branch_rate = 0.9418
