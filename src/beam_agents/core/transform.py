@@ -44,6 +44,7 @@ from beam_agents.actions.write_intents import (
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.hitl import HitlPolicy
+from beam_agents.observability import serialize_trace_event, trace_event_to_row
 from beam_agents.tools import ToolRegistry
 
 if TYPE_CHECKING:
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 
     from beam_agents.core.agent import Agent
     from beam_agents.model.client import LLMClient
+    from beam_agents.model.facade import Decode
 
 # Output tags. ``output`` is the main (untagged) output.
 INTENTS_TAG = "intents"
@@ -109,6 +111,30 @@ class _KeyedWriteIntents(beam.PTransform):
         return keyed | WriteIntents(self._uri)
 
 
+class _WriteTraces(beam.PTransform):
+    """Encodes ``TraceEvent``s for ``sink``'s scheme, then writes them.
+
+    ``.traces`` is a ``PCollection[TraceEvent]`` and none of the write
+    transforms accept a proto message, so without this step a configured
+    ``traces_to`` fails at runtime (design D9). Kafka/Pub/Sub take keyed
+    deterministic bytes; BigQuery takes a row mapping.
+    """
+
+    def __init__(self, sink: beam.PTransform, *, to_row: bool) -> None:
+        super().__init__()
+        self._sink = sink
+        self._to_row = to_row
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        if self._to_row:
+            encoded = pcoll | "TraceEventToRow" >> beam.Map(trace_event_to_row)
+        else:
+            encoded = pcoll | "SerializeTraceEvent" >> beam.Map(
+                serialize_trace_event
+            ).with_output_types(tuple[bytes, bytes])
+        return encoded | "WriteEncodedTraces" >> self._sink
+
+
 class DefaultSinkResolver:
     """Resolves ``kafka://``, ``pubsub://``, and ``bigquery://`` sink URIs.
 
@@ -138,6 +164,11 @@ class DefaultSinkResolver:
         scheme, parts = self._parse("<sink>", uri)
         if field_name == "intents_to" and scheme in ("kafka", "pubsub"):
             return _KeyedWriteIntents(uri)
+        if field_name == "traces_to":
+            return _WriteTraces(self._write_transform(scheme, parts), to_row=scheme == "bigquery")
+        return self._write_transform(scheme, parts)
+
+    def _write_transform(self, scheme: str, parts: tuple[str, ...]) -> beam.PTransform:
         if scheme == "kafka":
             from apache_beam.io.kafka import WriteToKafka
 
@@ -199,6 +230,11 @@ class AgentConfig:
     """
 
     provider_factory: Callable[[], LLMClient]
+    # The provider's paired response decoder (e.g. `model.anthropic_decode`).
+    # Optional, and unset means "token counts unknown": the LLM_CALL traces
+    # then omit their usage attributes rather than report zeros, which anything
+    # summing them would read as real (design D4).
+    decode: Decode | None = field(default=None, kw_only=True)
     activation_timeout_s: float = field(default=_DEFAULT_ACTIVATION_TIMEOUT_S, kw_only=True)
     ttl_ms: int = field(default=_DEFAULT_TTL_MS, kw_only=True)
     cancel_grace_s: float = field(default=_DEFAULT_CANCEL_GRACE_S, kw_only=True)
@@ -279,6 +315,7 @@ class RunAgent(beam.PTransform):
             ttl_ms=self._config.ttl_ms,
             cancel_grace_s=self._config.cancel_grace_s,
             hitl_policy=self._config.hitl_policy,
+            decode=self._config.decode,
             tool_registry=self._config.tool_registry,
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(

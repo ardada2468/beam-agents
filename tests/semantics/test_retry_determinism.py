@@ -24,10 +24,11 @@ from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that
 from apache_beam.transforms.window import TimestampedValue
 
-from beam_agents._protos import AgentEnvelope, ToolResult, TraceEvent
+from beam_agents._protos import AgentEnvelope, ToolIntent, ToolResult, TraceEvent
 from beam_agents.core.agent import intent_id_for
 from beam_agents.core.loop import ActivationResult
 from beam_agents.core.transform import AgentConfig, RunAgent
+from beam_agents.observability import trace_id_for
 from beam_agents.observability.metrics import NAMESPACE
 from beam_agents.testing.chaos import fail_first_matching_commit
 from tests.core._dofn_helpers import keyed, make_pong_provider
@@ -41,6 +42,9 @@ _SEQ = 0
 # step_index=1. These are pure functions of call order, per agent-context.
 _INTENT_STEP_INDEX = 1
 _EXPECTED_INTENT_ID = intent_id_for(_ENTITY_KEY, _SEQ, _INTENT_STEP_INDEX)
+# Derived from the activation scope alone, so suspend and resume — which
+# share `seq` — land in the same trace with nothing carried on the wire.
+_EXPECTED_TRACE_ID = trace_id_for(_ENTITY_KEY, _SEQ)
 
 
 def _streaming_pipeline() -> BeamTestPipeline:
@@ -102,6 +106,46 @@ def _check_committed_intent(actual: object) -> None:
     assert intent.intent_id == _EXPECTED_INTENT_ID
     assert intent.seq == _SEQ
     assert intent.step_index == _INTENT_STEP_INDEX
+    # The intent's whole encoding is the determinism claim, not just its ID:
+    # `trace_id` rides on it now, and a non-deterministic one would make a
+    # retried bundle's intents differ byte-for-byte while every field the
+    # earlier assertions look at still matched.
+    assert intent.trace_id == _EXPECTED_TRACE_ID
+    assert intent.SerializeToString(deterministic=True) == _expected_intent_bytes(intent)
+
+
+def _expected_intent_bytes(intent: object) -> bytes:
+    """Re-mint the intent from its own scope and encode it.
+
+    Independent of the committed message: everything here is derived from
+    `(entity_key, seq, step_index)` and the agent's own arguments, so a match
+    proves the commit was reproducible rather than merely self-consistent.
+    """
+    expected = ToolIntent(
+        intent_id=_EXPECTED_INTENT_ID,
+        entity_key=_ENTITY_KEY,
+        seq=_SEQ,
+        step_index=_INTENT_STEP_INDEX,
+        tool_name=intent.tool_name,  # type: ignore[attr-defined]
+        args_json=intent.args_json,  # type: ignore[attr-defined]
+        created_at_ms=intent.created_at_ms,  # type: ignore[attr-defined]
+        expires_at_ms=intent.expires_at_ms,  # type: ignore[attr-defined]
+        attempt=0,
+        kind=intent.kind,  # type: ignore[attr-defined]
+        trace_id=_EXPECTED_TRACE_ID,
+    )
+    return expected.SerializeToString(deterministic=True)
+
+
+def _check_one_trace_spans_the_suspension(actual: object) -> None:
+    """Every event of the suspend/resume cycle shares one trace ID.
+
+    The resume runs under the suspended activation's `seq`, so it recomputes
+    the same trace with nothing carried on the wire — including across the
+    chaos-forced retry, which re-emits byte-identical events.
+    """
+    trace_ids = {event.trace_id for event in actual}  # type: ignore[attr-defined]
+    assert trace_ids == {_EXPECTED_TRACE_ID}, f"expected one trace, got {trace_ids!r}"
 
 
 def test_chaos_forced_resume_retry_adds_zero_calls_and_commits_deterministic_intent() -> None:
@@ -126,6 +170,7 @@ def test_chaos_forced_resume_retry_adds_zero_calls_and_commits_deterministic_int
         assert_that(out.errors, _check_no_errors, label="errors")
         assert_that(out.intents, _check_committed_intent, label="intents")
         assert_that(out.traces, _assert_zero_additional_calls, label="traces")
+        assert_that(out.traces, _check_one_trace_spans_the_suspension, label="trace-id")
 
 
 def test_measurement_does_not_change_what_a_retried_bundle_commits() -> None:

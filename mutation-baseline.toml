@@ -24,6 +24,17 @@
 # TTL re-arm are driven by fake state/timer handles in test_dofn_ttl.py and
 # test_dofn_hitl_timer.py, both inside the selection, which is why killed rose
 # 621 -> 624 over the same diff.
+# Merge resolution (add-trace-events vs add-runtime-metrics): both changes
+# independently drove `process`/`_start`/`_resume`/`_commit` with fake handles
+# from inside the mutation selection — trace-events via
+# test_dofn_failure_traces.py/test_dofn_commit.py, runtime-metrics via
+# test_dofn_metrics.py/test_dofn_activation.py — and both landed dofn.py at 3.
+# trace-events additionally moved transform.py 198 -> 240 for `_WriteTraces`
+# and the `traces_to` resolve branch (deselected-suite-only code, covered by
+# tests/observability/test_exporters.py and test_transform.py's pipeline run);
+# runtime-metrics moved the same ceiling 198 -> 200 for `tool_registry`.
+# The combined tree is re-measured; ceilings below are from that measurement.
+#
 # add-runtime-metrics moved dofn.py 267 -> 3, by far the largest move this file
 # has seen. The metrics work needed the DoFn's *element* path driven outside a
 # pipeline (a metric recorded on the async bridge thread is silently dropped by
@@ -48,4 +59,4 @@
 [no_tests]
 "context.py" = 0
 "dofn.py" = 3
-"transform.py" = 200
+"transform.py" = 242

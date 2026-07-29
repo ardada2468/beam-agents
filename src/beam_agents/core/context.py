@@ -53,6 +53,14 @@ from beam_agents.model.facade import (
     TokenUsage,
 )
 from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
+from beam_agents.observability import (
+    CACHE_HIT,
+    OPERATION_CHAT,
+    OPERATION_NAME,
+    REQUEST_MODEL,
+    ActivationTrace,
+    usage_attributes,
+)
 from beam_agents.observability.metrics import ActivationTally
 from beam_agents.tools.registry import ToolRegistry
 from beam_agents.tools.runner import ToolRunner
@@ -147,7 +155,16 @@ class AgentContext:
             staging=self,
         )
 
+        # The activation's trace. Every event staged through this context is
+        # stamped with it (design D3), so the facade and the tool path stay
+        # ignorant of tracing.
+        self._trace = ActivationTrace(entity_key=entity_key, seq=seq, now_ms=now_ms)
+
         self._step_index = 0
+        # Read-only tool calls get a counter of their own: advancing
+        # `_step_index` would change the `intent_id`s this activation goes on to
+        # mint (design D8).
+        self._tool_index = 0
         self._intents: list[ToolIntent] = []
         self._traces: list[TraceEvent] = []
         self._outputs: list[object] = []
@@ -230,6 +247,7 @@ class AgentContext:
             allow_nan=False,
         )
         intent_id = intent_id_for(self._entity_key, self._seq, step_index)
+        expires_at_ms = self._now_ms + ttl_ms
         self._intents.append(
             ToolIntent(
                 intent_id=intent_id,
@@ -239,8 +257,21 @@ class AgentContext:
                 tool_name=tool_name,
                 args_json=args_json,
                 created_at_ms=self._now_ms,
-                expires_at_ms=self._now_ms + ttl_ms,
+                expires_at_ms=expires_at_ms,
                 kind=kind,
+                # Carries the trace across the one hop the effector breaks:
+                # it consumes intents off a topic, so without this the
+                # execution can never be joined back to the activation.
+                trace_id=self._trace.trace_id,
+            )
+        )
+        self._traces.append(
+            self._trace.intent_emitted(
+                step_index=step_index,
+                intent_id=intent_id,
+                tool_name=tool_name,
+                intent_kind=ToolIntent.Kind.Name(kind),
+                expires_at_ms=expires_at_ms,
             )
         )
         self._step_index += 1
@@ -253,14 +284,26 @@ class AgentContext:
 
         Reuses `ToolRunner.run`'s existing guard: a `side_effect=True` tool
         raises `SideEffectToolError` rather than executing.
+
+        Traced as a `TOOL_CALL` child event, but deliberately *not* counted
+        against the intent step cursor (design D8).
         """
         tool = self._tool_registry.get(tool_name)
         value = await self._tool_runner.run(tool, arguments)
-        # Counted after the call returns, so a refused side-effect tool (or a
-        # failing one) is not counted as an execution. This is the only site
-        # where a tool actually runs inside the pipeline; side-effecting tools
-        # leave as intents and are counted by `intents_emitted`.
+        # Counted and traced after the call returns, so a refused side-effect
+        # tool (or a failing one) is neither counted as an execution nor traced
+        # as one. This is the only authoring-surface site where a tool actually
+        # runs inside the pipeline; side-effecting tools leave as intents and
+        # are counted by `intents_emitted`.
         self._tally.tool_calls += 1
+        self._traces.append(
+            self._trace.tool_call(
+                step_index=self._step_index,
+                tool_index=self._tool_index,
+                tool_name=tool_name,
+            )
+        )
+        self._tool_index += 1
         return value
 
     # -- outputs --------------------------------------------------------------
@@ -272,7 +315,13 @@ class AgentContext:
     # -- StagingSink (consumed by the model facade) --------------------------
 
     def stage_trace_event(self, event: TraceEvent) -> None:
-        self._traces.append(event)
+        """Correlate the event against this activation's trace, then stage it.
+
+        Correlation happens here rather than in the producer (design D3): only
+        empty identity fields are filled, so the facade needs no trace
+        parameters and any future producer is correlated for free.
+        """
+        self._traces.append(self._trace.stamp(event))
 
     def accumulate_usage(self, usage: TokenUsage) -> None:
         self._prompt_tokens += usage.prompt_tokens
@@ -344,6 +393,7 @@ class ActivationContext:
         step_index: int = 0,
         intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
         approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
+        decode: Decode | None = None,
         monotonic_ns: MonotonicNs = time.monotonic_ns,
         tool_registry: ToolRegistry | None = None,
         tool_runner: ToolRunner | None = None,
@@ -361,6 +411,20 @@ class ActivationContext:
         self._replay_cache = ReplayCache(cache_blob, now_ms=now_ms)
         self._intent_ttl_ms = intent_ttl_ms
         self._approval_channel = approval_channel
+        # Optional: without it the token counts of a call are genuinely
+        # unknown, and the trace omits them rather than reporting zeros (D4).
+        self._decode = decode
+
+        # A resume shares the suspended activation's `seq`, so it recomputes the
+        # same trace ID with nothing carried on the wire (D2); its own span is
+        # distinguished by the step index it entered at.
+        self._trace = ActivationTrace(
+            entity_key=entity_key,
+            seq=seq,
+            now_ms=now_ms,
+            entry_step_index=step_index,
+            is_resume=resume_result is not None or resume_approval is not None,
+        )
 
         # Seeded from the resumed Continuation's step_index, not reset to 0: a
         # resumed activation shares its suspended activation's `seq`, so
@@ -371,6 +435,10 @@ class ActivationContext:
         # read off the cursor: a resume must report its own steps, not the
         # suspended activation's as well.
         self._start_step_index = step_index
+        # Read-only tool calls get a counter of their own: advancing
+        # `_step_index` would change the `intent_id`s this activation goes on
+        # to mint (design D8). Used only for span derivation.
+        self._tool_index = 0
         self._intents: list[ToolIntent] = []
         self._traces: list[TraceEvent] = []
         self._monotonic_ns = monotonic_ns
@@ -384,6 +452,14 @@ class ActivationContext:
     def memory(self) -> Memory:
         """Working-memory facade; writes are staged until commit."""
         return self._memory
+
+    @property
+    def trace(self) -> ActivationTrace:
+        """This activation's trace — the one the loop driver builds its
+        activation events from, so the bracket and the child events cannot
+        disagree about identity.
+        """
+        return self._trace
 
     @property
     def is_resume(self) -> bool:
@@ -408,11 +484,18 @@ class ActivationContext:
         cached = self._replay_cache.get(cache_key)
         if cached is not None and not cached.digest_only:
             # A hit is not a call: it neither counts nor contributes a duration
-            # sample. Counting it would inflate `llm_calls` (the cost and
-            # rate-limit signal) and its microsecond duration would drag
-            # `llm_ms` toward the cache-hit ratio instead of provider latency.
-            # The clock is not even read here.
-            self._stage_llm_trace(step, cache_hit=True, model_id=request.model_id)
+            # sample (counting would inflate `llm_calls`, and its microsecond
+            # duration would drag `llm_ms` toward the cache-hit ratio; the
+            # clock is not even read here). Its *trace*, though, decodes the
+            # stored response, which is what makes a cache hit's token counts
+            # true rather than absent (D4) — still marked unbilled, because no
+            # provider call happened this time.
+            self._stage_llm_trace(
+                step,
+                cache_hit=True,
+                model_id=request.model_id,
+                response=cached.response,
+            )
             return LlmResponse(cached.response)
 
         started_ns = self._monotonic_ns()
@@ -423,7 +506,9 @@ class ActivationContext:
         # same site, so the sample count always equals `llm_calls`.
         self._tally.llm_calls += 1
         self._tally.llm_ms.append(elapsed_ns // _NS_PER_MS)
-        self._stage_llm_trace(step, cache_hit=False, model_id=request.model_id)
+        self._stage_llm_trace(
+            step, cache_hit=False, model_id=request.model_id, response=response.response
+        )
         return response
 
     async def run_tool(self, tool_name: str, arguments: Mapping[str, object]) -> object:
@@ -437,8 +522,11 @@ class ActivationContext:
 
         Deliberately does NOT advance the step cursor: the cursor mints intent
         IDs and orders replay-cache entries, and an inline read-only call must
-        not perturb either. The wall time is measured with the injected clock
-        so ``overhead_ms`` can exclude tool time alongside model time.
+        not perturb either — the `TOOL_CALL` trace event rides its own
+        `tool_index` counter instead (design D8). The wall time is measured
+        with the injected clock so ``overhead_ms`` can exclude tool time
+        alongside model time; the trace event's timestamps stay on the
+        activation clock, like every trace byte.
         """
         tool = self._tool_registry.get(tool_name)
         started_ns = self._monotonic_ns()
@@ -446,6 +534,14 @@ class ActivationContext:
         elapsed_ns = self._monotonic_ns() - started_ns
         self._tally.tool_calls += 1
         self._tally.tool_ms.append(elapsed_ns // _NS_PER_MS)
+        self._traces.append(
+            self._trace.tool_call(
+                step_index=self._step_index,
+                tool_index=self._tool_index,
+                tool_name=tool_name,
+            )
+        )
+        self._tool_index += 1
         return value
 
     def act(self, tool_name: str, args_json: str, *, ttl_ms: int | None = None) -> str:
@@ -489,6 +585,7 @@ class ActivationContext:
     ) -> str:
         step = self._advance_step()
         intent_id = intent_id_for(self.entity_key, self.seq, step)
+        expires_at_ms = self.now_ms + (ttl_ms if ttl_ms is not None else self._intent_ttl_ms)
         self._intents.append(
             ToolIntent(
                 intent_id=intent_id,
@@ -498,21 +595,38 @@ class ActivationContext:
                 tool_name=tool_name,
                 args_json=args_json,
                 created_at_ms=self.now_ms,
-                expires_at_ms=self.now_ms + (ttl_ms if ttl_ms is not None else self._intent_ttl_ms),
+                expires_at_ms=expires_at_ms,
                 attempt=0,
                 kind=kind,
+                # Carries the trace across the one hop the effector breaks: it
+                # consumes intents off a topic, so without this the execution
+                # can never be joined back to the activation.
+                trace_id=self._trace.trace_id,
+            )
+        )
+        self._traces.append(
+            self._trace.intent_emitted(
+                step_index=step,
+                intent_id=intent_id,
+                tool_name=tool_name,
+                intent_kind=ToolIntent.Kind.Name(kind),
+                expires_at_ms=expires_at_ms,
             )
         )
         return intent_id
 
     def stage_trace(self, event: TraceEvent) -> None:
         """Stage a trace event for emission on ``.traces`` at commit."""
-        self._traces.append(event)
+        self._traces.append(self._trace.stamp(event))
 
     # -- StagingSink protocol (model facade) ----------------------------------
 
     def stage_trace_event(self, event: TraceEvent) -> None:
-        self._traces.append(event)
+        """Correlate the event against this activation's trace, then stage it.
+
+        Correlation happens here rather than in the producer (design D3).
+        """
+        self._traces.append(self._trace.stamp(event))
 
     def accumulate_usage(self, usage: TokenUsage) -> None:
         """Accumulate decoded provider usage into the activation's tally.
@@ -591,18 +705,36 @@ class ActivationContext:
         self._step_index += 1
         return step
 
-    def _stage_llm_trace(self, step: int, *, cache_hit: bool, model_id: str) -> None:
-        self._traces.append(
+    def _stage_llm_trace(
+        self, step: int, *, cache_hit: bool, model_id: str, response: bytes
+    ) -> None:
+        attributes = {
+            OPERATION_NAME: OPERATION_CHAT,
+            REQUEST_MODEL: model_id,
+            CACHE_HIT: "true" if cache_hit else "false",
+            # A hit re-serves tokens already paid for; only a provider call is
+            # billed. Both report their real counts (D4).
+            **usage_attributes(self._decoded_usage(response), billed=not cache_hit),
+        }
+        self.stage_trace_event(
             TraceEvent(
                 entity_key=self.entity_key,
                 seq=self.seq,
                 step_index=step,
                 event_type=TraceEvent.LLM_CALL,
-                attributes={
-                    "gen_ai.request.model": model_id,
-                    "beam_agents.cache_hit": "true" if cache_hit else "false",
-                },
+                attributes=attributes,
                 start_ms=self.now_ms,
                 end_ms=self.now_ms,
             )
         )
+
+    def _decoded_usage(self, response: bytes) -> TokenUsage | None:
+        """The response's token usage, or ``None`` when it cannot be known.
+
+        No configured ``decode`` means unknown, not zero: the caller omits the
+        usage attributes entirely rather than reporting a count that would be
+        summed as real.
+        """
+        if self._decode is None:
+            return None
+        return self._decode(response).usage

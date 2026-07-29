@@ -15,7 +15,7 @@ import apache_beam as beam
 import pytest
 from apache_beam.utils.timestamp import Timestamp
 
-from beam_agents._protos import Continuation, ToolIntent
+from beam_agents._protos import Continuation, ToolIntent, TraceEvent
 from beam_agents.core.agent import Complete, FallbackContext, intent_id_for
 from beam_agents.core.context import ActivationContext
 from beam_agents.core.dofn import (
@@ -27,6 +27,12 @@ from beam_agents.core.dofn import (
 )
 from beam_agents.hitl import Deny, Drop, Escalate, HitlPolicy, Route
 from beam_agents.model.fake import FakeLLM
+from beam_agents.observability import (
+    ROLE_ACTIVATION,
+    ROLE_TIMER,
+    span_id_for,
+    trace_id_for,
+)
 
 _KEY = b"k"
 _DEADLINE_MS = 2_000
@@ -128,6 +134,23 @@ def _fire(
     return emitted, continuation, bag, timer
 
 
+def _is_trace(element: Any) -> bool:
+    return isinstance(element, beam.pvalue.TaggedOutput) and element.tag == "traces"
+
+
+def outputs(emitted: list[Any]) -> list[Any]:
+    """Everything the callback emitted except its `.traces` records.
+
+    Every route that ends a wait also traces it, so the routing assertions
+    below stay about routing.
+    """
+    return [element for element in emitted if not _is_trace(element)]
+
+
+def traces(emitted: list[Any]) -> list[TraceEvent]:
+    return [element.value for element in emitted if _is_trace(element)]
+
+
 # --- Requirement: the timer dispatches a pure policy fallback -----------------
 
 
@@ -146,7 +169,7 @@ def test_policy_receives_kind_timer_and_the_expired_handle() -> None:
     seen: list[FallbackContext] = []
     emitted, _, _, _ = _fire(_dofn(_capturing(seen)), cont=_continuation(), fired_at_ms=2_500)
 
-    assert emitted == [b"denied"]
+    assert outputs(emitted) == [b"denied"]
     assert seen == [
         FallbackContext(
             entity_key=_KEY,
@@ -169,8 +192,7 @@ def test_a_raising_policy_fails_closed_to_the_errors_output() -> None:
         _dofn(HitlPolicy(on_timeout=boom)), cont=_continuation()
     )
 
-    assert len(emitted) == 1
-    error = emitted[0]
+    (error,) = outputs(emitted)
     assert isinstance(error, beam.pvalue.TaggedOutput)
     assert error.tag == "errors"
     assert error.value.reason == REASON_HITL_TIMEOUT
@@ -215,7 +237,7 @@ def test_a_fire_with_no_continuation_is_a_no_op() -> None:
 def test_a_fire_exactly_at_the_deadline_runs_the_fallback() -> None:
     # Scenario: A fire exactly at the deadline is live, not stale.
     emitted, _, _, _ = _fire(_dofn(), cont=_continuation(), fired_at_ms=_DEADLINE_MS)
-    assert emitted == [HITL_TIMEOUT_OUTPUT]
+    assert outputs(emitted) == [HITL_TIMEOUT_OUTPUT]
 
 
 # --- Requirement: HitlPolicy routes a timeout to deny, drop, or escalate ------
@@ -225,7 +247,7 @@ def test_default_policy_denies_with_the_runtime_timeout_output() -> None:
     # Scenario: The default policy preserves existing behavior.
     emitted, cont_state, bag, timer = _fire(_dofn(), cont=_continuation())
 
-    assert emitted == [HITL_TIMEOUT_OUTPUT]
+    assert outputs(emitted) == [HITL_TIMEOUT_OUTPUT]
     assert cont_state.value is None
     assert bag.cleared is True
     assert timer.cleared is True
@@ -238,7 +260,7 @@ def test_deny_emits_its_bytes_and_clears_the_continuation() -> None:
 
     emitted, cont_state, bag, _ = _fire(_dofn(HitlPolicy(on_timeout=route)), cont=_continuation())
 
-    assert emitted == [b"degraded-answer"]
+    assert outputs(emitted) == [b"degraded-answer"]
     assert cont_state.value is None
     assert bag.cleared is True
 
@@ -250,17 +272,88 @@ def test_drop_routes_the_timeout_to_errors_with_no_main_output() -> None:
 
     emitted, cont_state, bag, _ = _fire(_dofn(HitlPolicy(on_timeout=route)), cont=_continuation())
 
-    assert len(emitted) == 1
-    assert isinstance(emitted[0], beam.pvalue.TaggedOutput)
-    assert emitted[0].value.reason == "gave_up"
-    assert emitted[0].value.entity_key == _KEY
-    assert emitted[0].value.detail == "seq=3"
+    (dropped,) = outputs(emitted)
+    assert isinstance(dropped, beam.pvalue.TaggedOutput)
+    assert dropped.value.reason == "gave_up"
+    assert dropped.value.entity_key == _KEY
+    assert dropped.value.detail == "seq=3"
     assert cont_state.value is None
     assert bag.cleared is True
 
 
+# --- Requirement: Failure routes emit ERROR trace events ---------------------
+
+
+def test_a_hitl_timeout_is_traced_in_the_suspended_activations_trace() -> None:
+    # Scenario: A HITL timeout is traced. The wait ended without an answer, on
+    # both the deny and the drop route, and the trace says so in the trace the
+    # suspended activation's own events are already in.
+    def dropped(fallback: FallbackContext) -> Route:
+        return Drop("gave_up")
+
+    for policy in (_dofn(), _dofn(HitlPolicy(on_timeout=dropped))):
+        emitted, _, _, _ = _fire(policy, cont=_continuation(), fired_at_ms=2_500)
+
+        (trace,) = traces(emitted)
+        assert trace.event_type == TraceEvent.ERROR
+        assert trace.attributes["beam_agents.reason"] == REASON_HITL_TIMEOUT
+        assert trace.trace_id == trace_id_for(_KEY, 3)
+        assert trace.start_ms == 2_500
+        # The `timer` role: fired outside any activation, so its span must not
+        # collide with a step the activation itself may have traced.
+        assert trace.span_id == span_id_for(_KEY, 3, ROLE_TIMER, 0)
+
+
+def test_a_stale_timer_handle_emits_no_trace() -> None:
+    # A no-op route must stay a no-op: manufacturing a trace for a handle that
+    # was superseded would report a timeout that never happened.
+    emitted, _, _, _ = _fire(_dofn(), cont=_continuation(), fired_at_ms=_DEADLINE_MS - 1)
+    assert traces(emitted) == []
+
+
 def _escalate(fallback: FallbackContext) -> Route:
     return Escalate(tool_name="pager", args_json='{"level":2}', timeout_ms=5_000)
+
+
+def test_an_escalation_intent_is_traced_and_carries_the_trace_id() -> None:
+    # Scenario: An escalation intent is traced from the timer callback.
+    # Scenario: An escalation intent carries the suspended activation's trace id.
+    policy = HitlPolicy(on_timeout=_escalate, max_escalations=2)
+    emitted, _, _, _ = _fire(_dofn(policy), cont=_continuation(), fired_at_ms=2_500)
+
+    (tagged,) = outputs(emitted)
+    intent = tagged.value
+    assert intent.trace_id == trace_id_for(_KEY, 3)
+
+    (trace,) = traces(emitted)
+    assert trace.event_type == TraceEvent.INTENT_EMITTED
+    assert trace.trace_id == intent.trace_id
+    # Timed at the fire, and placed at the step the continuation had reached,
+    # under that suspension's activation span -- so the escalation reads as
+    # part of the wait rather than as a detached event.
+    assert trace.start_ms == 2_500
+    assert trace.step_index == 2
+    assert trace.parent_span_id == span_id_for(_KEY, 3, ROLE_ACTIVATION, 2)
+    assert trace.attributes["beam_agents.intent_id"] == intent.intent_id
+    assert trace.attributes["beam_agents.tool_name"] == "pager"
+    assert trace.attributes["beam_agents.intent_kind"] == "APPROVAL"
+    assert trace.attributes["beam_agents.expires_at_ms"] == "7500"
+
+
+def test_a_retried_timer_bundle_remints_an_identical_escalation_trace() -> None:
+    # The escalation's determinism now covers the trace id it carries: a
+    # retried timer bundle must re-mint byte-identical intents.
+    policy = HitlPolicy(on_timeout=_escalate, max_escalations=2)
+    cont = _continuation()
+    first, _, _, _ = _fire(_dofn(policy), cont=cont, fired_at_ms=2_500)
+    retry, _, _, _ = _fire(_dofn(policy), cont=cont, fired_at_ms=2_500)
+
+    assert outputs(first)[0].value.SerializeToString(deterministic=True) == outputs(retry)[
+        0
+    ].value.SerializeToString(deterministic=True)
+    assert traces(first)[0].SerializeToString(deterministic=True) == traces(retry)[
+        0
+    ].SerializeToString(deterministic=True)
 
 
 def test_escalate_stages_a_deterministic_intent_and_rearms_the_deadline() -> None:
@@ -271,8 +364,7 @@ def test_escalate_stages_a_deterministic_intent_and_rearms_the_deadline() -> Non
         _dofn(policy), cont=_continuation(), fired_at_ms=2_500, pending=pending
     )
 
-    assert len(emitted) == 1
-    tagged = emitted[0]
+    (tagged,) = outputs(emitted)
     assert tagged.tag == "intents"
     intent = tagged.value
     # Consumes the continuation's next free step (2), so it collides with
@@ -368,7 +460,7 @@ def test_escalation_is_bounded(max_escalations: int, escalations: int) -> None:
         _dofn(policy), cont=_continuation(escalations=escalations)
     )
 
-    assert emitted == [HITL_TIMEOUT_OUTPUT]
+    assert outputs(emitted) == [HITL_TIMEOUT_OUTPUT]
     assert cont_state.value is None
     assert bag.cleared is True
     assert timer.cleared is True

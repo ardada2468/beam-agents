@@ -17,7 +17,14 @@ from beam_agents.core.agent import Complete, Suspend
 from beam_agents.core.context import ActivationContext
 from beam_agents.core.loop import DEFAULT_HITL_TIMEOUT_MS, run_activation
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
+from beam_agents.observability import (
+    ROLE_ACTIVATION,
+    ActivationTrace,
+    span_id_for,
+    trace_id_for,
+)
 from beam_agents.observability.metrics import ActivationTally
+from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import (
     append_agent,
     make_pong_provider,
@@ -60,6 +67,160 @@ async def test_completed_activation_stages_output_and_seq() -> None:
     assert end.event_type == TraceEvent.ACTIVATION_END
     assert start.start_ms == start.end_ms == 1000
     assert end.start_ms == end.end_ms == 1000
+
+
+# --- Requirement: Activation span with start, end, and outcome ---------------
+
+
+async def test_the_initial_activation_span_is_the_trace_root() -> None:
+    # Scenario: The initial activation span is the trace root.
+    # Scenario: A completing activation brackets its work.
+    result = await run_activation(
+        seq_agent,
+        entity_key=b"k",
+        seq=5,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    start, end = result.traces
+    assert start.trace_id == trace_id_for(b"k", 5)
+    assert start.span_id == span_id_for(b"k", 5, ROLE_ACTIVATION, 0)
+    assert start.parent_span_id == b""
+    assert end.span_id == start.span_id
+    assert end.attributes["beam_agents.activation.status"] == "completed"
+    assert start.attributes["beam_agents.activation.kind"] == "start"
+
+
+async def test_a_resumed_attempt_shares_the_trace_and_parents_to_the_root() -> None:
+    # Scenario: A resume shares the suspended activation's trace.
+    # Scenario: A resumed attempt is a child of the initial attempt.
+    # Scenario: A resumed activation is labelled as a resume.
+    suspended = await run_activation(
+        suspend_then_complete_agent,
+        entity_key=b"k",
+        seq=3,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+    assert suspended.continuation is not None
+
+    resumed = await run_activation(
+        suspend_then_complete_agent,
+        entity_key=b"k",
+        seq=suspended.continuation.seq,
+        now_ms=2000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        resume_result=ToolResult(intent_id="i", entity_key=b"k", seq=3, payload=b"done"),
+        snapshot=suspended.continuation.snapshot,
+        step_index=suspended.continuation.step_index,
+    )
+
+    root_start = suspended.traces[0]
+    resumed_start = resumed.traces[0]
+    assert resumed_start.trace_id == root_start.trace_id
+    assert resumed_start.span_id != root_start.span_id
+    assert resumed_start.parent_span_id == root_start.span_id
+    assert resumed_start.attributes["beam_agents.activation.kind"] == "resume"
+
+
+async def test_a_suspension_records_its_deadline_and_adapter() -> None:
+    # Scenario: A suspension records its deadline and adapter.
+    result = await run_activation(
+        suspend_then_complete_agent,
+        entity_key=b"k",
+        seq=3,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    (suspended,) = [e for e in result.traces if e.event_type == TraceEvent.SUSPENDED]
+    assert suspended.attributes["beam_agents.deadline_ms"] == "2000"
+    assert suspended.attributes["beam_agents.adapter"] == "test"
+    assert suspended.attributes["beam_agents.pending_intent_ids"] == result.intents[0].intent_id
+    # A child of the activation span, not a second root.
+    assert suspended.parent_span_id == result.traces[0].span_id
+    # The step the activation reached, so the suspension orders after the
+    # intent it is waiting on rather than collapsing to the start.
+    assert suspended.step_index == 1
+    assert result.traces[-1].step_index == 1
+
+
+async def test_a_completing_activation_ends_at_the_step_it_reached() -> None:
+    # `model_agent` consumes one step, so a zeroed step_index on the terminal
+    # event would misorder it against the LLM_CALL it follows.
+    result = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=5,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    end = result.traces[-1]
+    assert end.event_type == TraceEvent.ACTIVATION_END
+    assert end.step_index == 1
+
+
+async def test_the_provider_decode_reaches_the_activation_context() -> None:
+    # Scenario: A cache-hit call reports the stored response's real token
+    # counts -- through the driver, which is the path the DoFn actually uses.
+    # Without the decode threaded through, the counts would be silently absent.
+    result = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=5,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        decode=decode_len_based,
+    )
+
+    (llm_call,) = [e for e in result.traces if e.event_type == TraceEvent.LLM_CALL]
+    assert llm_call.attributes["gen_ai.usage.input_tokens"] == str(len(b"pong"))
+    assert llm_call.attributes["beam_agents.billed"] == "true"
+
+
+async def test_without_a_decode_usage_is_absent_rather_than_zero() -> None:
+    result = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=5,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    (llm_call,) = [e for e in result.traces if e.event_type == TraceEvent.LLM_CALL]
+    assert "gen_ai.usage.input_tokens" not in llm_call.attributes
+
+
+async def test_every_event_in_one_activation_shares_the_trace() -> None:
+    # Scenario: Traces flow through a pipeline end to end (loop-level half).
+    result = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=5,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    assert {event.trace_id for event in result.traces} == {trace_id_for(b"k", 5)}
+    assert TraceEvent.LLM_CALL in {event.event_type for event in result.traces}
 
 
 async def test_memory_write_is_staged_into_blob() -> None:
@@ -137,10 +298,15 @@ async def test_suspend_builds_continuation_and_intents() -> None:
     assert result.continuation.suspended_at_ms == 1000
     assert result.continuation.deadline_ms == 2000
     assert result.hitl_deadline_ms == 1000 + 1000
-    assert len(result.traces) == 2
-    assert result.traces[0].event_type == TraceEvent.ACTIVATION_START
-    assert result.traces[1].event_type == TraceEvent.ACTIVATION_END
-    assert result.traces[1].step_index == 1
+    # Start, the intent the agent staged, the suspension, then the end.
+    assert [event.event_type for event in result.traces] == [
+        TraceEvent.ACTIVATION_START,
+        TraceEvent.INTENT_EMITTED,
+        TraceEvent.SUSPENDED,
+        TraceEvent.ACTIVATION_END,
+    ]
+    assert result.traces[-1].step_index == 1
+    assert result.traces[-1].attributes["beam_agents.activation.status"] == "suspended"
 
 
 async def test_resume_uses_continuation_seq_and_completes() -> None:
@@ -192,6 +358,7 @@ async def test_loop_forwards_every_activation_context_input(
     class FakeContext:
         def __init__(self) -> None:
             self.step_index = 0
+            self.trace = ActivationTrace(entity_key=b"key", seq=4, now_ms=123)
             self.staged_intents: list[object] = []
             self.staged_traces: list[TraceEvent] = []
 
@@ -255,6 +422,7 @@ async def test_loop_forwards_every_activation_context_input(
         "step_index": 0,
         "intent_ttl_ms": DEFAULT_INTENT_TTL_MS,
         "approval_channel": DEFAULT_APPROVAL_CHANNEL,
+        "decode": None,
         "monotonic_ns": monotonic_ns,
         "tool_registry": tool_registry,
         "tool_runner": tool_runner,

@@ -62,6 +62,12 @@ message ToolIntent {
   int64 expires_at_ms = 8;
   uint32 attempt = 9;
   Kind kind = 10;
+  // The 16-byte trace identifier of the activation that staged this intent, so
+  // the effector executes it inside the pipeline's trace. Transported, never
+  // computed here — the same rule `intent_id` follows. Additive under
+  // state_schema_version = 1: an intent written before this field existed
+  // decodes as empty, which readers treat as "no trace correlation available".
+  bytes trace_id = 11;
 }
 
 // Effector outcome, re-injected on the same key as the originating intent.
@@ -94,8 +100,17 @@ message TraceEvent {
     INTENT_EMITTED = 4;
     ACTIVATION_END = 5;
     ERROR = 6;
+    // Additive under state_schema_version = 1: proto3 enums are open, so a
+    // reader that predates this value decodes it as the unrecognized number 7
+    // rather than failing. `ACTIVATION_END` also carries the outcome as a
+    // `beam_agents.activation.status` attribute, so such a reader still sees
+    // that the activation suspended.
+    SUSPENDED = 7;
   }
 
+  // 16 bytes; `span_id`/`parent_span_id` are 8, matching the W3C
+  // trace-context and OTel wire formats so an exporter passes them through
+  // untranslated.
   bytes trace_id = 1;
   bytes span_id = 2;
   bytes parent_span_id = 3;

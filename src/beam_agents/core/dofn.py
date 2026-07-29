@@ -64,6 +64,7 @@ from beam_agents.hitl import (
     Route,
     intent_expired,
 )
+from beam_agents.observability import ROLE_TIMER, ActivationTrace
 from beam_agents.observability.metrics import (
     COUNTER_ACTIVATIONS,
     COUNTER_AGENT_ERRORS,
@@ -88,6 +89,7 @@ if TYPE_CHECKING:
 
     from beam_agents.core.agent import Agent
     from beam_agents.model.client import LLMClient
+    from beam_agents.model.facade import Decode
 
 # State/timer handles are injected by Beam's StateParam/TimerParam machinery
 # at call time; they are dynamic runtime objects Beam does not statically type,
@@ -192,6 +194,7 @@ class _AgentDoFn(beam.DoFn):
         ttl_ms: int = _DEFAULT_TTL_MS,
         cancel_grace_s: float = 5.0,
         hitl_policy: HitlPolicy | None = None,
+        decode: Decode | None = None,
         tool_registry: ToolRegistry | None = None,
         metrics: MetricsSink | None = None,
         monotonic_ns: MonotonicNs | None = None,
@@ -202,6 +205,10 @@ class _AgentDoFn(beam.DoFn):
         self._ttl_ms = ttl_ms
         self._cancel_grace_s = cancel_grace_s
         self._hitl_policy = hitl_policy if hitl_policy is not None else HitlPolicy()
+        # The provider's response decoder. Without it a model call's token
+        # counts are unknown, and the trace omits them rather than reporting
+        # zeros that would be summed as real (design D4).
+        self._decode = decode
         # The read-only tools `ctx.run_tool` executes inline; empty by default,
         # so an unconfigured pipeline refuses every inline call by name.
         self._tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
@@ -313,10 +320,14 @@ class _AgentDoFn(beam.DoFn):
             )
         except ActivationTimeout:
             yield self._dead_letter(key, REASON_TIMEOUT)
+            yield _error_trace(key, current_seq, now_ms, REASON_TIMEOUT)
             return
         except Exception as exc:
             # Any activation failure fails closed: route to errors, commit nothing.
             yield self._dead_letter(key, REASON_ERROR, repr(exc))
+            yield _error_trace(
+                key, current_seq, now_ms, REASON_ERROR, error_type=type(exc).__name__
+            )
             return
 
         yield from self._commit(
@@ -354,6 +365,16 @@ class _AgentDoFn(beam.DoFn):
             # No live, unexpired continuation matches: orphaned. Mutate nothing.
             # No agent runs, so there is no duration to sample either.
             yield self._dead_letter(key, REASON_ORPHANED, f"{detail}:{intent_id}")
+            # Scope the trace to the continuation's activation when there is
+            # one; a genuinely orphaned result has no activation to belong to,
+            # so the key's current seq is the closest true scope.
+            yield _error_trace(
+                key,
+                cont.seq if cont is not None else seq.read(),
+                now_ms,
+                REASON_ORPHANED,
+                error_type=detail,
+            )
             return
         # `_admission_failure` returns DETAIL_NO_CONTINUATION for a missing one.
         assert cont is not None
@@ -374,10 +395,12 @@ class _AgentDoFn(beam.DoFn):
             )
         except ActivationTimeout:
             yield self._dead_letter(key, REASON_TIMEOUT)
+            yield _error_trace(key, cont.seq, now_ms, REASON_TIMEOUT)
             return
         except Exception as exc:
             # Any activation failure fails closed: route to errors, commit nothing.
             yield self._dead_letter(key, REASON_ERROR, repr(exc))
+            yield _error_trace(key, cont.seq, now_ms, REASON_ERROR, error_type=type(exc).__name__)
             return
 
         yield from self._commit(
@@ -410,6 +433,7 @@ class _AgentDoFn(beam.DoFn):
         assert self._bridge is not None and self._provider is not None, "setup() not called"
         provider = self._provider
         policy = self._hitl_policy
+        decode = self._decode
         monotonic_ns = self._monotonic_ns
         # `activation_ms` brackets the bounded bridge submission -- what the
         # caller actually waits for, submission overhead included -- and is
@@ -438,6 +462,7 @@ class _AgentDoFn(beam.DoFn):
                     default_hitl_timeout_ms=policy.timeout_ms,
                     intent_ttl_ms=policy.intent_ttl_ms,
                     approval_channel=policy.approval_channel,
+                    decode=decode,
                     monotonic_ns=monotonic_ns,
                     tool_registry=self._tool_registry,
                 ),
@@ -564,6 +589,7 @@ class _AgentDoFn(beam.DoFn):
     def on_ttl(
         self,
         key: bytes = beam.DoFn.KeyParam,  # type: ignore[assignment]
+        timestamp: Timestamp = beam.DoFn.TimestampParam,  # type: ignore[assignment]
         memory: _State = beam.DoFn.StateParam(MEMORY),
         continuation: _State = beam.DoFn.StateParam(CONTINUATION),
         llm_cache: _State = beam.DoFn.StateParam(LLM_CACHE),
@@ -584,6 +610,13 @@ class _AgentDoFn(beam.DoFn):
                 key,
                 REASON_TTL_WIPED_SUSPENSION,
                 f"seq={cont.seq},deadline_ms={cont.deadline_ms}",
+            )
+            yield _error_trace(
+                key,
+                cont.seq,
+                timestamp.micros // 1000,
+                REASON_TTL_WIPED_SUSPENSION,
+                role=ROLE_TIMER,
             )
 
         # Working memory is event-time garbage: wipe every spec so an idle key
@@ -618,7 +651,7 @@ class _AgentDoFn(beam.DoFn):
         route, detail = self._route_timeout(key, cont, fired_at_ms)
 
         if isinstance(route, Escalate):
-            yield self._escalate(
+            yield from self._escalate(
                 key, cont, fired_at_ms, route, continuation, pending, hitl_timer, ttl_timer
             )
             return
@@ -636,6 +669,9 @@ class _AgentDoFn(beam.DoFn):
             yield route.output
         else:
             yield self._dead_letter(key, route.reason, detail)
+        # Both routes end the wait without an answer; the trace records it
+        # either way, in the suspended activation's own trace.
+        yield _error_trace(key, cont.seq, fired_at_ms, REASON_HITL_TIMEOUT, role=ROLE_TIMER)
 
     def _route_timeout(self, key: bytes, cont: Continuation, fired_at_ms: int) -> tuple[Route, str]:
         """Ask the policy what to do, failing closed on its own failure.
@@ -674,7 +710,7 @@ class _AgentDoFn(beam.DoFn):
         pending: _State,
         hitl_timer: _Timer,
         ttl_timer: _Timer,
-    ) -> beam.pvalue.TaggedOutput:
+    ) -> Iterator[beam.pvalue.TaggedOutput]:
         """Ask again, louder: stage an approval intent and extend the deadline.
 
         The intent consumes the continuation's next free step index, so its ID
@@ -684,6 +720,17 @@ class _AgentDoFn(beam.DoFn):
         step index from the same cursor.
         """
         deadline_ms = fired_at_ms + route.timeout_ms
+        # Minted outside any activation, so the trace is rebuilt from the
+        # continuation's scope — the same `(key, seq)` the suspended activation
+        # traced under, which is what puts the escalation in its trace. No
+        # `is_resume`: it only decides an *activation*-role span's parent, and
+        # this route emits a child event, never an activation bracket.
+        trace = ActivationTrace(
+            entity_key=key,
+            seq=cont.seq,
+            now_ms=fired_at_ms,
+            entry_step_index=cont.step_index,
+        )
         intent = ToolIntent(
             intent_id=intent_id_for(key, cont.seq, cont.step_index),
             entity_key=key,
@@ -694,6 +741,7 @@ class _AgentDoFn(beam.DoFn):
             created_at_ms=fired_at_ms,
             expires_at_ms=deadline_ms,
             kind=ToolIntent.APPROVAL,
+            trace_id=trace.trace_id,
         )
         escalated = Continuation()
         escalated.CopyFrom(cont)
@@ -717,7 +765,17 @@ class _AgentDoFn(beam.DoFn):
         # This intent reaches `.intents` without passing through `_commit`, so
         # it is counted here or `intents_emitted` stops matching the output.
         self._metrics.incr(COUNTER_INTENTS_EMITTED)
-        return beam.pvalue.TaggedOutput("intents", intent)
+        yield beam.pvalue.TaggedOutput("intents", intent)
+        yield beam.pvalue.TaggedOutput(
+            "traces",
+            trace.intent_emitted(
+                step_index=cont.step_index,
+                intent_id=intent.intent_id,
+                tool_name=intent.tool_name,
+                intent_kind=ToolIntent.Kind.Name(intent.kind),
+                expires_at_ms=deadline_ms,
+            ),
+        )
 
     # -- metrics --------------------------------------------------------------
 
@@ -769,3 +827,27 @@ def _admission_failure(
 
 def _error(entity_key: bytes, reason: str, detail: str = "") -> beam.pvalue.TaggedOutput:
     return beam.pvalue.TaggedOutput("errors", ActivationError(entity_key, reason, detail))
+
+
+def _error_trace(
+    entity_key: bytes,
+    seq: int,
+    now_ms: int,
+    reason: str,
+    *,
+    error_type: str = "",
+    role: str | None = None,
+) -> beam.pvalue.TaggedOutput:
+    """An `ERROR` trace event for a failure route, synthesized here (design D5).
+
+    Built from what the DoFn already holds — key, seq, clock, reason — and
+    never from the failed activation's staged effects, which stay discarded.
+    Emitting it mutates no state: a trace is an output record, not keyed state,
+    so correctness invariant 1 is untouched. It lands in the same trace as the
+    activation's committed events, or stands alone as a one-event trace when
+    nothing committed.
+    """
+    trace = ActivationTrace(entity_key=entity_key, seq=seq, now_ms=now_ms)
+    return beam.pvalue.TaggedOutput(
+        "traces", trace.error(reason=reason, error_type=error_type, role=role)
+    )

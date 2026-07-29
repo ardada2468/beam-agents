@@ -327,7 +327,9 @@ def test_a_raising_activation_records_only_the_error_and_its_duration() -> None:
     # Scenario: A failed activation records no commit-path metric.
     metrics, emitted, seq = _run(raising_agent, _event())
 
-    assert len(emitted) == 1
+    # One dead letter, plus the ERROR trace event the failure routes now
+    # emit beside it (trace-events).
+    assert [e.tag for e in emitted] == ["errors", "traces"]
     assert emitted[0].tag == "errors"
     assert metrics.counters == {COUNTER_AGENT_ERRORS: 1}
     assert seq.value == 0
@@ -352,7 +354,9 @@ def test_a_timed_out_activation_records_the_error_and_its_duration() -> None:
         activation_timeout_s=0.05,
     )
 
-    assert len(emitted) == 1
+    # One dead letter, plus the ERROR trace event the failure routes now
+    # emit beside it (trace-events).
+    assert [e.tag for e in emitted] == ["errors", "traces"]
     assert emitted[0].tag == "errors"
     assert metrics.counters == {COUNTER_AGENT_ERRORS: 1}
     assert seq.value == 0
@@ -364,7 +368,9 @@ def test_a_refused_resume_records_only_the_orphan_counter() -> None:
     # so there is no duration to report either.
     metrics, emitted, seq = _run(seq_agent, _orphaned_result())
 
-    assert len(emitted) == 1
+    # One dead letter, plus the ERROR trace event the failure routes now
+    # emit beside it (trace-events).
+    assert [e.tag for e in emitted] == ["errors", "traces"]
     assert emitted[0].tag == "errors"
     # The refused intent id is carried on the record, so triage can tell *which*
     # result was orphaned rather than only that one was.
@@ -385,7 +391,9 @@ def test_a_refused_approval_is_routed_and_counted_like_a_refused_result() -> Non
 
     metrics, emitted, seq = _run(seq_agent, envelope)
 
-    assert len(emitted) == 1
+    # One dead letter, plus the ERROR trace event the failure routes now
+    # emit beside it (trace-events).
+    assert [e.tag for e in emitted] == ["errors", "traces"]
     assert emitted[0].tag == "errors"
     assert emitted[0].value.detail == f"{DETAIL_NO_CONTINUATION}:ghost-approval"
     assert metrics.counters == {COUNTER_ORPHANED_RESULTS: 1}
@@ -474,6 +482,7 @@ def _fire_ttl(cont: Continuation | None) -> tuple[_RecordingMetrics, list[Any]]:
     emitted = list(
         _timer_dofn(metrics).on_ttl(
             key=_KEY,
+            timestamp=Timestamp(micros=12_000 * 1000),
             memory=_FakeValue(MemoryBlob()),
             continuation=_FakeValue(cont),
             llm_cache=_FakeValue(LlmCacheBlob()),
@@ -504,7 +513,7 @@ def test_a_ttl_fire_over_a_live_suspension_counts_an_agent_error() -> None:
     # that no counter accounts for would break the partition invariant.
     metrics, emitted = _fire_ttl(_continuation())
 
-    assert len(emitted) == 1
+    assert [e.tag for e in emitted] == ["errors", "traces"]
     assert metrics.counters == {COUNTER_AGENT_ERRORS: 1}
 
 
@@ -523,7 +532,9 @@ def test_a_hitl_drop_counts_an_agent_error_but_not_an_activation() -> None:
 
     metrics, emitted = _fire_hitl(HitlPolicy(on_timeout=route))
 
-    assert len(emitted) == 1
+    # One dead letter, plus the ERROR trace event the failure routes now
+    # emit beside it (trace-events).
+    assert [e.tag for e in emitted] == ["errors", "traces"]
     assert emitted[0].tag == "errors"
     assert metrics.counters == {COUNTER_AGENT_ERRORS: 1}
 
@@ -535,7 +546,10 @@ def test_a_hitl_deny_counts_nothing() -> None:
 
     metrics, emitted = _fire_hitl(HitlPolicy(on_timeout=route))
 
-    assert emitted == [b"degraded"]
+    # The degraded answer, plus the ERROR trace event: the wait still ended
+    # without a real answer, and the trace records that on either route.
+    assert emitted[0] == b"degraded"
+    assert [e.tag for e in emitted[1:]] == ["traces"]
     assert metrics.counters == {}
 
 
@@ -547,7 +561,8 @@ def test_a_hitl_escalation_counts_its_intent() -> None:
 
     metrics, emitted = _fire_hitl(HitlPolicy(on_timeout=route, max_escalations=2))
 
-    assert len(emitted) == 1
+    # The intent, plus its INTENT_EMITTED trace event (trace-events).
+    assert [e.tag for e in emitted] == ["intents", "traces"]
     assert emitted[0].tag == "intents"
     assert metrics.counters == {COUNTER_INTENTS_EMITTED: 1}
 

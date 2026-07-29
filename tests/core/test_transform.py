@@ -20,7 +20,7 @@ from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
-from beam_agents._protos import AgentEnvelope
+from beam_agents._protos import AgentEnvelope, TraceEvent
 from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.core.transform import (
     AgentConfig,
@@ -29,14 +29,29 @@ from beam_agents.core.transform import (
     RunAgentOutputs,
     UnknownSinkSchemeError,
     _validate_kv_input,
+    _WriteTraces,
 )
 from beam_agents.hitl import HitlPolicy
+from beam_agents.observability import trace_event_to_row, trace_id_for
 from beam_agents.tools import ToolRegistry
+from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import (
     append_agent,
     make_pong_provider,
+    model_then_act_agent,
     seq_agent,
     suspend_then_complete_agent,
+)
+
+_TRACE_EVENT = TraceEvent(
+    trace_id=bytes(range(16)),
+    span_id=bytes(range(8)),
+    entity_key=b"key-1",
+    seq=7,
+    event_type=TraceEvent.LLM_CALL,
+    attributes={"gen_ai.request.model": "m-1"},
+    start_ms=1_000,
+    end_ms=1_000,
 )
 
 
@@ -365,6 +380,119 @@ def test_unset_sinks_attach_nothing() -> None:
         keyed = _keyed(p, _event(b"k", b"go"))
         keyed | RunAgent(seq_agent, config=config)
     assert stub.resolved == []
+
+
+# --- Requirement: The traces output is deliverable to a configured sink ------
+
+
+@pytest.mark.parametrize(
+    ("uri", "expect_row"),
+    [
+        ("kafka://broker:9092/traces", False),
+        ("pubsub://my-project/traces", False),
+        ("bigquery://my-project/my_dataset/traces", True),
+    ],
+)
+def test_a_traces_sink_encodes_before_writing(uri: str, expect_row: bool) -> None:
+    # A raw write transform cannot accept a `TraceEvent` proto, so resolution
+    # for `traces_to` must wrap the writer in the scheme's encoder.
+    transform = DefaultSinkResolver().resolve("traces_to", uri)
+
+    assert isinstance(transform, _WriteTraces)
+    assert transform._to_row is expect_row
+
+
+@pytest.mark.parametrize(
+    ("to_row", "expected"),
+    [
+        (False, [(b"key-1", _TRACE_EVENT.SerializeToString(deterministic=True))]),
+        (True, [trace_event_to_row(_TRACE_EVENT)]),
+    ],
+)
+def test_the_traces_encoder_hands_the_sink_what_its_scheme_accepts(
+    to_row: bool, expected: list[Any]
+) -> None:
+    # The encoder is the whole reason a configured `traces_to` works: run it
+    # against a recording sink and assert on what the writer actually receives.
+    with BeamTestPipeline() as p:
+        written = (
+            p | beam.Create([_TRACE_EVENT]) | _WriteTraces(beam.Map(lambda x: x), to_row=to_row)
+        )
+        assert_that(written, equal_to(expected))
+
+
+def test_other_sinks_are_not_wrapped_in_the_traces_encoder() -> None:
+    # `errors_to` carries `ActivationError` dataclasses, not `TraceEvent`s; the
+    # trace encoder must not be applied to them.
+    transform = DefaultSinkResolver().resolve(
+        "errors_to", "bigquery://my-project/my_dataset/my_table"
+    )
+    assert not isinstance(transform, _WriteTraces)
+
+
+def test_an_unset_traces_sink_leaves_the_output_exposed() -> None:
+    # Scenario: An unset traces sink leaves the output exposed.
+    config = AgentConfig(provider_factory=make_pong_provider)
+    with BeamTestPipeline() as p:
+        keyed = _keyed(p, _event(b"k", b"go"))
+        outputs = keyed | RunAgent(seq_agent, config=config)
+        kinds = outputs.traces | "event-types" >> beam.Map(lambda e: e.event_type)
+        assert_that(
+            kinds,
+            equal_to([TraceEvent.ACTIVATION_START, TraceEvent.ACTIVATION_END]),
+            label="raw-trace-events",
+        )
+
+
+def test_traces_flow_through_a_pipeline_end_to_end() -> None:
+    # Scenario: Traces flow through a pipeline end to end.
+    # The agent calls the model and stages an intent, so the trace should hold
+    # the activation bracket plus one child event for each.
+    config = AgentConfig(provider_factory=make_pong_provider, decode=decode_len_based)
+    with _streaming_pipeline() as p:
+        keyed = _keyed_stream(p, _event(b"k", b"go"))
+        outputs = keyed | RunAgent(model_then_act_agent, config=config)
+        kinds = outputs.traces | "kinds" >> beam.Map(lambda e: e.event_type)
+        assert_that(
+            kinds,
+            equal_to(
+                [
+                    TraceEvent.ACTIVATION_START,
+                    TraceEvent.LLM_CALL,
+                    TraceEvent.INTENT_EMITTED,
+                    TraceEvent.ACTIVATION_END,
+                ]
+            ),
+            label="one-event-per-step",
+        )
+        # Every event of one activation belongs to one trace, and the intent
+        # carries that same trace onward to the effector.
+        trace_ids = outputs.traces | "trace-ids" >> beam.Map(lambda e: e.trace_id)
+        assert_that(
+            trace_ids,
+            equal_to([trace_id_for(b"k", 0)] * 4),
+            label="one-trace-per-activation",
+        )
+        intent_trace_ids = outputs.intents | "intent-trace-ids" >> beam.Map(lambda i: i.trace_id)
+        assert_that(
+            intent_trace_ids, equal_to([trace_id_for(b"k", 0)]), label="intent-carries-trace"
+        )
+
+
+def test_a_configured_decode_puts_truthful_token_counts_on_the_traces() -> None:
+    # The runtime path only reports usage if the provider's decoder reaches it,
+    # so this is the end-to-end half of the omit-rather-than-zero rule.
+    config = AgentConfig(provider_factory=make_pong_provider, decode=decode_len_based)
+    with _streaming_pipeline() as p:
+        keyed = _keyed_stream(p, _event(b"k", b"go"))
+        outputs = keyed | RunAgent(model_then_act_agent, config=config)
+        usage = (
+            outputs.traces
+            | "llm-only" >> beam.Filter(lambda e: e.event_type == TraceEvent.LLM_CALL)
+            | "usage" >> beam.Map(lambda e: dict(e.attributes)["gen_ai.usage.input_tokens"])
+        )
+        # len(b"pong"), the response the fake provider returns.
+        assert_that(usage, equal_to(["4"]), label="truthful-usage")
 
 
 if __name__ == "__main__":  # pragma: no cover

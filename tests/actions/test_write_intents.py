@@ -164,6 +164,22 @@ def test_identical_intents_serialize_identically() -> None:
     assert a == b
 
 
+def test_a_traced_intent_round_trips_through_the_outbox() -> None:
+    # `ToolIntent` grew `trace_id` so the effector can execute inside the
+    # pipeline's trace; the outbox must carry it across the wire intact.
+    dofn = _SerializeIntent()
+    intent = _intent(b"k", 5)
+    intent.trace_id = bytes(range(16))
+
+    key, payload = next(iter(dofn.process((b"k", intent))))
+
+    decoded = ToolIntent()
+    decoded.ParseFromString(payload)
+    assert key == b"k"
+    assert decoded.trace_id == bytes(range(16))
+    assert decoded == intent
+
+
 # --- Requirement: WriteIntents routes serialization failures to dead-letter ---
 
 
