@@ -151,8 +151,20 @@ def main(argv: list[str] | None = None) -> int:
         # a crash on the first message hours later.
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    asyncio.run(serve(build_service(config, registry)))
+    asyncio.run(_build_and_serve(config, registry))
     return 0
+
+
+async def _build_and_serve(config: EffectorConfig, registry: ToolRegistry) -> None:
+    """Construct the service *inside* the running loop, then serve it.
+
+    Order matters: the Kafka adapters construct aiokafka clients in their
+    initializers, and aiokafka requires a running event loop at construction.
+    Building as an argument to ``asyncio.run(serve(build_service(...)))``
+    evaluates the builder before any loop exists and crashes at startup for
+    every real (non-``memory://``) transport.
+    """
+    await serve(build_service(config, registry))
 
 
 if __name__ == "__main__":
