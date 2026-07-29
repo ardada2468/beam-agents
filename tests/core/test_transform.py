@@ -21,7 +21,14 @@ from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
 from beam_agents._protos import AgentEnvelope, TraceEvent
-from beam_agents.core.dofn import _AgentDoFn
+from beam_agents.core.dofn import (
+    DETAIL_NO_CONTINUATION,
+    REASON_ERROR,
+    REASON_ORPHANED,
+    ActivationError,
+    _AgentDoFn,
+)
+from beam_agents.core.error_records import activation_error_to_row, serialize_error_envelope
 from beam_agents.core.transform import (
     AgentConfig,
     DefaultSinkResolver,
@@ -29,6 +36,7 @@ from beam_agents.core.transform import (
     RunAgentOutputs,
     UnknownSinkSchemeError,
     _validate_kv_input,
+    _WriteErrors,
     _WriteTraces,
 )
 from beam_agents.hitl import HitlPolicy
@@ -55,8 +63,32 @@ _TRACE_EVENT = TraceEvent(
 )
 
 
+_ACTIVATION_ERROR = ActivationError(
+    entity_key=b"key-1",
+    reason=REASON_ERROR,
+    detail="RuntimeError('boom') failed_at_step=0 after=ACTIVATION_START",
+    event_time_ms=1_000,
+)
+
+# The dead letter `_orphaned_result` below produces: a tool result naming an
+# intent no continuation ever pended, at the element's own event time.
+_ORPHAN_ERROR = ActivationError(
+    entity_key=b"k",
+    reason=REASON_ORPHANED,
+    detail=f"{DETAIL_NO_CONTINUATION}:ghost",
+    event_time_ms=1_000,
+)
+
+
 def _event(key: bytes, payload: bytes, t_ms: int = 1000) -> AgentEnvelope:
     return AgentEnvelope(entity_key=key, event_time_ms=t_ms, external_event=payload)
+
+
+def _orphaned_result(key: bytes, t_ms: int = 1000) -> AgentEnvelope:
+    """A tool result for an intent nobody is waiting on -> an `.errors` record."""
+    envelope = AgentEnvelope(entity_key=key, event_time_ms=t_ms)
+    envelope.tool_result.intent_id = "ghost"
+    return envelope
 
 
 def _keyed(p: beam.Pipeline, *envelopes: AgentEnvelope) -> beam.pvalue.PCollection:
@@ -102,6 +134,38 @@ class _StubSinkResolver:
     def resolve(self, field_name: str, uri: str) -> beam.PTransform:
         self.resolved.append(uri)
         return beam.Map(lambda x: x)
+
+
+class _RecordingWrite(beam.PTransform):
+    """Identity write that keeps the ``PCollection`` it was handed.
+
+    Pipeline construction is synchronous and in-process, so after
+    ``RunAgent`` is applied this transform's ``written`` is the very
+    collection the resolver's encoding fed to the writer — which is what the
+    "not dataclasses" scenario is about.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.written: beam.pvalue.PCollection | None = None
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        self.written = pcoll
+        return pcoll
+
+
+class _RecordingErrorsResolver:
+    """Resolves ``errors_to`` to the *real* encoder over a recording writer."""
+
+    def __init__(self, *, to_row: bool = False) -> None:
+        self.sink = _RecordingWrite()
+        self._to_row = to_row
+
+    def validate(self, field_name: str, uri: str) -> None:
+        pass
+
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        return _WriteErrors(self.sink, to_row=self._to_row)
 
 
 class _RejectingSinkResolver:
@@ -422,8 +486,8 @@ def test_the_traces_encoder_hands_the_sink_what_its_scheme_accepts(
 
 
 def test_other_sinks_are_not_wrapped_in_the_traces_encoder() -> None:
-    # `errors_to` carries `ActivationError` dataclasses, not `TraceEvent`s; the
-    # trace encoder must not be applied to them.
+    # `errors_to` carries `ActivationError` dataclasses, not `TraceEvent`s: it
+    # gets its own encoder (`_WriteErrors`), never the trace one.
     transform = DefaultSinkResolver().resolve(
         "errors_to", "bigquery://my-project/my_dataset/my_table"
     )
@@ -493,6 +557,73 @@ def test_a_configured_decode_puts_truthful_token_counts_on_the_traces() -> None:
         )
         # len(b"pong"), the response the fake provider returns.
         assert_that(usage, equal_to(["4"]), label="truthful-usage")
+
+
+# --- Requirement: The errors output is deliverable to a configured sink ------
+
+
+@pytest.mark.parametrize(
+    ("uri", "expect_row"),
+    [
+        ("kafka://broker:9092/errors", False),
+        ("pubsub://my-project/errors", False),
+        ("bigquery://my-project/my_dataset/errors", True),
+    ],
+)
+def test_an_errors_sink_encodes_before_writing(uri: str, expect_row: bool) -> None:
+    # Scenarios: errors_to kafka/bigquery URIs resolve to an encoding writer.
+    # A raw write transform cannot accept an `ActivationError` dataclass, so
+    # resolution for `errors_to` must wrap the writer in the scheme's encoder.
+    transform = DefaultSinkResolver().resolve("errors_to", uri)
+
+    assert isinstance(transform, _WriteErrors)
+    assert transform._to_row is expect_row
+
+
+@pytest.mark.parametrize(
+    ("to_row", "expected"),
+    [
+        (False, [serialize_error_envelope(_ACTIVATION_ERROR)]),
+        (True, [activation_error_to_row(_ACTIVATION_ERROR)]),
+    ],
+)
+def test_the_errors_encoder_hands_the_sink_what_its_scheme_accepts(
+    to_row: bool, expected: list[Any]
+) -> None:
+    # The encoder is the whole reason a configured `errors_to` works: run it
+    # against a recording sink and assert on what the writer actually receives.
+    with BeamTestPipeline() as p:
+        written = (
+            p
+            | beam.Create([_ACTIVATION_ERROR])
+            | _WriteErrors(beam.Map(lambda x: x), to_row=to_row)
+        )
+        assert_that(written, equal_to(expected))
+
+
+def test_a_configured_errors_sink_receives_encoded_records_not_dataclasses() -> None:
+    # Scenario: A configured errors sink receives encoded records, not
+    # dataclasses. The resolver hands back the real encoding wrapped around a
+    # recording writer, so this exercises the production path rather than a
+    # stand-in for it.
+    resolver = _RecordingErrorsResolver()
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        errors_to="stub://errors",
+        sink_resolver=resolver,
+    )
+    with BeamTestPipeline() as p:
+        keyed = _keyed(p, _orphaned_result(b"k"))
+        outputs = keyed | RunAgent(seq_agent, config=config)
+        # What reached the writer: keyed envelope bytes carrying the record.
+        assert_that(
+            resolver.sink.written,
+            equal_to([serialize_error_envelope(_ORPHAN_ERROR)]),
+            label="encoded-at-the-writer",
+        )
+        # ...and `.errors` still exposes the dataclass to a direct consumer.
+        reasons = outputs.errors | "reasons" >> beam.Map(lambda e: e.reason)
+        assert_that(reasons, equal_to([REASON_ORPHANED]), label="errors-still-exposed")
 
 
 if __name__ == "__main__":  # pragma: no cover

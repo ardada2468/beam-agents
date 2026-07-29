@@ -38,11 +38,15 @@ from beam_agents._protos import ToolIntent
 from beam_agents.actions.write_intents import (
     WriteIntents,
     WriteIntentsResult,
-    encode_intent_dead_letter,
     is_kv_shaped,
 )
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
+from beam_agents.core.error_records import (
+    activation_error_to_row,
+    intent_dead_letter_to_error,
+    serialize_error_envelope,
+)
 from beam_agents.hitl import HitlPolicy
 from beam_agents.observability import serialize_trace_event, trace_event_to_row
 from beam_agents.tools import ToolRegistry
@@ -135,6 +139,32 @@ class _WriteTraces(beam.PTransform):
         return encoded | "WriteEncodedTraces" >> self._sink
 
 
+class _WriteErrors(beam.PTransform):
+    """Encodes ``ActivationError``s for ``sink``'s scheme, then writes them.
+
+    ``.errors`` is a ``PCollection[ActivationError]`` -- a dataclass, not even a
+    proto -- and none of the write transforms accept one, so without this step a
+    configured ``errors_to`` fails at runtime. The message-bus encoding wraps
+    each record in an ``AgentEnvelope``, which makes the errors topic directly
+    consumable by a downstream pipeline (``docs/errors.md``); BigQuery takes a
+    row mapping. Same shape as :class:`_WriteTraces`, for the same reason.
+    """
+
+    def __init__(self, sink: beam.PTransform, *, to_row: bool) -> None:
+        super().__init__()
+        self._sink = sink
+        self._to_row = to_row
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        if self._to_row:
+            encoded = pcoll | "ActivationErrorToRow" >> beam.Map(activation_error_to_row)
+        else:
+            encoded = pcoll | "SerializeErrorEnvelope" >> beam.Map(
+                serialize_error_envelope
+            ).with_output_types(tuple[bytes, bytes])
+        return encoded | "WriteEncodedErrors" >> self._sink
+
+
 class DefaultSinkResolver:
     """Resolves ``kafka://``, ``pubsub://``, and ``bigquery://`` sink URIs.
 
@@ -166,6 +196,8 @@ class DefaultSinkResolver:
             return _KeyedWriteIntents(uri)
         if field_name == "traces_to":
             return _WriteTraces(self._write_transform(scheme, parts), to_row=scheme == "bigquery")
+        if field_name == "errors_to":
+            return _WriteErrors(self._write_transform(scheme, parts), to_row=scheme == "bigquery")
         return self._write_transform(scheme, parts)
 
     def _write_transform(self, scheme: str, parts: tuple[str, ...]) -> beam.PTransform:
@@ -321,34 +353,29 @@ class RunAgent(beam.PTransform):
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
         )
-        tagged_by_field = {
-            "intents": tagged.intents,
-            "traces": tagged.traces,
-            "errors": tagged.errors,
-        }
+        # The three branches are not symmetric: `errors_to` also drains the
+        # intents dead letter, so it is attached last, once that branch exists.
         dead_letter: beam.pvalue.PCollection | None = None
-        for field_name in _SINK_FIELDS:
-            uri = getattr(self._config, field_name)
-            if uri is None:
-                continue
-            sink = self._config.sink_resolver.resolve(field_name, uri)
-            result = (
-                tagged_by_field[field_name.removesuffix("_to")] | _SINK_LABELS[field_name] >> sink
-            )
-            if field_name == "intents_to" and isinstance(result, WriteIntentsResult):
+        if self._config.intents_to is not None:
+            sink = self._config.sink_resolver.resolve("intents_to", self._config.intents_to)
+            result = tagged.intents | _SINK_LABELS["intents_to"] >> sink
+            if isinstance(result, WriteIntentsResult):
                 dead_letter = result.dead_letter
-                if self._config.errors_to is not None:
-                    errors_sink = self._config.sink_resolver.resolve(
-                        "errors_to", self._config.errors_to
-                    )
-                    (
-                        dead_letter
-                        | "EncodeIntentDeadLetter"
-                        >> beam.Map(encode_intent_dead_letter).with_output_types(
-                            tuple[bytes, bytes]
-                        )
-                        | "IntentDeadLetterToErrors" >> errors_sink
-                    )
+        if self._config.traces_to is not None:
+            sink = self._config.sink_resolver.resolve("traces_to", self._config.traces_to)
+            tagged.traces | _SINK_LABELS["traces_to"] >> sink
+        if self._config.errors_to is not None:
+            errors = tagged.errors
+            if dead_letter is not None:
+                # Both streams are `ActivationError` now, so they merge before
+                # the sink instead of each carrying its own encoding: one
+                # resolved writer, one record schema, every scheme reachable.
+                mapped = dead_letter | "IntentDeadLetterToError" >> beam.Map(
+                    intent_dead_letter_to_error
+                )
+                errors = (tagged.errors, mapped) | "FlattenErrors" >> beam.Flatten()
+            sink = self._config.sink_resolver.resolve("errors_to", self._config.errors_to)
+            errors | _SINK_LABELS["errors_to"] >> sink
         return RunAgentOutputs(
             output=tagged.output,
             intents=tagged.intents,

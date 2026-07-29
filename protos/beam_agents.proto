@@ -4,7 +4,7 @@ package beam_agents.v1;
 
 // Wire and state message schemas for the beam-agents runtime.
 //
-// All six top-level messages evolve together under one state_schema_version
+// The top-level messages evolve together under one state_schema_version
 // regime (see openspec design D1). Timestamps are int64 unix-epoch
 // milliseconds (`*_ms` suffix) to match Beam's event-time representation and
 // avoid well-known-type imports (D4). All enums carry an `_UNSPECIFIED = 0`
@@ -144,6 +144,32 @@ message AgentEnvelope {
     ToolResult tool_result = 4;
     Approval approval = 5;
   }
+}
+
+// A `.errors` dead letter on the wire: the triage fields a downstream consumer
+// needs without re-deriving them from the pipeline.
+//
+// For a message-bus errors sink this travels inside `AgentEnvelope.external_event`
+// as deterministically serialized bytes, which makes the errors topic a valid
+// RunAgent input stream. That wrapping is a convention of the errors sink, not a
+// constraint on `AgentEnvelope`: `external_event` stays opaque bytes, and the
+// runtime imposes no schema on it (see openspec design D1/D2 of
+// add-errors-sink-encoding).
+//
+// `detail` is free-form, matching the `.errors` dataclass field it carries: the
+// reason vocabulary is open-ended, and per-reason submessages would couple this
+// schema to every future dead-letter source. Structured context (e.g. an intent
+// dead letter's identifying fields) is JSON inside `detail`.
+message ActivationErrorRecord {
+  bytes entity_key = 1;
+  // The dead-letter reason, e.g. `activation_error`, `activation_timeout`,
+  // `orphaned_result`, `intent_dead_letter`.
+  string reason = 2;
+  string detail = 3;
+  // Replay-deterministic: the element's event time, or a timer's scheduled
+  // firing time. Never a wall-clock reading, so a retried bundle re-emits a
+  // byte-identical record.
+  int64 event_time_ms = 4;
 }
 
 // Persisted resume-state for a suspended activation. `snapshot` is opaque:

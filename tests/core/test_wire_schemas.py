@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import beam_agents._protos as protos
 from beam_agents._protos import (
+    ActivationErrorRecord,
     AgentEnvelope,
     Continuation,
     LlmCacheBlob,
@@ -40,7 +41,7 @@ def _unknown_field(field_number: int, value: int) -> bytes:
 # --- Requirement: Proto package and committed generation ---------------------
 
 
-def test_all_seven_message_classes_importable() -> None:
+def test_all_eight_message_classes_importable() -> None:
     # Scenario: Bindings are importable from the installed package.
     for name in (
         "MemoryBlob",
@@ -50,6 +51,7 @@ def test_all_seven_message_classes_importable() -> None:
         "AgentEnvelope",
         "Continuation",
         "LlmCacheBlob",
+        "ActivationErrorRecord",
     ):
         assert hasattr(protos, name)
     assert set(protos.__all__) == {
@@ -60,6 +62,7 @@ def test_all_seven_message_classes_importable() -> None:
         "AgentEnvelope",
         "Continuation",
         "LlmCacheBlob",
+        "ActivationErrorRecord",
     }
 
 
@@ -296,6 +299,62 @@ def test_agent_envelope_all_three_variants_round_trip() -> None:
         parsed.ParseFromString(env.SerializeToString())
         assert parsed.WhichOneof("payload") == expected_case
         assert parsed == env
+
+
+# --- Requirement: ActivationErrorRecord carries dead-letter triage fields -----
+
+
+def test_activation_error_record_all_fields_round_trip() -> None:
+    # Scenario: All fields round-trip.
+    record = ActivationErrorRecord(
+        entity_key=b"\x00key\xff",
+        reason="activation_error",
+        detail="ValueError('boom') at step 2",
+        event_time_ms=1_700_000_000_123,
+    )
+
+    parsed = ActivationErrorRecord()
+    parsed.ParseFromString(record.SerializeToString())
+
+    assert parsed.entity_key == b"\x00key\xff"
+    assert parsed.reason == "activation_error"
+    assert parsed.detail == "ValueError('boom') at step 2"
+    assert parsed.event_time_ms == 1_700_000_000_123
+
+
+def test_activation_error_record_deterministic_serialization_is_byte_stable() -> None:
+    # Scenario: Deterministic serialization is byte-stable.
+    record = ActivationErrorRecord(
+        entity_key=b"k",
+        reason="orphaned_result",
+        detail="unknown_intent",
+        event_time_ms=42,
+    )
+
+    assert record.SerializeToString(deterministic=True) == record.SerializeToString(
+        deterministic=True
+    )
+
+
+def test_activation_error_record_travels_inside_agent_envelope() -> None:
+    # Scenario: All fields round-trip -- the errors-sink convention carries the
+    # record as opaque `external_event` bytes, leaving AgentEnvelope unchanged.
+    record = ActivationErrorRecord(
+        entity_key=b"k", reason="activation_timeout", detail="", event_time_ms=7
+    )
+    envelope = AgentEnvelope(
+        entity_key=b"k",
+        event_time_ms=7,
+        external_event=record.SerializeToString(deterministic=True),
+    )
+
+    parsed_envelope = AgentEnvelope()
+    parsed_envelope.ParseFromString(envelope.SerializeToString(deterministic=True))
+    parsed_record = ActivationErrorRecord()
+    parsed_record.ParseFromString(parsed_envelope.external_event)
+
+    assert parsed_envelope.WhichOneof("payload") == "external_event"
+    assert parsed_record == record
 
 
 # --- Requirement: Continuation persists framework-opaque resume state --------

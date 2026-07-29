@@ -56,7 +56,25 @@
 # 196 -> 198 for `hitl_policy`. The field and the pass-through are covered in
 # the normal suite by test_transform.py's construction test and end to end by
 # test_dofn_pipeline.py's inline-tool pipeline run.
+# add-errors-sink-encoding moved transform.py 242 -> 280, and added no ceiling
+# for the new core/error_records.py at all. The split is the point:
+#   - error_records.py holds the pure encoders, so tests/core/test_error_records.py
+#     drives every one of them directly, inside the mutation selection. Its
+#     ceiling is the implicit zero. The four excluded survivors there are
+#     genuinely equivalent (see mutation-exclusions.toml), not a coverage gap.
+#   - transform.py's +38 is entirely sink *wiring*: `_WriteErrors.expand`/
+#     `__init__` (22, the same 20+2 profile `_WriteTraces` has), plus the
+#     `errors_to` case in `DefaultSinkResolver.resolve` and the rewritten
+#     `RunAgent.expand` branches that flatten the intent dead letters into
+#     `.errors`. All of it is reachable only from test_transform.py and
+#     test_write_intents.py, both of which drive TestPipeline/TestStream and are
+#     deselected under mutmut (see the [tool.mutmut] comment in pyproject.toml),
+#     so these mutants can only ever land in this bucket -- the identical
+#     situation that moved this ceiling for `hitl_policy` (196 -> 198) and
+#     `tool_registry` (198 -> 200). The behavior is covered in the normal suite
+#     by test_transform.py's errors-encoder tests and test_write_intents.py's
+#     dead-letter routing tests.
 [no_tests]
 "context.py" = 0
 "dofn.py" = 3
-"transform.py" = 242
+"transform.py" = 280

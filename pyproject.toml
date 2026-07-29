@@ -128,6 +128,10 @@ ignore = [
 # aiokafka imports keep these modules importable in the offline lane (host
 # side) and outside the pipeline (container side) without the client installed.
 "tests/semantics/_e2e/*" = ["B008", "PLC0415"]
+# The docs/errors.md failure-streak example, copied verbatim: the state handle
+# is the same Beam-requires-it-as-a-default idiom as core/dofn.py, and the doc
+# must show the working form rather than a lint-shaped variant of it.
+"tests/examples/test_failure_streak_alarm.py" = ["B008"]
 # The gate module itself: same lazy-aiokafka constraint (it is *collected* in
 # the offline lane, where aiokafka is absent — deselection happens after
 # import), and the single long test function is one scenario told in phases,
@@ -197,6 +201,13 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 # Same Beam-untyped-API relaxation, for the live-broker Kafka round-trip test.
 [[tool.mypy.overrides]]
 module = "tests.actions.test_write_intents_integration"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation, for the docs/errors.md failure-streak
+# example: it is a plain downstream Beam pipeline (Create/Map/ParDo/assert_that)
+# over the published errors format, so every call is a Beam one.
+[[tool.mypy.overrides]]
+module = "tests.examples.test_failure_streak_alarm"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # Beam types `Coder.from_type_hint` as `-> CoderT` (a cls-bound TypeVar), so our

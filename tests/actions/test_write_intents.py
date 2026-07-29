@@ -18,7 +18,7 @@ from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
-from beam_agents._protos import AgentEnvelope, ToolIntent
+from beam_agents._protos import ActivationErrorRecord, AgentEnvelope, ToolIntent
 from beam_agents.actions.write_intents import (
     DEAD_LETTER_TAG,
     UnknownIntentsSchemeError,
@@ -27,11 +27,13 @@ from beam_agents.actions.write_intents import (
     _SerializeIntent,
     _validate_kv_input,
 )
+from beam_agents.core.dofn import REASON_INTENT_DEAD_LETTER
 from beam_agents.core.transform import (
     AgentConfig,
     DefaultSinkResolver,
     RunAgent,
     _KeyedWriteIntents,
+    _WriteErrors,
 )
 from tests.core._dofn_helpers import make_pong_provider, suspend_then_complete_agent
 
@@ -338,55 +340,86 @@ def _check_dead_letter_reached_errors(actual: list[tuple[bytes, bytes]]) -> None
     assert len(actual) == 1
     key, payload = actual[0]
     assert key == b"k"
-    detail = json.loads(payload)
+    # The unified errors-sink shape: an AgentEnvelope carrying the record, the
+    # same encoding an activation dead letter gets.
+    envelope = AgentEnvelope()
+    envelope.ParseFromString(payload)
+    assert envelope.entity_key == b"k"
+    record = ActivationErrorRecord()
+    record.ParseFromString(envelope.external_event)
+    assert record.reason == REASON_INTENT_DEAD_LETTER
+    detail = json.loads(record.detail)
     assert detail["reason"] == "boom"
     assert detail["tool_name"] == "http.post"
+    assert detail["intent_id"]
+    assert "seq" in detail
+
+
+def _check_dead_letter_reached_bigquery_errors(actual: list[dict[str, object]]) -> None:
+    # Scenario: BigQuery errors sinks accept intent dead letters. The old
+    # pre-encoded KV[bytes, bytes] shape made this scheme unreachable.
+    assert len(actual) == 1
+    row = actual[0]
+    assert row["entity_key"] == b"k".hex()
+    assert row["reason"] == REASON_INTENT_DEAD_LETTER
+    assert json.loads(str(row["detail"]))["reason"] == "boom"
 
 
 class _AssertingErrorsSink(beam.PTransform):
     """Asserts on the elements reaching `errors_to`, then passes them through."""
 
+    def __init__(self, matcher: Callable[..., None], label: str) -> None:
+        super().__init__()
+        self._matcher = matcher
+        self._label = label
+
     def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
-        assert_that(pcoll, _check_dead_letter_reached_errors, label="errors-to-dead-letter")
+        assert_that(pcoll, self._matcher, label=self._label)
         return pcoll
 
 
 class _RecordingErrorsResolver:
     """Delegates intents_to/traces_to to a real `DefaultSinkResolver`, but resolves
-    errors_to to an in-pipeline asserting sink instead of a real Kafka writer.
+    errors_to to the real encoder over an in-pipeline asserting sink instead of
+    a real Kafka/BigQuery writer.
 
     Exercises RunAgent's actual dead-letter -> errors_to wiring end to end
     (only the real IO clients are swapped out), reproducing the crash where
     dead-letter elements -- ``((entity_key, ToolIntent), reason)`` -- were
     routed straight into a sink expecting ``KV[bytes, bytes]``.
 
-    `RunAgent.expand` resolves `errors_to` twice: once for the intents dead
-    letter (the branch under test) and once for the always-empty
-    `outputs.errors` stream in this scenario. `_SINK_FIELDS` in
-    core/transform.py orders `intents_to` before `errors_to`, so the
-    dead-letter resolve happens first; only that first resolve is asserted
-    on, the second gets a plain passthrough.
+    `RunAgent.expand` resolves `errors_to` exactly once and writes the
+    activation dead letters and the intent dead letters through it together, so
+    this records the single resolve and asserts on everything that reached it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, matcher: Callable[..., None], *, to_row: bool = False) -> None:
         self._inner = DefaultSinkResolver()
-        self._errors_resolve_count = 0
+        self._matcher = matcher
+        self._to_row = to_row
+        self.errors_resolve_count = 0
 
     def validate(self, field_name: str, uri: str) -> None:
         self._inner.validate(field_name, uri)
 
     def resolve(self, field_name: str, uri: str) -> beam.PTransform:
         if field_name == "errors_to":
-            self._errors_resolve_count += 1
-            if self._errors_resolve_count == 1:
-                return _AssertingErrorsSink()
-            return beam.Map(lambda x: x)
+            self.errors_resolve_count += 1
+            return _WriteErrors(
+                _AssertingErrorsSink(self._matcher, "errors-to-dead-letter"), to_row=self._to_row
+            )
         return self._inner.resolve(field_name, uri)
 
 
-def test_run_agent_intent_dead_letter_reaches_errors_to_without_crashing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _force_dead_letters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every intent take `WriteIntents`' own dead-letter path.
+
+    Patching `_SerializeIntent.process` rather than
+    `ToolIntent.SerializeToString`: that method is also used by the stateful
+    DoFn's state coder to persist the pending intent before it ever reaches
+    `WriteIntents`, so patching it globally would fail commit itself rather
+    than exercising the dead-letter -> errors_to wiring.
+    """
     monkeypatch.setattr(
         "beam_agents.actions.write_intents._WRITERS",
         {
@@ -395,11 +428,6 @@ def test_run_agent_intent_dead_letter_reaches_errors_to_without_crashing(
         },
     )
 
-    # Force every intent through WriteIntents' own dead-letter path, without
-    # touching ToolIntent.SerializeToString globally: that method is also used
-    # by the stateful DoFn's state coder to persist the pending intent before
-    # it ever reaches WriteIntents, so patching it there would fail commit
-    # itself rather than exercising the dead-letter -> errors_to wiring.
     def always_dead_letters(
         self: _SerializeIntent, element: tuple[bytes, ToolIntent]
     ) -> Iterator[beam.pvalue.TaggedOutput]:
@@ -407,12 +435,9 @@ def test_run_agent_intent_dead_letter_reaches_errors_to_without_crashing(
 
     monkeypatch.setattr(_SerializeIntent, "process", always_dead_letters)
 
-    config = AgentConfig(
-        provider_factory=make_pong_provider,
-        intents_to="kafka://broker:9092/agent-intents",
-        errors_to="kafka://broker:9092/agent-errors",
-        sink_resolver=_RecordingErrorsResolver(),
-    )
+
+def _run_suspending_agent(config: AgentConfig) -> None:
+    """One activation that stages an intent, on a streaming TestPipeline."""
     options = beam.options.pipeline_options.PipelineOptions()
     options.view_as(beam.options.pipeline_options.StandardOptions).streaming = True
     with BeamTestPipeline(options=options) as p:
@@ -434,6 +459,84 @@ def test_run_agent_intent_dead_letter_reaches_errors_to_without_crashing(
             | beam.WithKeys(lambda e: e.entity_key).with_output_types(tuple[bytes, AgentEnvelope])
         )
         keyed | RunAgent(suspend_then_complete_agent, config=config)
+
+
+def test_run_agent_intent_dead_letter_reaches_errors_to_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Scenario: A dead-lettered intent reaches the errors sink as a unified
+    # record -- and, since activation dead letters encode identically,
+    # scenario: dead letters and activation errors share one sink schema.
+    _force_dead_letters(monkeypatch)
+    resolver = _RecordingErrorsResolver(_check_dead_letter_reached_errors)
+
+    _run_suspending_agent(
+        AgentConfig(
+            provider_factory=make_pong_provider,
+            intents_to="kafka://broker:9092/agent-intents",
+            errors_to="kafka://broker:9092/agent-errors",
+            sink_resolver=resolver,
+        )
+    )
+
+    # One sink for both error streams, so neither can drift into its own shape.
+    assert resolver.errors_resolve_count == 1
+
+
+def test_run_agent_intent_dead_letter_reaches_a_bigquery_errors_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Scenario: BigQuery errors sinks accept intent dead letters.
+    _force_dead_letters(monkeypatch)
+
+    _run_suspending_agent(
+        AgentConfig(
+            provider_factory=make_pong_provider,
+            intents_to="kafka://broker:9092/agent-intents",
+            errors_to="bigquery://my-project/my_dataset/agent_errors",
+            sink_resolver=_RecordingErrorsResolver(
+                _check_dead_letter_reached_bigquery_errors, to_row=True
+            ),
+        )
+    )
+
+
+def test_dead_letter_stays_exposed_when_no_errors_sink_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Scenario: dead_letter stays exposed without an errors sink. Nothing is
+    # written, but the branch must not vanish -- an unconsumed PCollection is
+    # how these were silently dropped before.
+    _force_dead_letters(monkeypatch)
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        intents_to="kafka://broker:9092/agent-intents",
+    )
+    options = beam.options.pipeline_options.PipelineOptions()
+    options.view_as(beam.options.pipeline_options.StandardOptions).streaming = True
+    with BeamTestPipeline(options=options) as p:
+        stream = (
+            TestStream()
+            .advance_watermark_to(0)
+            .add_elements(
+                [
+                    TimestampedValue(
+                        AgentEnvelope(entity_key=b"k", event_time_ms=0, external_event=b"go"), 0
+                    )
+                ]
+            )
+            .advance_watermark_to_infinity()
+        )
+        keyed = (
+            p
+            | stream
+            | beam.WithKeys(lambda e: e.entity_key).with_output_types(tuple[bytes, AgentEnvelope])
+        )
+        outputs = keyed | RunAgent(suspend_then_complete_agent, config=config)
+
+        assert outputs.dead_letter is not None
+        reasons = outputs.dead_letter | "dl-reasons" >> beam.Map(lambda pair: pair[1])
+        assert_that(reasons, equal_to(["boom"]), label="dead-letter-exposed")
 
 
 if __name__ == "__main__":  # pragma: no cover

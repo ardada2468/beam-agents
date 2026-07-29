@@ -164,6 +164,18 @@ class AgentEnvelope(_message.Message):
     approval: AgentEnvelope.Approval
     def __init__(self, entity_key: _Optional[bytes] = ..., event_time_ms: _Optional[int] = ..., external_event: _Optional[bytes] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., approval: _Optional[_Union[AgentEnvelope.Approval, _Mapping]] = ...) -> None: ...
 
+class ActivationErrorRecord(_message.Message):
+    __slots__ = ("entity_key", "reason", "detail", "event_time_ms")
+    ENTITY_KEY_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    DETAIL_FIELD_NUMBER: _ClassVar[int]
+    EVENT_TIME_MS_FIELD_NUMBER: _ClassVar[int]
+    entity_key: bytes
+    reason: str
+    detail: str
+    event_time_ms: int
+    def __init__(self, entity_key: _Optional[bytes] = ..., reason: _Optional[str] = ..., detail: _Optional[str] = ..., event_time_ms: _Optional[int] = ...) -> None: ...
+
 class Continuation(_message.Message):
     __slots__ = ("state_schema_version", "seq", "step_index", "pending_intent_ids", "adapter", "snapshot", "suspended_at_ms", "deadline_ms", "escalations")
     STATE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]

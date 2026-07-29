@@ -101,7 +101,7 @@ def test_a_ttl_fire_over_a_live_suspension_emits_a_dead_letter_record() -> None:
     error, trace = emitted
     assert error.tag == "errors"
     assert error.value == ActivationError(
-        _KEY, REASON_TTL_WIPED_SUSPENSION, "seq=3,deadline_ms=9000"
+        _KEY, REASON_TTL_WIPED_SUSPENSION, "seq=3,deadline_ms=9000", _FIRED_AT_MS
     )
     # Scenario: A TTL-wiped suspension is traced. The dead-letter record names
     # the key; the trace event puts the loss in the suspended activation's own

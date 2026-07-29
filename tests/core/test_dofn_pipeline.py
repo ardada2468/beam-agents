@@ -104,7 +104,9 @@ def test_orphaned_result_routes_to_errors() -> None:
         assert_that(out.output, equal_to([]), label="no-output")
         assert_that(
             out.errors,
-            equal_to([ActivationError(b"k", REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:ghost")]),
+            equal_to(
+                [ActivationError(b"k", REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:ghost", 1000)]
+            ),
             label="orphaned-error",
         )
 
@@ -124,7 +126,9 @@ def test_orphaned_approval_routes_to_errors() -> None:
         assert_that(out.output, equal_to([]), label="no-output")
         assert_that(
             out.errors,
-            equal_to([ActivationError(b"k", REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:ghost")]),
+            equal_to(
+                [ActivationError(b"k", REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:ghost", 1000)]
+            ),
             label="orphaned-approval",
         )
 

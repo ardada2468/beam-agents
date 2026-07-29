@@ -6,6 +6,7 @@ this package; never regenerate or hand-edit ``beam_agents_pb2`` directly.
 """
 
 from beam_agents._protos.beam_agents_pb2 import (
+    ActivationErrorRecord,
     AgentEnvelope,
     Continuation,
     LlmCacheBlob,
@@ -16,6 +17,7 @@ from beam_agents._protos.beam_agents_pb2 import (
 )
 
 __all__ = [
+    "ActivationErrorRecord",
     "AgentEnvelope",
     "Continuation",
     "LlmCacheBlob",
