@@ -57,7 +57,7 @@ Async bridge: `setup()` starts one background thread per DoFn instance with a de
 
 ### Module map
 
-`core/` transform, dofn, context, loop driver, coders · `model/` LLMClient + providers (anthropic, openai_compat, vertex, vllm) + replay cache · `tools/` @tool registry (side_effect flag), read-only MCP · `actions/` intents + outbox sinks · `memory/` facade, stores (Bigtable/Redis/Firestore/SQL), compaction · `adapters/` protocol, langgraph (BeamCheckpointSaver + interrupt→intent), adk, pydantic_ai · `observability/` traces (OTel GenAI conventions), metrics, exporters · `hitl.py` · `yaml/` provider · `effector/` (separate reference service: consume intents → dedup → execute → publish results).
+`core/` transform, dofn, context, loop driver, coders · `model/` LLMClient + providers (anthropic, openai_compat, vertex, vllm) + replay cache · `tools/` @tool registry (side_effect flag), read-only MCP · `actions/` intents + outbox sinks · `memory/` facade, stores (Bigtable/Redis/Firestore/SQL), compaction · `adapters/` protocol, langgraph (BeamCheckpointSaver + interrupt→intent), adk, pydantic_ai · `observability/` traces (OTel GenAI conventions), metrics, exporters (BigQuery schema'd writer, batched non-blocking OTLP/HTTP) · `hitl.py` · `yaml/` provider · `effector/` (separate reference service: consume intents → dedup → execute → publish results).
 
 ## Conventions
 

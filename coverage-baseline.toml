@@ -17,7 +17,21 @@
 # add-failure-context: 0.9418 (the wrapper and the enriched DoFn route are
 # fully branch-covered by the loop and fake-handle suites).
 #
+# add-errors-sink-encoding: 0.9424 (the errors encoders are branch-free and
+# fully covered, and threading `event_time_ms` through every `_dead_letter`
+# call site brought core/dofn.py's remaining failure-exit branches in).
+#
 # add-langgraph-adapter: 0.9433 (the adapter package lands at 96% branch
 # coverage — its remaining partials are contextvar/isinstance guards exercised
 # only one way per test — pulling the project rate up).
-branch_rate = 0.9433
+#
+# add-trace-exporters: 0.9491 (the OTLP mapping/DoFn, the sink-URI grammar,
+# and the schema'd BigQuery writer arm are exercised by offline unit tests in
+# the ci lane).
+#
+# Merge resolution (add-errors-sink-encoding 0.9424, add-langgraph-adapter
+# 0.9433, add-trace-exporters 0.9491): same rule as the merges above — each
+# number was measured against its own tree and the rate is a ratio over the
+# whole project, so the combined tree is re-measured rather than having one
+# side picked. Measured on the combined tree: 0.9484.
+branch_rate = 0.9484

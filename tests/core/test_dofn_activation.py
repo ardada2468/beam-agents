@@ -266,7 +266,7 @@ def test_a_resume_whose_pending_intent_expired_is_refused() -> None:
 
     assert _main(emitted) == []
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ORPHANED, f"{DETAIL_INTENT_EXPIRED}:{intent_id}")
+        ActivationError(_KEY, REASON_ORPHANED, f"{DETAIL_INTENT_EXPIRED}:{intent_id}", _NOW_MS)
     ]
     assert driver.seq.value == 0
 
@@ -500,6 +500,7 @@ def test_a_start_failure_dead_letters_the_key_reason_and_exception() -> None:
             _KEY,
             REASON_ERROR,
             f"{RuntimeError('agent blew up')!r} failed_at_step=0 after=ACTIVATION_START",
+            _NOW_MS,
         )
     ]
 
@@ -511,7 +512,7 @@ def test_a_start_timeout_dead_letters_with_no_detail() -> None:
 
     emitted = driver.process(_event())
 
-    assert _tagged(emitted, "errors") == [ActivationError(_KEY, REASON_TIMEOUT, "")]
+    assert _tagged(emitted, "errors") == [ActivationError(_KEY, REASON_TIMEOUT, "", _NOW_MS)]
 
 
 def test_a_resume_failure_dead_letters_the_key_reason_and_exception() -> None:
@@ -535,6 +536,7 @@ def test_a_resume_failure_dead_letters_the_key_reason_and_exception() -> None:
             _KEY,
             REASON_ERROR,
             f"{RuntimeError('resume blew up')!r} failed_at_step=1 after=ACTIVATION_START",
+            _NOW_MS,
         )
     ]
     # Fail-closed: the continuation the resume was running against is untouched.
@@ -554,7 +556,7 @@ def test_a_resume_timeout_dead_letters_with_no_detail() -> None:
 
     emitted = driver.process(_tool_result(cont.pending_intent_ids[0]))
 
-    assert _tagged(emitted, "errors") == [ActivationError(_KEY, REASON_TIMEOUT, "")]
+    assert _tagged(emitted, "errors") == [ActivationError(_KEY, REASON_TIMEOUT, "", _NOW_MS)]
     assert driver.seq.value == 0
 
 

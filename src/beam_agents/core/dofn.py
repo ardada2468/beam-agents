@@ -121,6 +121,10 @@ REASON_ORPHANED = "orphaned_result"
 # so a backlog replay can still cross the event-time mark first. The suspension
 # is unrecoverable at that point; this reason makes the loss observable.
 REASON_TTL_WIPED_SUSPENSION = "ttl_wiped_suspension"
+# An intent that could not be serialized for the outbox. Not produced by this
+# DoFn -- `WriteIntents` dead-letters it downstream and `RunAgent` maps it onto
+# the same `ActivationError` shape, so one schema covers the whole errors sink.
+REASON_INTENT_DEAD_LETTER = "intent_dead_letter"
 
 # Details distinguishing the four ways a resume can fail admission, carried on
 # the `orphaned_result` record so triage does not have to re-derive them.
@@ -133,6 +137,7 @@ __all__ = [
     "HITL_TIMEOUT_OUTPUT",
     "REASON_ERROR",
     "REASON_HITL_TIMEOUT",
+    "REASON_INTENT_DEAD_LETTER",
     "REASON_ORPHANED",
     "REASON_TIMEOUT",
     "REASON_TTL_WIPED_SUSPENSION",
@@ -142,13 +147,23 @@ __all__ = [
 
 @dataclass(frozen=True)
 class ActivationError:
-    """Dead-letter record for the ``.errors`` output. Carries the key and reason
-    so a downstream sink can triage without re-deriving context.
+    """Dead-letter record for the ``.errors`` output. Carries the key, reason,
+    and when it happened, so a downstream sink can triage without re-deriving
+    context.
+
+    ``event_time_ms`` is always a replay-deterministic time — the element's
+    event time on the element path, a timer's scheduled firing time on the
+    timer paths — never a wall-clock reading. The errors sink encodes it into
+    every published record, so a retried bundle that walks the same failure
+    path must produce a byte-identical one. It defaults to ``0`` so a record
+    built by a caller that has no timestamp is still constructible; every
+    emission site inside this DoFn supplies one.
     """
 
     entity_key: bytes
     reason: str
     detail: str = ""
+    event_time_ms: int = 0
 
 
 def _ms_timestamp(ms: int) -> Timestamp:
@@ -324,7 +339,7 @@ class _AgentDoFn(beam.DoFn):
                 event=event,
             )
         except ActivationTimeout:
-            yield self._dead_letter(key, REASON_TIMEOUT)
+            yield self._dead_letter(key, REASON_TIMEOUT, event_time_ms=now_ms)
             yield _error_trace(key, current_seq, now_ms, REASON_TIMEOUT)
             return
         except ActivationFailed as failed:
@@ -335,7 +350,7 @@ class _AgentDoFn(beam.DoFn):
             return
         except Exception as exc:
             # Any activation failure fails closed: route to errors, commit nothing.
-            yield self._dead_letter(key, REASON_ERROR, repr(exc))
+            yield self._dead_letter(key, REASON_ERROR, repr(exc), event_time_ms=now_ms)
             yield _error_trace(
                 key, current_seq, now_ms, REASON_ERROR, error_type=type(exc).__name__
             )
@@ -375,7 +390,9 @@ class _AgentDoFn(beam.DoFn):
         if detail is not None:
             # No live, unexpired continuation matches: orphaned. Mutate nothing.
             # No agent runs, so there is no duration to sample either.
-            yield self._dead_letter(key, REASON_ORPHANED, f"{detail}:{intent_id}")
+            yield self._dead_letter(
+                key, REASON_ORPHANED, f"{detail}:{intent_id}", event_time_ms=now_ms
+            )
             # Scope the trace to the continuation's activation when there is
             # one; a genuinely orphaned result has no activation to belong to,
             # so the key's current seq is the closest true scope.
@@ -405,7 +422,7 @@ class _AgentDoFn(beam.DoFn):
                 step_index=cont.step_index,
             )
         except ActivationTimeout:
-            yield self._dead_letter(key, REASON_TIMEOUT)
+            yield self._dead_letter(key, REASON_TIMEOUT, event_time_ms=now_ms)
             yield _error_trace(key, cont.seq, now_ms, REASON_TIMEOUT)
             return
         except ActivationFailed as failed:
@@ -416,7 +433,7 @@ class _AgentDoFn(beam.DoFn):
             return
         except Exception as exc:
             # Any activation failure fails closed: route to errors, commit nothing.
-            yield self._dead_letter(key, REASON_ERROR, repr(exc))
+            yield self._dead_letter(key, REASON_ERROR, repr(exc), event_time_ms=now_ms)
             yield _error_trace(key, cont.seq, now_ms, REASON_ERROR, error_type=type(exc).__name__)
             return
 
@@ -627,6 +644,7 @@ class _AgentDoFn(beam.DoFn):
                 key,
                 REASON_TTL_WIPED_SUSPENSION,
                 f"seq={cont.seq},deadline_ms={cont.deadline_ms}",
+                event_time_ms=timestamp.micros // 1000,
             )
             yield _error_trace(
                 key,
@@ -685,7 +703,7 @@ class _AgentDoFn(beam.DoFn):
             # An ordinary output, not a dead letter: nothing to count.
             yield route.output
         else:
-            yield self._dead_letter(key, route.reason, detail)
+            yield self._dead_letter(key, route.reason, detail, event_time_ms=fired_at_ms)
         # Both routes end the wait without an answer; the trace records it
         # either way, in the suspended activation's own trace.
         yield _error_trace(key, cont.seq, fired_at_ms, REASON_HITL_TIMEOUT, role=ROLE_TIMER)
@@ -808,7 +826,9 @@ class _AgentDoFn(beam.DoFn):
         """
         cause = failed.__cause__ if failed.__cause__ is not None else failed
         context = failed.context
-        yield self._dead_letter(key, REASON_ERROR, f"{cause!r}{context.detail_suffix()}")
+        yield self._dead_letter(
+            key, REASON_ERROR, f"{cause!r}{context.detail_suffix()}", event_time_ms=now_ms
+        )
         yield _error_trace(
             key,
             seq,
@@ -820,7 +840,9 @@ class _AgentDoFn(beam.DoFn):
 
     # -- metrics --------------------------------------------------------------
 
-    def _dead_letter(self, key: bytes, reason: str, detail: str = "") -> beam.pvalue.TaggedOutput:
+    def _dead_letter(
+        self, key: bytes, reason: str, detail: str = "", *, event_time_ms: int
+    ) -> beam.pvalue.TaggedOutput:
         """Build a dead-letter record and count it. The single chokepoint.
 
         Every `.errors` emission in this DoFn goes through here, including the
@@ -828,12 +850,18 @@ class _AgentDoFn(beam.DoFn):
         element count on `.errors` by construction. A new emission site that
         called the pure `_error` builder directly would be a visibly different
         call, not an invisible omission.
+
+        `event_time_ms` is keyword-only and has no default for the same reason:
+        every caller must name the deterministic time it is stamping (the
+        element's event time, or the timer's firing time), and a site that
+        forgets is a `TypeError` at import-time-adjacent test collection rather
+        than a record that silently reads epoch zero downstream.
         """
         if reason == REASON_ORPHANED:
             self._metrics.incr(COUNTER_ORPHANED_RESULTS)
         else:
             self._metrics.incr(COUNTER_AGENT_ERRORS)
-        return _error(key, reason, detail)
+        return _error(key, reason, detail, event_time_ms=event_time_ms)
 
 
 def _admission_failure(
@@ -866,8 +894,12 @@ def _admission_failure(
     return None
 
 
-def _error(entity_key: bytes, reason: str, detail: str = "") -> beam.pvalue.TaggedOutput:
-    return beam.pvalue.TaggedOutput("errors", ActivationError(entity_key, reason, detail))
+def _error(
+    entity_key: bytes, reason: str, detail: str = "", *, event_time_ms: int = 0
+) -> beam.pvalue.TaggedOutput:
+    return beam.pvalue.TaggedOutput(
+        "errors", ActivationError(entity_key, reason, detail, event_time_ms)
+    )
 
 
 def _error_trace(

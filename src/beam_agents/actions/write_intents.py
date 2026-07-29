@@ -34,7 +34,6 @@ Importing this module has no side effects.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -233,28 +232,6 @@ class _SerializeIntent(beam.DoFn):
             yield beam.pvalue.TaggedOutput(DEAD_LETTER_TAG, (element, str(exc)))
             return
         yield key, payload
-
-
-def encode_intent_dead_letter(element: tuple[tuple[bytes, ToolIntent], str]) -> tuple[bytes, bytes]:
-    """Encode a ``.dead_letter`` element as ``KV[bytes, bytes]``.
-
-    ``.dead_letter`` elements are ``((entity_key, ToolIntent), reason)`` --
-    the shape `RunAgent` needs to route them onward to an `errors_to` sink,
-    which (for the Kafka scheme, the pairing this is exercised against)
-    requires ``KV[bytes, bytes]``. The failed intent's own serialization is
-    what failed, so this carries the identifying fields it does have rather
-    than re-attempting ``SerializeToString``.
-    """
-    (key, intent), reason = element
-    detail = json.dumps(
-        {
-            "reason": reason,
-            "intent_id": intent.intent_id,
-            "seq": intent.seq,
-            "tool_name": intent.tool_name,
-        }
-    )
-    return key, detail.encode("utf-8")
 
 
 class WriteIntents(beam.PTransform):

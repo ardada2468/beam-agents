@@ -12,6 +12,11 @@ from unittest import mock
 
 import apache_beam as beam
 import pytest
+
+# Imported at module scope (unlike the runtime's lazy resolver imports) so the
+# writer-configuration tests can assert against the real classes; the poison
+# test below patches sys.modules, which module-level bindings don't defeat.
+from apache_beam.io.gcp.bigquery import BigQueryDisposition, WriteToBigQuery
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Aliased: a bare "TestPipeline" name would be mis-collected by pytest.
@@ -21,7 +26,14 @@ from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
 from beam_agents._protos import AgentEnvelope, TraceEvent
-from beam_agents.core.dofn import _AgentDoFn
+from beam_agents.core.dofn import (
+    DETAIL_NO_CONTINUATION,
+    REASON_ERROR,
+    REASON_ORPHANED,
+    ActivationError,
+    _AgentDoFn,
+)
+from beam_agents.core.error_records import activation_error_to_row, serialize_error_envelope
 from beam_agents.core.transform import (
     AgentConfig,
     DefaultSinkResolver,
@@ -29,10 +41,13 @@ from beam_agents.core.transform import (
     RunAgentOutputs,
     UnknownSinkSchemeError,
     _validate_kv_input,
+    _WriteErrors,
     _WriteTraces,
 )
 from beam_agents.hitl import HitlPolicy
 from beam_agents.observability import trace_event_to_row, trace_id_for
+from beam_agents.observability.exporters import TRACE_TABLE_SCHEMA
+from beam_agents.observability.otlp import WriteTracesToOtlp
 from beam_agents.tools import ToolRegistry
 from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import (
@@ -55,8 +70,32 @@ _TRACE_EVENT = TraceEvent(
 )
 
 
+_ACTIVATION_ERROR = ActivationError(
+    entity_key=b"key-1",
+    reason=REASON_ERROR,
+    detail="RuntimeError('boom') failed_at_step=0 after=ACTIVATION_START",
+    event_time_ms=1_000,
+)
+
+# The dead letter `_orphaned_result` below produces: a tool result naming an
+# intent no continuation ever pended, at the element's own event time.
+_ORPHAN_ERROR = ActivationError(
+    entity_key=b"k",
+    reason=REASON_ORPHANED,
+    detail=f"{DETAIL_NO_CONTINUATION}:ghost",
+    event_time_ms=1_000,
+)
+
+
 def _event(key: bytes, payload: bytes, t_ms: int = 1000) -> AgentEnvelope:
     return AgentEnvelope(entity_key=key, event_time_ms=t_ms, external_event=payload)
+
+
+def _orphaned_result(key: bytes, t_ms: int = 1000) -> AgentEnvelope:
+    """A tool result for an intent nobody is waiting on -> an `.errors` record."""
+    envelope = AgentEnvelope(entity_key=key, event_time_ms=t_ms)
+    envelope.tool_result.intent_id = "ghost"
+    return envelope
 
 
 def _keyed(p: beam.Pipeline, *envelopes: AgentEnvelope) -> beam.pvalue.PCollection:
@@ -102,6 +141,38 @@ class _StubSinkResolver:
     def resolve(self, field_name: str, uri: str) -> beam.PTransform:
         self.resolved.append(uri)
         return beam.Map(lambda x: x)
+
+
+class _RecordingWrite(beam.PTransform):
+    """Identity write that keeps the ``PCollection`` it was handed.
+
+    Pipeline construction is synchronous and in-process, so after
+    ``RunAgent`` is applied this transform's ``written`` is the very
+    collection the resolver's encoding fed to the writer — which is what the
+    "not dataclasses" scenario is about.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.written: beam.pvalue.PCollection | None = None
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        self.written = pcoll
+        return pcoll
+
+
+class _RecordingErrorsResolver:
+    """Resolves ``errors_to`` to the *real* encoder over a recording writer."""
+
+    def __init__(self, *, to_row: bool = False) -> None:
+        self.sink = _RecordingWrite()
+        self._to_row = to_row
+
+    def validate(self, field_name: str, uri: str) -> None:
+        pass
+
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        return _WriteErrors(self.sink, to_row=self._to_row)
 
 
 class _RejectingSinkResolver:
@@ -421,9 +492,146 @@ def test_the_traces_encoder_hands_the_sink_what_its_scheme_accepts(
         assert_that(written, equal_to(expected))
 
 
+# --- Requirement: An `otlp://` traces sink scheme ------------------------------
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "otlp://collector:4318",
+        "otlp://collector",  # port defaults
+        "otlp://collector:4318?tls=true&batch_size=64&flush_deadline_s=2.5"
+        "&queue_batches=4&service_name=my-pipeline",
+    ],
+)
+def test_otlp_uri_validates_for_traces_to(uri: str) -> None:
+    DefaultSinkResolver().validate("traces_to", uri)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "otlp://",  # no host
+        "otlp://collector:not-a-port",  # unparseable port
+        "otlp://collector:4318/some/path",  # the /v1/traces path is implied
+        "otlp://collector:4318?batch_size=zero",  # unparseable int
+        "otlp://collector:4318?flush_deadline_s=soon",  # unparseable float
+        "otlp://collector:4318?batch_size=0",  # not positive
+        "otlp://collector:4318?queue_batches=0",  # not positive
+        "otlp://collector:4318?flush_deadline_s=0",  # not positive
+        "otlp://collector:4318?tls=maybe",  # not a bool
+        "otlp://collector:4318?bogus=1",  # unknown option
+    ],
+)
+def test_malformed_otlp_uri_fails_at_construction(uri: str) -> None:
+    # Scenario: A malformed OTLP URI fails at construction.
+    with pytest.raises(UnknownSinkSchemeError, match=r"otlp://<host>:<port>"):
+        DefaultSinkResolver().validate("traces_to", uri)
+
+
+@pytest.mark.parametrize("field_name", ["intents_to", "errors_to"])
+def test_otlp_is_refused_for_the_intents_and_errors_sinks(field_name: str) -> None:
+    # Scenario: OTLP is refused for the intents and errors sinks — they are
+    # correctness-bearing streams and must not ride a best-effort exporter.
+    kwargs: dict[str, Any] = {field_name: "otlp://collector:4318"}
+    with pytest.raises(ValueError, match="best-effort"):
+        AgentConfig(provider_factory=make_pong_provider, **kwargs)
+
+
+@pytest.mark.parametrize("field_name", ["intents_to", "errors_to"])
+def test_otlp_refusal_also_guards_resolution(field_name: str) -> None:
+    # A resolver used directly (not through AgentConfig) must refuse too.
+    with pytest.raises(UnknownSinkSchemeError, match="best-effort"):
+        DefaultSinkResolver().resolve(field_name, "otlp://collector:4318")
+
+
+def test_otlp_validation_does_not_import_the_otlp_dependency() -> None:
+    # Scenario: Validation does not import the OTLP dependency.
+    with mock.patch.dict(sys.modules, {"opentelemetry": None}):
+        DefaultSinkResolver().validate("traces_to", "otlp://collector:4318")
+        AgentConfig(provider_factory=make_pong_provider, traces_to="otlp://collector:4318")
+
+
+def test_otlp_resolves_to_the_export_transform_with_knobs_applied() -> None:
+    transform = DefaultSinkResolver().resolve(
+        "traces_to",
+        "otlp://collector:4318?batch_size=64&flush_deadline_s=2.5"
+        "&queue_batches=4&service_name=my-pipeline",
+    )
+
+    assert isinstance(transform, WriteTracesToOtlp)
+    assert transform._endpoint == "http://collector:4318/v1/traces"
+    assert transform._batch_size == 64
+    assert transform._flush_deadline_s == 2.5
+    assert transform._queue_batches == 4
+    assert transform._service_name == "my-pipeline"
+
+
+def test_otlp_resolution_defaults_are_the_documented_ones() -> None:
+    transform = DefaultSinkResolver().resolve("traces_to", "otlp://collector:4318")
+
+    assert isinstance(transform, WriteTracesToOtlp)
+    assert transform._batch_size == 512
+    assert transform._flush_deadline_s == 5.0
+    assert transform._queue_batches == 8
+    assert transform._service_name == "beam-agents"
+
+
+def test_otlp_tls_and_default_port_shape_the_endpoint() -> None:
+    tls = DefaultSinkResolver().resolve("traces_to", "otlp://collector:4318?tls=true")
+    default_port = DefaultSinkResolver().resolve("traces_to", "otlp://collector")
+
+    assert isinstance(tls, WriteTracesToOtlp)
+    assert tls._endpoint == "https://collector:4318/v1/traces"
+    assert isinstance(default_port, WriteTracesToOtlp)
+    assert default_port._endpoint == "http://collector:4318/v1/traces"
+
+
+# --- Requirement: A self-provisioning BigQuery traces writer -------------------
+
+
+def test_a_bigquery_traces_sink_carries_schema_and_dispositions() -> None:
+    # Scenario: The writer carries schema and dispositions.
+    transform = DefaultSinkResolver().resolve(
+        "traces_to", "bigquery://my-project/my_dataset/traces"
+    )
+
+    assert isinstance(transform, _WriteTraces)
+    writer = transform._sink
+    assert isinstance(writer, WriteToBigQuery)
+    assert writer.schema == TRACE_TABLE_SCHEMA
+    assert writer.create_disposition == BigQueryDisposition.CREATE_IF_NEEDED
+    assert writer.write_disposition == BigQueryDisposition.WRITE_APPEND
+    assert writer.additional_bq_parameters == {
+        "timePartitioning": {"type": "DAY", "field": "event_time"},
+        "clustering": {"fields": ["trace_id"]},
+    }
+    assert writer.table_reference.projectId == "my-project"
+    assert writer.table_reference.datasetId == "my_dataset"
+    assert writer.table_reference.tableId == "traces"
+
+
+def test_other_bigquery_sinks_are_not_schema_d() -> None:
+    # `errors_to`/`intents_to` BigQuery resolution is unchanged: the trace
+    # table's schema must not leak onto other streams' writers. `errors_to`
+    # rides its own row encoder (`_WriteErrors`), so the assertion is about the
+    # writer it wraps.
+    resolver = DefaultSinkResolver()
+
+    errors = resolver.resolve("errors_to", "bigquery://my-project/my_dataset/errs")
+    assert isinstance(errors, _WriteErrors)
+    inner = errors._sink
+    assert isinstance(inner, WriteToBigQuery)
+    assert inner.schema is None
+
+    intents = resolver.resolve("intents_to", "bigquery://my-project/my_dataset/ints")
+    assert isinstance(intents, WriteToBigQuery)
+    assert intents.schema is None
+
+
 def test_other_sinks_are_not_wrapped_in_the_traces_encoder() -> None:
-    # `errors_to` carries `ActivationError` dataclasses, not `TraceEvent`s; the
-    # trace encoder must not be applied to them.
+    # `errors_to` carries `ActivationError` dataclasses, not `TraceEvent`s: it
+    # gets its own encoder (`_WriteErrors`), never the trace one.
     transform = DefaultSinkResolver().resolve(
         "errors_to", "bigquery://my-project/my_dataset/my_table"
     )
@@ -493,6 +701,73 @@ def test_a_configured_decode_puts_truthful_token_counts_on_the_traces() -> None:
         )
         # len(b"pong"), the response the fake provider returns.
         assert_that(usage, equal_to(["4"]), label="truthful-usage")
+
+
+# --- Requirement: The errors output is deliverable to a configured sink ------
+
+
+@pytest.mark.parametrize(
+    ("uri", "expect_row"),
+    [
+        ("kafka://broker:9092/errors", False),
+        ("pubsub://my-project/errors", False),
+        ("bigquery://my-project/my_dataset/errors", True),
+    ],
+)
+def test_an_errors_sink_encodes_before_writing(uri: str, expect_row: bool) -> None:
+    # Scenarios: errors_to kafka/bigquery URIs resolve to an encoding writer.
+    # A raw write transform cannot accept an `ActivationError` dataclass, so
+    # resolution for `errors_to` must wrap the writer in the scheme's encoder.
+    transform = DefaultSinkResolver().resolve("errors_to", uri)
+
+    assert isinstance(transform, _WriteErrors)
+    assert transform._to_row is expect_row
+
+
+@pytest.mark.parametrize(
+    ("to_row", "expected"),
+    [
+        (False, [serialize_error_envelope(_ACTIVATION_ERROR)]),
+        (True, [activation_error_to_row(_ACTIVATION_ERROR)]),
+    ],
+)
+def test_the_errors_encoder_hands_the_sink_what_its_scheme_accepts(
+    to_row: bool, expected: list[Any]
+) -> None:
+    # The encoder is the whole reason a configured `errors_to` works: run it
+    # against a recording sink and assert on what the writer actually receives.
+    with BeamTestPipeline() as p:
+        written = (
+            p
+            | beam.Create([_ACTIVATION_ERROR])
+            | _WriteErrors(beam.Map(lambda x: x), to_row=to_row)
+        )
+        assert_that(written, equal_to(expected))
+
+
+def test_a_configured_errors_sink_receives_encoded_records_not_dataclasses() -> None:
+    # Scenario: A configured errors sink receives encoded records, not
+    # dataclasses. The resolver hands back the real encoding wrapped around a
+    # recording writer, so this exercises the production path rather than a
+    # stand-in for it.
+    resolver = _RecordingErrorsResolver()
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        errors_to="stub://errors",
+        sink_resolver=resolver,
+    )
+    with BeamTestPipeline() as p:
+        keyed = _keyed(p, _orphaned_result(b"k"))
+        outputs = keyed | RunAgent(seq_agent, config=config)
+        # What reached the writer: keyed envelope bytes carrying the record.
+        assert_that(
+            resolver.sink.written,
+            equal_to([serialize_error_envelope(_ORPHAN_ERROR)]),
+            label="encoded-at-the-writer",
+        )
+        # ...and `.errors` still exposes the dataclass to a direct consumer.
+        reasons = outputs.errors | "reasons" >> beam.Map(lambda e: e.reason)
+        assert_that(reasons, equal_to([REASON_ORPHANED]), label="errors-still-exposed")
 
 
 if __name__ == "__main__":  # pragma: no cover

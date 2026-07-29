@@ -29,8 +29,8 @@ Importing this module has no side effects.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from urllib.parse import parse_qs, urlparse
 
 import apache_beam as beam
 
@@ -38,11 +38,15 @@ from beam_agents._protos import ToolIntent
 from beam_agents.actions.write_intents import (
     WriteIntents,
     WriteIntentsResult,
-    encode_intent_dead_letter,
     is_kv_shaped,
 )
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
+from beam_agents.core.error_records import (
+    activation_error_to_row,
+    intent_dead_letter_to_error,
+    serialize_error_envelope,
+)
 from beam_agents.hitl import HitlPolicy
 from beam_agents.observability import serialize_trace_event, trace_event_to_row
 from beam_agents.tools import ToolRegistry
@@ -73,6 +77,87 @@ _SINK_LABELS = {
 
 class UnknownSinkSchemeError(ValueError):
     """A sink URI's scheme is unrecognized, or the URI is malformed for its scheme."""
+
+
+_OTLP_GRAMMAR = (
+    "expected otlp://<host>:<port>"
+    "[?tls=true&batch_size=N&flush_deadline_s=S&queue_batches=N&service_name=NAME]"
+)
+_OTLP_DEFAULT_PORT = 4318
+
+
+def _parse_otlp_uri(field_name: str, uri: str) -> tuple[str, dict[str, Any]]:
+    """Parse ``otlp://<host>[:<port>][?opts]`` into ``(endpoint, exporter options)``.
+
+    Import-free, like every ``validate`` path: raises
+    :class:`UnknownSinkSchemeError` carrying the grammar for a missing host, a
+    stray path (the ``/v1/traces`` path is implied, never spelled), an unknown
+    option, or an unparseable/non-positive option value.
+    """
+    parsed = urlparse(uri)
+    try:
+        # `.port` raises ValueError (rather than returning None) for a
+        # non-numeric or out-of-range port.
+        port = parsed.port
+        hostname = parsed.hostname
+    except ValueError as exc:
+        raise UnknownSinkSchemeError(
+            f"{field_name}: malformed otlp URI {uri!r}; {_OTLP_GRAMMAR}"
+        ) from exc
+    if not hostname:
+        raise UnknownSinkSchemeError(f"{field_name}: malformed otlp URI {uri!r}; {_OTLP_GRAMMAR}")
+    if parsed.path and parsed.path != "/":
+        raise UnknownSinkSchemeError(
+            f"{field_name}: otlp URI {uri!r} must not carry a path (the /v1/traces "
+            f"endpoint is implied); {_OTLP_GRAMMAR}"
+        )
+    options: dict[str, Any] = {}
+    tls = False
+    for key, values in parse_qs(parsed.query, keep_blank_values=True).items():
+        value = values[-1]
+        try:
+            if key == "tls":
+                tls = _parse_otlp_bool(value)
+            else:
+                options[key] = _OTLP_OPTION_PARSERS[key](value)
+        except (KeyError, ValueError) as exc:
+            raise UnknownSinkSchemeError(
+                f"{field_name}: bad otlp URI option {key}={value!r} in {uri!r}; {_OTLP_GRAMMAR}"
+            ) from exc
+    scheme = "https" if tls else "http"
+    if port is None:
+        port = _OTLP_DEFAULT_PORT
+    return f"{scheme}://{hostname}:{port}/v1/traces", options
+
+
+def _parse_otlp_bool(value: str) -> bool:
+    if value not in ("true", "false"):
+        raise ValueError(value)
+    return value == "true"
+
+
+def _parse_otlp_positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(value)
+    return parsed
+
+
+def _parse_otlp_positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise ValueError(value)
+    return parsed
+
+
+# Option-name -> value parser; an unknown option is a KeyError, reported with
+# the same grammar message as an unparseable value.
+_OTLP_OPTION_PARSERS: dict[str, Callable[[str], Any]] = {
+    "batch_size": _parse_otlp_positive_int,
+    "queue_batches": _parse_otlp_positive_int,
+    "flush_deadline_s": _parse_otlp_positive_float,
+    "service_name": str,
+}
 
 
 @runtime_checkable
@@ -135,14 +220,45 @@ class _WriteTraces(beam.PTransform):
         return encoded | "WriteEncodedTraces" >> self._sink
 
 
+class _WriteErrors(beam.PTransform):
+    """Encodes ``ActivationError``s for ``sink``'s scheme, then writes them.
+
+    ``.errors`` is a ``PCollection[ActivationError]`` -- a dataclass, not even a
+    proto -- and none of the write transforms accept one, so without this step a
+    configured ``errors_to`` fails at runtime. The message-bus encoding wraps
+    each record in an ``AgentEnvelope``, which makes the errors topic directly
+    consumable by a downstream pipeline (``docs/errors.md``); BigQuery takes a
+    row mapping. Same shape as :class:`_WriteTraces`, for the same reason.
+    """
+
+    def __init__(self, sink: beam.PTransform, *, to_row: bool) -> None:
+        super().__init__()
+        self._sink = sink
+        self._to_row = to_row
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        if self._to_row:
+            encoded = pcoll | "ActivationErrorToRow" >> beam.Map(activation_error_to_row)
+        else:
+            encoded = pcoll | "SerializeErrorEnvelope" >> beam.Map(
+                serialize_error_envelope
+            ).with_output_types(tuple[bytes, bytes])
+        return encoded | "WriteEncodedErrors" >> self._sink
+
+
 class DefaultSinkResolver:
-    """Resolves ``kafka://``, ``pubsub://``, and ``bigquery://`` sink URIs.
+    """Resolves ``kafka://``, ``pubsub://``, ``bigquery://``, and (for
+    ``traces_to`` only) ``otlp://`` sink URIs.
 
     URI grammar:
 
     - ``kafka://<bootstrap-servers>/<topic>`` — comma-separated ``host:port`` list.
     - ``pubsub://<project>/<topic>``
     - ``bigquery://<project>/<dataset>/<table>``
+    - ``otlp://<host>[:<port>][?opts]`` — OTLP/HTTP collector, port defaulting
+      to 4318, targeting its ``/v1/traces`` endpoint. Options (each optional):
+      ``tls=true``, ``batch_size``, ``flush_deadline_s``, ``queue_batches``,
+      ``service_name``.
 
     For ``intents_to`` with a ``kafka://`` or ``pubsub://`` scheme, resolution
     returns the keyed :class:`WriteIntents` outbox writer (see
@@ -150,22 +266,43 @@ class DefaultSinkResolver:
     key's intents are routed to a single partition/ordering key and
     serialization failures are dead-lettered rather than dropped.
 
+    ``otlp://`` is valid only for ``traces_to``: the OTLP exporter is a
+    best-effort tap that drops on delivery failure by contract, and intents
+    and errors are correctness-bearing streams that need a lossless sink.
+    A ``bigquery://`` *traces* sink resolves to a writer configured with the
+    published :data:`~beam_agents.observability.exporters.TRACE_TABLE_SCHEMA`,
+    ``CREATE_IF_NEEDED``/``WRITE_APPEND``, day partitioning on ``event_time``,
+    and clustering on ``trace_id``, so it provisions its own table.
+
     IO client modules are imported lazily inside :meth:`resolve` so
     :meth:`validate` (called at ``AgentConfig`` construction) never imports them.
     """
 
-    _SCHEMES = frozenset({"kafka", "pubsub", "bigquery"})
+    _SCHEMES = frozenset({"kafka", "pubsub", "bigquery", "otlp"})
     _BIGQUERY_URI_SEGMENTS = 2  # <dataset>/<table>
 
     def validate(self, field_name: str, uri: str) -> None:
-        self._parse(field_name, uri)
+        scheme, _ = self._parse(field_name, uri)
+        if scheme == "otlp" and field_name != "traces_to":
+            raise UnknownSinkSchemeError(
+                f"{field_name}: otlp:// is a best-effort trace exporter (it drops on "
+                "delivery failure) and is valid only for traces_to; intents and errors "
+                "need a lossless sink (kafka://, pubsub://, or bigquery://)"
+            )
 
     def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        self.validate(field_name, uri)
         scheme, parts = self._parse("<sink>", uri)
         if field_name == "intents_to" and scheme in ("kafka", "pubsub"):
             return _KeyedWriteIntents(uri)
+        if scheme == "otlp":
+            return self._otlp_transform(uri)
         if field_name == "traces_to":
-            return _WriteTraces(self._write_transform(scheme, parts), to_row=scheme == "bigquery")
+            if scheme == "bigquery":
+                return _WriteTraces(self._traces_bigquery_writer(parts), to_row=True)
+            return _WriteTraces(self._write_transform(scheme, parts), to_row=False)
+        if field_name == "errors_to":
+            return _WriteErrors(self._write_transform(scheme, parts), to_row=scheme == "bigquery")
         return self._write_transform(scheme, parts)
 
     def _write_transform(self, scheme: str, parts: tuple[str, ...]) -> beam.PTransform:
@@ -184,6 +321,37 @@ class DefaultSinkResolver:
         project, dataset, table = parts
         return WriteToBigQuery(table=f"{project}:{dataset}.{table}")
 
+    def _traces_bigquery_writer(self, parts: tuple[str, ...]) -> beam.PTransform:
+        """The self-provisioning trace-table writer (design D6).
+
+        Partitioning/clustering ride ``additional_bq_parameters``: applied when
+        the writer creates the table, inert on a pre-existing one.
+        """
+        from apache_beam.io.gcp.bigquery import BigQueryDisposition, WriteToBigQuery
+
+        from beam_agents.observability.exporters import TRACE_TABLE_SCHEMA
+
+        project, dataset, table = parts
+        return WriteToBigQuery(
+            table=f"{project}:{dataset}.{table}",
+            schema=TRACE_TABLE_SCHEMA,
+            create_disposition=BigQueryDisposition.CREATE_IF_NEEDED,
+            write_disposition=BigQueryDisposition.WRITE_APPEND,
+            additional_bq_parameters={
+                "timePartitioning": {"type": "DAY", "field": "event_time"},
+                "clustering": {"fields": ["trace_id"]},
+            },
+        )
+
+    def _otlp_transform(self, uri: str) -> beam.PTransform:
+        # `beam_agents.observability.otlp` imports the `otlp` extra's proto
+        # package on construction (with an actionable error naming the extra);
+        # importing it here, not at module top, keeps validate() import-free.
+        from beam_agents.observability.otlp import WriteTracesToOtlp
+
+        endpoint, options = _parse_otlp_uri("<sink>", uri)
+        return WriteTracesToOtlp(endpoint, **options)
+
     def _parse(self, field_name: str, uri: str) -> tuple[str, tuple[str, ...]]:
         parsed = urlparse(uri)
         scheme = parsed.scheme
@@ -192,6 +360,9 @@ class DefaultSinkResolver:
                 f"{field_name}: unknown sink URI scheme {(scheme or uri)!r}; "
                 f"expected one of {sorted(self._SCHEMES)}"
             )
+        if scheme == "otlp":
+            _parse_otlp_uri(field_name, uri)  # full grammar/option validation
+            return scheme, ()
         segments = [s for s in parsed.path.split("/") if s]
         if scheme == "kafka":
             if not parsed.netloc or len(segments) != 1:
@@ -321,34 +492,29 @@ class RunAgent(beam.PTransform):
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
         )
-        tagged_by_field = {
-            "intents": tagged.intents,
-            "traces": tagged.traces,
-            "errors": tagged.errors,
-        }
+        # The three branches are not symmetric: `errors_to` also drains the
+        # intents dead letter, so it is attached last, once that branch exists.
         dead_letter: beam.pvalue.PCollection | None = None
-        for field_name in _SINK_FIELDS:
-            uri = getattr(self._config, field_name)
-            if uri is None:
-                continue
-            sink = self._config.sink_resolver.resolve(field_name, uri)
-            result = (
-                tagged_by_field[field_name.removesuffix("_to")] | _SINK_LABELS[field_name] >> sink
-            )
-            if field_name == "intents_to" and isinstance(result, WriteIntentsResult):
+        if self._config.intents_to is not None:
+            sink = self._config.sink_resolver.resolve("intents_to", self._config.intents_to)
+            result = tagged.intents | _SINK_LABELS["intents_to"] >> sink
+            if isinstance(result, WriteIntentsResult):
                 dead_letter = result.dead_letter
-                if self._config.errors_to is not None:
-                    errors_sink = self._config.sink_resolver.resolve(
-                        "errors_to", self._config.errors_to
-                    )
-                    (
-                        dead_letter
-                        | "EncodeIntentDeadLetter"
-                        >> beam.Map(encode_intent_dead_letter).with_output_types(
-                            tuple[bytes, bytes]
-                        )
-                        | "IntentDeadLetterToErrors" >> errors_sink
-                    )
+        if self._config.traces_to is not None:
+            sink = self._config.sink_resolver.resolve("traces_to", self._config.traces_to)
+            tagged.traces | _SINK_LABELS["traces_to"] >> sink
+        if self._config.errors_to is not None:
+            errors = tagged.errors
+            if dead_letter is not None:
+                # Both streams are `ActivationError` now, so they merge before
+                # the sink instead of each carrying its own encoding: one
+                # resolved writer, one record schema, every scheme reachable.
+                mapped = dead_letter | "IntentDeadLetterToError" >> beam.Map(
+                    intent_dead_letter_to_error
+                )
+                errors = (tagged.errors, mapped) | "FlattenErrors" >> beam.Flatten()
+            sink = self._config.sink_resolver.resolve("errors_to", self._config.errors_to)
+            errors | _SINK_LABELS["errors_to"] >> sink
         return RunAgentOutputs(
             output=tagged.output,
             intents=tagged.intents,

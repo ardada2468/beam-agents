@@ -149,7 +149,7 @@ def test_an_activation_timeout_is_traced_and_commits_nothing() -> None:
 
     emitted = _process(dofn, _event(), handles)
 
-    assert _tagged(emitted, "errors") == [ActivationError(_KEY, REASON_TIMEOUT, "")]
+    assert _tagged(emitted, "errors") == [ActivationError(_KEY, REASON_TIMEOUT, "", _NOW_MS)]
     (trace,) = _tagged(emitted, "traces")
     assert trace.event_type == TraceEventProto.ERROR
     assert trace.attributes["beam_agents.reason"] == REASON_TIMEOUT
@@ -198,7 +198,7 @@ def test_a_resume_that_times_out_is_traced_under_the_continuations_seq() -> None
 
     emitted = _process(dofn, envelope, handles)
 
-    assert _tagged(emitted, "errors") == [ActivationError(_KEY, REASON_TIMEOUT, "")]
+    assert _tagged(emitted, "errors") == [ActivationError(_KEY, REASON_TIMEOUT, "", _NOW_MS)]
     (trace,) = _tagged(emitted, "traces")
     assert trace.attributes["beam_agents.reason"] == REASON_TIMEOUT
     assert trace.trace_id == trace_id_for(_KEY, 1)
@@ -234,6 +234,7 @@ def test_a_resume_that_raises_is_traced_under_the_continuations_seq() -> None:
             _KEY,
             REASON_ERROR,
             "RuntimeError('agent blew up') failed_at_step=2 after=ACTIVATION_START",
+            _NOW_MS,
         )
     ]
     (trace,) = _tagged(emitted, "traces")
@@ -256,6 +257,7 @@ def test_a_raising_activation_is_traced_with_its_error_type() -> None:
             _KEY,
             REASON_ERROR,
             "RuntimeError('agent blew up') failed_at_step=0 after=ACTIVATION_START",
+            _NOW_MS,
         )
     ]
     (trace,) = _tagged(emitted, "traces")
@@ -282,6 +284,7 @@ def test_a_start_failure_carries_its_position_in_both_records() -> None:
             _KEY,
             REASON_ERROR,
             "RuntimeError('agent blew up') failed_at_step=2 after=INTENT_EMITTED",
+            _NOW_MS,
         )
     ]
     (trace,) = _tagged(emitted, "traces")
@@ -326,6 +329,7 @@ def test_a_resume_failure_carries_its_position_in_both_records() -> None:
             _KEY,
             REASON_ERROR,
             "RuntimeError('resume blew up') failed_at_step=2 after=ACTIVATION_START",
+            _NOW_MS,
         )
     ]
     (trace,) = _tagged(emitted, "traces")
@@ -362,7 +366,7 @@ def test_a_failure_outside_the_wrap_keeps_the_un_enriched_shape() -> None:
     )
 
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ERROR, "AssertionError('setup() not called')")
+        ActivationError(_KEY, REASON_ERROR, "AssertionError('setup() not called')", _NOW_MS)
     ]
     (trace,) = _tagged(emitted, "traces")
     assert trace.attributes["beam_agents.reason"] == REASON_ERROR
@@ -410,7 +414,7 @@ def test_a_resume_failure_outside_the_wrap_keeps_the_un_enriched_shape() -> None
     )
 
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ERROR, "AssertionError('setup() not called')")
+        ActivationError(_KEY, REASON_ERROR, "AssertionError('setup() not called')", _NOW_MS)
     ]
     (trace,) = _tagged(emitted, "traces")
     assert trace.attributes["beam_agents.reason"] == REASON_ERROR
@@ -464,7 +468,7 @@ def test_an_orphaned_resume_is_traced() -> None:
     emitted = _process(dofn, envelope, handles)
 
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:ghost")
+        ActivationError(_KEY, REASON_ORPHANED, f"{DETAIL_NO_CONTINUATION}:ghost", _NOW_MS)
     ]
     (trace,) = _tagged(emitted, "traces")
     assert trace.attributes["beam_agents.reason"] == REASON_ORPHANED
@@ -513,6 +517,6 @@ def test_a_resume_whose_pending_intent_expired_is_refused() -> None:
     emitted = _process(dofn, envelope, handles)
 
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ORPHANED, f"{DETAIL_INTENT_EXPIRED}:intent-1")
+        ActivationError(_KEY, REASON_ORPHANED, f"{DETAIL_INTENT_EXPIRED}:intent-1", _NOW_MS)
     ]
     assert handles.untouched()
