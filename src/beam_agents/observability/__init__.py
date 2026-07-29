@@ -26,7 +26,8 @@ The event kinds and what each carries:
 ``INTENT_EMITTED``   ``intent_id``, ``tool_name``, ``intent_kind``,
                      ``expires_at_ms``
 ``SUSPENDED``        ``deadline_ms``, ``adapter``, ``pending_intent_ids``
-``ERROR``            ``reason``, ``error.type``
+``ERROR``            ``reason``, ``error.type``, ``failure.*`` (the failed
+                     activation's position, when reachable)
 ===================  =====================================================
 
 Two rules about the numbers. Token counts are **true or absent**: a usage
@@ -70,6 +71,10 @@ from beam_agents.observability.traces import (
     DEADLINE_MS,
     ERROR_TYPE,
     EXPIRES_AT_MS,
+    FAILURE_LAST_EVENT,
+    FAILURE_LLM_CALLS,
+    FAILURE_STAGED_INTENTS,
+    FAILURE_STEP,
     INTENT_ID,
     INTENT_KIND,
     OPERATION_CHAT,
@@ -100,6 +105,10 @@ __all__ = [
     "DEADLINE_MS",
     "ERROR_TYPE",
     "EXPIRES_AT_MS",
+    "FAILURE_LAST_EVENT",
+    "FAILURE_LLM_CALLS",
+    "FAILURE_STAGED_INTENTS",
+    "FAILURE_STEP",
     "INTENT_ID",
     "INTENT_KIND",
     "OPERATION_CHAT",

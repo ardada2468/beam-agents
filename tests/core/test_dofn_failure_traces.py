@@ -38,9 +38,12 @@ from beam_agents.observability import ROLE_ACTIVATION, span_id_for, trace_id_for
 from tests.core._dofn_helpers import (
     hang_agent,
     make_briefly_slow_provider,
+    make_pong_provider,
     make_slow_provider,
+    model_act_then_fail_agent,
     raising_agent,
     seq_agent,
+    suspend_then_fail_agent,
 )
 
 _KEY = b"k"
@@ -157,8 +160,11 @@ def test_an_activation_timeout_is_traced_and_commits_nothing() -> None:
     assert trace.span_id == span_id_for(_KEY, _SEQ, "ERROR", 0)
     assert trace.start_ms == _NOW_MS
     # No exception to name on the timeout route: the attribute is absent
-    # rather than an empty string.
+    # rather than an empty string. Likewise the failure position — the
+    # coroutine may still be running, so its context is unreachable by
+    # construction, and unknown means absent, never defaulted.
     assert "error.type" not in trace.attributes
+    assert not any(key.startswith("beam_agents.failure.") for key in trace.attributes)
     assert handles.untouched()
 
 
@@ -221,8 +227,14 @@ def test_a_resume_that_raises_is_traced_under_the_continuations_seq() -> None:
 
     emitted = _process(dofn, envelope, handles)
 
+    # `raising_agent` writes memory then raises, staging nothing past the
+    # driver's ACTIVATION_START; the cursor sits at the continuation's seed.
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ERROR, "RuntimeError('agent blew up')")
+        ActivationError(
+            _KEY,
+            REASON_ERROR,
+            "RuntimeError('agent blew up') failed_at_step=2 after=ACTIVATION_START",
+        )
     ]
     (trace,) = _tagged(emitted, "traces")
     assert trace.attributes["beam_agents.reason"] == REASON_ERROR
@@ -240,7 +252,11 @@ def test_a_raising_activation_is_traced_with_its_error_type() -> None:
     emitted = _process(dofn, _event(), handles)
 
     assert _tagged(emitted, "errors") == [
-        ActivationError(_KEY, REASON_ERROR, "RuntimeError('agent blew up')")
+        ActivationError(
+            _KEY,
+            REASON_ERROR,
+            "RuntimeError('agent blew up') failed_at_step=0 after=ACTIVATION_START",
+        )
     ]
     (trace,) = _tagged(emitted, "traces")
     assert trace.attributes["beam_agents.reason"] == REASON_ERROR
@@ -248,6 +264,176 @@ def test_a_raising_activation_is_traced_with_its_error_type() -> None:
     assert trace.trace_id == trace_id_for(_KEY, _SEQ)
     assert trace.start_ms == _NOW_MS
     assert handles.untouched()
+
+
+def test_a_start_failure_carries_its_position_in_both_records() -> None:
+    # Scenario: A raising activation is traced with its error type and failure
+    # position. Scenario: The dead letter names the failure position. One
+    # provider-reached call, one staged intent, then the raise: both records
+    # name step 2 after the INTENT_EMITTED, and `error.type` names the
+    # *original* exception class, not the runtime's wrapper.
+    dofn = _AgentDoFn(model_act_then_fail_agent, provider_factory=make_pong_provider)
+    handles = _Handles()
+
+    emitted = _process(dofn, _event(), handles)
+
+    assert _tagged(emitted, "errors") == [
+        ActivationError(
+            _KEY,
+            REASON_ERROR,
+            "RuntimeError('agent blew up') failed_at_step=2 after=INTENT_EMITTED",
+        )
+    ]
+    (trace,) = _tagged(emitted, "traces")
+    assert trace.attributes["beam_agents.reason"] == REASON_ERROR
+    assert trace.attributes["error.type"] == "RuntimeError"
+    assert trace.attributes["beam_agents.failure.step"] == "2"
+    assert trace.attributes["beam_agents.failure.last_event"] == "INTENT_EMITTED"
+    assert trace.attributes["beam_agents.failure.staged_intents"] == "1"
+    assert trace.attributes["beam_agents.failure.llm_calls"] == "1"
+    assert trace.trace_id == trace_id_for(_KEY, _SEQ)
+    assert trace.start_ms == _NOW_MS
+    assert handles.untouched()
+
+
+def test_a_resume_failure_carries_its_position_in_both_records() -> None:
+    # The resume route reads the same wrapper: `suspend_then_fail_agent` raises
+    # before staging anything of its own, so the position is the continuation's
+    # seed cursor after the driver's ACTIVATION_START — with all four
+    # attributes present (zeros are known values here, not defaults).
+    dofn = _AgentDoFn(suspend_then_fail_agent, provider_factory=make_pong_provider)
+    cont = Continuation(
+        state_schema_version=1,
+        seq=1,
+        step_index=2,
+        pending_intent_ids=["intent-1"],
+        snapshot=b"waiting",
+        suspended_at_ms=1_000,
+        deadline_ms=_NOW_MS + 1_000,
+    )
+    handles = _Handles(cont=cont)
+    handles.pending.value = [ToolIntent(intent_id="intent-1", expires_at_ms=_NOW_MS + 1_000)]
+    envelope = AgentEnvelope(
+        entity_key=_KEY,
+        event_time_ms=_NOW_MS,
+        tool_result=ToolResult(intent_id="intent-1", entity_key=_KEY, status=ToolResult.OK),
+    )
+
+    emitted = _process(dofn, envelope, handles)
+
+    assert _tagged(emitted, "errors") == [
+        ActivationError(
+            _KEY,
+            REASON_ERROR,
+            "RuntimeError('resume blew up') failed_at_step=2 after=ACTIVATION_START",
+        )
+    ]
+    (trace,) = _tagged(emitted, "traces")
+    assert trace.attributes["error.type"] == "RuntimeError"
+    assert trace.attributes["beam_agents.failure.step"] == "2"
+    assert trace.attributes["beam_agents.failure.last_event"] == "ACTIVATION_START"
+    assert trace.attributes["beam_agents.failure.staged_intents"] == "0"
+    assert trace.attributes["beam_agents.failure.llm_calls"] == "0"
+    assert trace.trace_id == trace_id_for(_KEY, 1)
+    assert handles.untouched()
+
+
+def test_a_failure_outside_the_wrap_keeps_the_un_enriched_shape() -> None:
+    # Failures raised outside `run_activation`'s wrap window (here: the
+    # setup() guard, which fires before the bridge ever runs) take the generic
+    # fallback, and its two records keep today's exact shape: the bare
+    # exception repr as the detail, `error.type`, and no position — there is
+    # none to report, and absent beats defaulted.
+    dofn = _AgentDoFn(seq_agent, provider_factory=make_pong_provider)
+    dofn._provider = make_pong_provider()  # bridge deliberately absent
+    handles = _Handles()
+
+    emitted = list(
+        dofn.process(
+            (_KEY, _event()),
+            memory=handles.memory,
+            continuation=handles.continuation,
+            llm_cache=handles.llm_cache,
+            pending=handles.pending,
+            seq=handles.seq,
+            ttl_timer=handles.ttl_timer,
+            hitl_timer=handles.hitl_timer,
+        )
+    )
+
+    assert _tagged(emitted, "errors") == [
+        ActivationError(_KEY, REASON_ERROR, "AssertionError('setup() not called')")
+    ]
+    (trace,) = _tagged(emitted, "traces")
+    assert trace.attributes["beam_agents.reason"] == REASON_ERROR
+    assert trace.attributes["error.type"] == "AssertionError"
+    assert not any(key.startswith("beam_agents.failure.") for key in trace.attributes)
+    assert trace.trace_id == trace_id_for(_KEY, _SEQ)
+    assert trace.start_ms == _NOW_MS
+    assert handles.untouched()
+
+
+def test_a_resume_failure_outside_the_wrap_keeps_the_un_enriched_shape() -> None:
+    # The resume route has its own generic fallback, scoped to the
+    # continuation's seq; it too keeps the un-enriched shape for anything the
+    # wrap never saw.
+    dofn = _AgentDoFn(seq_agent, provider_factory=make_pong_provider)
+    dofn._provider = make_pong_provider()  # bridge deliberately absent
+    cont = Continuation(
+        state_schema_version=1,
+        seq=1,
+        step_index=2,
+        pending_intent_ids=["intent-1"],
+        snapshot=b"waiting",
+        suspended_at_ms=1_000,
+        deadline_ms=_NOW_MS + 1_000,
+    )
+    handles = _Handles(cont=cont)
+    handles.pending.value = [ToolIntent(intent_id="intent-1", expires_at_ms=_NOW_MS + 1_000)]
+    envelope = AgentEnvelope(
+        entity_key=_KEY,
+        event_time_ms=_NOW_MS,
+        tool_result=ToolResult(intent_id="intent-1", entity_key=_KEY, status=ToolResult.OK),
+    )
+
+    emitted = list(
+        dofn.process(
+            (_KEY, envelope),
+            memory=handles.memory,
+            continuation=handles.continuation,
+            llm_cache=handles.llm_cache,
+            pending=handles.pending,
+            seq=handles.seq,
+            ttl_timer=handles.ttl_timer,
+            hitl_timer=handles.hitl_timer,
+        )
+    )
+
+    assert _tagged(emitted, "errors") == [
+        ActivationError(_KEY, REASON_ERROR, "AssertionError('setup() not called')")
+    ]
+    (trace,) = _tagged(emitted, "traces")
+    assert trace.attributes["beam_agents.reason"] == REASON_ERROR
+    assert trace.attributes["error.type"] == "AssertionError"
+    assert not any(key.startswith("beam_agents.failure.") for key in trace.attributes)
+    assert trace.trace_id == trace_id_for(_KEY, 1)
+    assert trace.start_ms == _NOW_MS
+    assert handles.untouched()
+
+
+def test_two_identical_failing_runs_synthesize_byte_identical_events() -> None:
+    # Scenario: A replayed failure synthesizes a byte-identical enriched event.
+    # Every captured field is a pure function of the deterministic path, so
+    # trace dedup on content still collapses a retried bundle's duplicate.
+    serialized = []
+    for _ in range(2):
+        dofn = _AgentDoFn(model_act_then_fail_agent, provider_factory=make_pong_provider)
+        handles = _Handles()
+        emitted = _process(dofn, _event(), handles)
+        (trace,) = _tagged(emitted, "traces")
+        serialized.append(trace.SerializeToString(deterministic=True))
+
+    assert serialized[0] == serialized[1]
 
 
 def test_the_staged_traces_of_a_failed_activation_are_not_emitted() -> None:
