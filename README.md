@@ -49,6 +49,32 @@ make proto  # regenerate protobuf bindings from protos/*.proto
 
 Run `make help` for the full list.
 
+## Running a LangGraph graph
+
+An existing LangGraph graph adopts the runtime's guarantees (durable keyed
+checkpoints, outbox side effects, HITL approvals, replay-cached model calls)
+with three changes — no topology edits:
+
+1. Re-declare side-effectful tools with the runtime decorator:
+   `@tool(side_effect=True)`.
+2. Swap LangGraph's prebuilt `ToolNode` for
+   `beam_agents.adapters.langgraph.BeamToolNode(tools)`.
+3. Wrap the graph: `RunAgent(LangGraphAgent(graph, chat_models=[model]))`.
+
+```sh
+uv pip install 'beam-agents[langgraph]'
+```
+
+Checkpoints persist latest-only inside working memory (the 1 MiB cap applies —
+trim or summarize message history on the LangGraph side). `interrupt(...)`
+suspends the activation as an approval intent and resumes via
+`Command(resume=...)`; on resume the interrupted node re-runs from its start
+(LangGraph's own semantics), so keep pre-interrupt node code idempotent.
+Recognized httpx-backed chat models are served through the runtime's
+`LLMClient` replay-cache path; unrecognized ones fall back to direct calls
+with a one-time warning and a `transport_fallback` metric. See the module
+docstrings under `src/beam_agents/adapters/langgraph/` for the details.
+
 ## Running the effector
 
 Side effects execute outside the pipeline, in the reference effector service:
