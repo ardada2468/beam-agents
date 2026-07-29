@@ -395,9 +395,21 @@ async def test_a_revoked_partition_releases_unexecuted_claims() -> None:
     class _SlowStartRunner(EffectorToolRunner):
         """Stalls after the claim, before the callable is invoked."""
 
-        async def run(self, t: object, arguments: object, *, on_invoke: object = None) -> object:
+        async def run(
+            self,
+            t: object,
+            arguments: object,
+            *,
+            on_invoke: object = None,
+            intent_info: object = None,
+        ) -> object:
             await gate.wait()
-            return await super().run(t, arguments, on_invoke=on_invoke)  # type: ignore[arg-type]
+            return await super().run(
+                t,  # type: ignore[arg-type]
+                arguments,  # type: ignore[arg-type]
+                on_invoke=on_invoke,  # type: ignore[arg-type]
+                intent_info=intent_info,  # type: ignore[arg-type]
+            )
 
     store = InMemoryDedupStore(clock=lambda: NOW_MS)
     dedup = RecordingDedupStore(store)

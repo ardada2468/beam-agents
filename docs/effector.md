@@ -62,8 +62,8 @@ cbt createtable effector-dedup families="d:maxage=25h"
 result per `intent_id`, per-key execution order, and no intent lost (offsets
 commit only after the result is published).
 
-**Not guaranteed:** exactly-once *effects*. Two windows remain, and both are
-inherent rather than fixable inside the effector:
+**Not guaranteed by the effector alone:** exactly-once *effects*. Two windows
+remain, and both are inherent rather than fixable inside the effector:
 
 1. **Lease expiry.** If a worker is alive but partitioned from the dedup store
    for longer than `--lease-ms`, another worker can re-claim and re-run its
@@ -73,27 +73,50 @@ inherent rather than fixable inside the effector:
    whether the effect landed. Its claim is left to expire (never handed back),
    and the redelivery re-executes.
 
-**Make your tools idempotent.** The arguments an agent stages with
-`ctx.act(...)` are canonical JSON and byte-stable across pipeline replays, so
-derive the downstream idempotency key from them:
+### The exactly-once contract
+
+The honest statement is two-sided. The runtime guarantees:
+
+- **Deterministic intent IDs.** `intent_id` is uuid5-derived from
+  `entity_key + seq + step_index`; a replayed bundle, a duplicated sink write,
+  and a lease-expiry re-execution all carry the byte-identical id.
+- **At most one *completed* execution per `intent_id`.** The dedup store
+  admits one terminal result; every other delivery is collapsed or handed the
+  stored result.
+
+What that adds up to depends on the tool:
+
+- A tool that keys its downstream effect on the intent id — a Stripe
+  `Idempotency-Key`, a Redis `SETNX`, a keyed upsert, an
+  `INSERT … ON CONFLICT DO NOTHING` — gets **exactly-once effects**: any
+  crash-window re-invocation replays the same key and the downstream
+  deduplicates it.
+- A tool that does not is **at-least-once across crash recovery**: zero lost
+  effects, duplicates only within the two windows above, strict exactly-once
+  when no worker dies mid-tool.
+
+To opt in, declare a keyword-only `intent: IntentInfo` parameter — the
+effector injects the executing intent's identity (`intent_id`, `entity_key`,
+`seq`, `step_index`, `attempt`) at invocation time. The parameter never
+appears in the tool's provider-facing schema and cannot be supplied through
+`args_json` (a spoofed `intent` key is rejected before the callable runs):
 
 ```python
+from beam_agents.tools import IntentInfo, tool
+
+
 @tool(side_effect=True)
-async def charge(customer_id: str, amount_cents: int, occurrence: str) -> str:
-    # `occurrence` is whatever the agent used to identify this charge (an
-    # event id, an order id). It is replay-stable because the agent's staged
-    # arguments are.
+async def charge(customer_id: str, amount_cents: int, *, intent: IntentInfo) -> str:
+    # Replays and crash-window re-executions re-mint the same intent_id,
+    # so the payment provider performs the charge exactly once.
     return await payments.charge(
-        customer_id, amount_cents, idempotency_key=f"{customer_id}:{occurrence}"
+        customer_id, amount_cents, idempotency_key=intent.intent_id
     )
 ```
 
-The effector does not inject `intent_id` into a tool's arguments today: an
-agent cannot name it at `ctx.act(...)` time (it is derived from
-`entity_key + seq + step_index`, which the context computes after staging), so
-a tool cannot declare it as a parameter. Passing it through as an opt-in
-argument would be a natural follow-up — it is the ideal idempotency key, since
-a replayed bundle re-mints it byte-identically.
+Declaring the parameter on a `side_effect=False` tool is a
+`ToolDefinitionError` at decoration time: read-only tools run inline in the
+pipeline, where no intent exists.
 
 ## Behavior reference
 

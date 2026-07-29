@@ -30,3 +30,10 @@ htmlcov/
 # mutmut
 .mutmut-cache
 mutants/
+
+# e2e gate runtime artifacts (spool segments, worker logs, thread dumps).
+# The directory itself is committed (.gitkeep): the compose bind mount must
+# exist in a fresh checkout, or docker creates it root-owned on Linux CI
+# runners and the host-side harness cannot write the run spool.
+docker/e2e-spool/*
+!docker/e2e-spool/.gitkeep

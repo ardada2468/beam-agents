@@ -133,9 +133,21 @@ async def test_serve_releases_unexecuted_claims_on_shutdown() -> None:
     class _StallingRunner(EffectorToolRunner):
         """Stalls after the claim, before the callable is invoked."""
 
-        async def run(self, t: object, arguments: object, *, on_invoke: object = None) -> object:
+        async def run(
+            self,
+            t: object,
+            arguments: object,
+            *,
+            on_invoke: object = None,
+            intent_info: object = None,
+        ) -> object:
             await gate.wait()
-            return await super().run(t, arguments, on_invoke=on_invoke)  # type: ignore[arg-type]
+            return await super().run(
+                t,  # type: ignore[arg-type]
+                arguments,  # type: ignore[arg-type]
+                on_invoke=on_invoke,  # type: ignore[arg-type]
+                intent_info=intent_info,  # type: ignore[arg-type]
+            )
 
     store = InMemoryDedupStore(clock=lambda: NOW_MS)
     dedup = RecordingDedupStore(store)
@@ -210,3 +222,41 @@ def test_main_runs_the_service_to_completion(monkeypatch: pytest.MonkeyPatch) ->
 
     assert code == 0
     assert served == ["svc"]
+
+
+def test_main_constructs_the_service_inside_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (found by the effectively-once e2e gate): the Kafka adapters
+    # construct aiokafka clients in __init__, and aiokafka requires a running
+    # loop at construction — so `main` must call `build_service` from inside
+    # the loop it starts. Built outside, the CLI crashes at startup for every
+    # real (non-memory://) transport, which no memory://-based test can see.
+    built_inside_loop: list[bool] = []
+
+    def _probing_build(config: object, registry: object) -> str:
+        asyncio.get_running_loop()  # raises RuntimeError when no loop runs
+        built_inside_loop.append(True)
+        return "svc"
+
+    async def _fake_serve(service: object) -> None:
+        assert service == "svc"
+
+    monkeypatch.setattr("beam_agents.effector.__main__.build_service", _probing_build)
+    monkeypatch.setattr("beam_agents.effector.__main__.serve", _fake_serve)
+
+    code = main(
+        [
+            "--registry",
+            "tests.effector.test_main:TOOLS",
+            "--intents-from",
+            "kafka://localhost:9092/intents",
+            "--results-to",
+            "kafka://localhost:9092/results",
+            "--approvals-to",
+            "kafka://localhost:9092/approvals",
+        ]
+    )
+
+    assert code == 0
+    assert built_inside_loop == [True]

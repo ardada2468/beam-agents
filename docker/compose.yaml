@@ -10,10 +10,14 @@ services:
       - --reserve-memory=0M
       - --node-id=0
       - --check=false
-      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr=PLAINTEXT://localhost:19092
+      # Two listeners: `internal` for clients on the compose network (the e2e
+      # gate's outbox DoFn runs inside the beam-sdk-harness container and
+      # reaches the broker as redpanda:9092), `external` for host-side clients
+      # (tests connect to localhost:19092, unchanged).
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
     ports:
-      - "19092:9092"
+      - "19092:19092"
     healthcheck:
       test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
       interval: 5s
@@ -95,4 +99,92 @@ services:
     environment:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 2
+        taskmanager.numberOfTaskSlots: 4
+        taskmanager.memory.process.size: 2560m
+        taskmanager.memory.jvm-metaspace.size: 1024m
+    # The default 256m metaspace is not enough: every portable job submission
+    # loads a fresh set of Beam/user classes into this TaskManager, and the
+    # semantics gate submits and recovers jobs repeatedly. At the default the
+    # TM dies with `OutOfMemoryError: Metaspace` after a handful of jobs, which
+    # surfaces to the client as an unrelated-looking gRPC "Connection closing
+    # while performing protocol negotiation" — a symptom worth not re-debugging.
+    volumes:
+      - beam-artifact-staging:/tmp/beam-artifact-staging
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+  # Beam's Flink job server: translates a portable Python pipeline and submits
+  # it to the JobManager above. Nothing but the effectively-once end-to-end
+  # semantics gate uses it; the rest of the suite never starts a Beam job.
+  flink-jobserver:
+    image: apache/beam_flink1.19_job_server:2.72.0@sha256:bc1606524053720f04db4298198c840be0fce33854e9778592f620b29ac18fef
+    command:
+      - --flink-master=flink-jobmanager:8081
+      - --job-host=0.0.0.0
+      - --job-port=8099
+      - --artifact-port=8098
+      - --expansion-port=8097
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    ports:
+      - "18099:8099"
+      - "18098:8098"
+      - "18097:8097"
+    # Staged artifacts are handed to the TaskManager as local file paths, so the
+    # two must see the same directory or artifact retrieval fails with
+    # "failed to retrieve chunk".
+    volumes:
+      - beam-artifact-staging:/tmp/beam-artifact-staging
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8099"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  # The Python SDK harness, run as an external worker pool.
+  #
+  # `network_mode: service:flink-taskmanager` is load-bearing, not incidental:
+  # Beam hands the worker pool the TaskManager's endpoints as `localhost:<port>`,
+  # so the pool only works inside the TaskManager's network namespace. A
+  # consequence the chaos injectors must respect: killing the TaskManager
+  # destroys the namespace this container borrows, so a TM kill has to restart
+  # this service too.
+  #
+  # Built rather than pulled because the stock image cannot import this repo's
+  # protobuf bindings (see docker/sdk-harness.Dockerfile), and because baking
+  # the dependencies in avoids a pip install on every worker restart — which,
+  # in a gate that kills workers on purpose, would be a flakiness source.
+  beam-sdk-harness:
+    build:
+      context: ..
+      dockerfile: docker/sdk-harness.Dockerfile
+    image: beam-agents-sdk-harness:2.72.0
+    command: ["--worker_pool"]
+    network_mode: "service:flink-taskmanager"
+    depends_on:
+      flink-taskmanager:
+        condition: service_started
+    volumes:
+      - beam-artifact-staging:/tmp/beam-artifact-staging
+      # The e2e gate's ingest spool (design D9): the test process drains Kafka
+      # into segment files here (host side), and the spool SDF replays them
+      # from inside this container. Bind mount, not a named volume, because
+      # the writer is the host-side pytest process.
+      - ./e2e-spool:/var/beam-agents/spool
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+volumes:
+  # Shared by flink-jobserver, flink-taskmanager, and beam-sdk-harness: the job
+  # server writes staged artifacts here and hands the TaskManager local paths.
+  beam-artifact-staging:

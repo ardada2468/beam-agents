@@ -14,7 +14,10 @@ permissions:
 
 jobs:
   integration:
-    timeout-minutes: 30
+    # The effectively-once end-to-end semantics gate runs a 10k-event chaos
+    # scenario against the full compose stack (budgeted ≤ 15 min on its own),
+    # on top of the integration suite.
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,13 +31,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --group test --group integration
 
+      # `make compose-up` passes `--wait --build`: it builds the SDK-harness
+      # image (which bakes in the current src/ and tests/) and blocks until
+      # every service, including flink-jobserver, reports healthy.
       - name: Start local stack
         run: make compose-up
 
       - name: Integration tests
         run: make test-integration
 
-      - name: Semantics tests
+      - name: Semantics tests (docker-backed)
         run: make test-semantics
 
       - name: Stop local stack

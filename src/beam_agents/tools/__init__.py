@@ -16,10 +16,12 @@ from beam_agents.tools.errors import (
     ToolError,
     ToolNotFoundError,
 )
+from beam_agents.tools.intent_info import IntentInfo
 from beam_agents.tools.registry import Tool, ToolRegistry, tool
 from beam_agents.tools.runner import ToolRunner
 
 __all__ = [
+    "IntentInfo",
     "SideEffectToolError",
     "Tool",
     "ToolArgumentError",

@@ -123,6 +123,16 @@ ignore = [
 "src/beam_agents/effector/sources.py" = ["PLC0415"]
 "src/beam_agents/effector/sinks.py" = ["PLC0415"]
 "src/beam_agents/effector/dedup.py" = ["PLC0415"]
+# The e2e gate's harness: B008 is the same Beam RestrictionParam/
+# WatermarkEstimatorParam-as-default idiom as core/dofn.py, and PLC0415 lazy
+# aiokafka imports keep these modules importable in the offline lane (host
+# side) and outside the pipeline (container side) without the client installed.
+"tests/semantics/_e2e/*" = ["B008", "PLC0415"]
+# The gate module itself: same lazy-aiokafka constraint (it is *collected* in
+# the offline lane, where aiokafka is absent — deselection happens after
+# import), and the single long test function is one scenario told in phases,
+# not an abstraction failure.
+"tests/semantics/test_effectively_once_e2e.py" = ["PLC0415", "PLR0912", "PLR0915"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -253,6 +263,18 @@ disable_error_code = ["no-untyped-call"]
 [[tool.mypy.overrides]]
 module = "tests.semantics.test_retry_determinism"
 disable_error_code = ["no-untyped-call"]
+
+# The e2e gate and its harness drive Beam's untyped pipeline-construction API
+# (ParDo/Map/Create/with_output_types) and generic PCollections — the same
+# relaxation the other Beam-driving test modules get. Everything non-Beam in
+# these modules stays strictly typed.
+[[tool.mypy.overrides]]
+module = "tests.semantics._e2e.*"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+[[tool.mypy.overrides]]
+module = "tests.semantics.test_effectively_once_e2e"
+disable_error_code = ["no-untyped-call", "type-arg"]
 
 [[tool.mypy.overrides]]
 module = "tests.semantics.test_hitl_fail_closed"

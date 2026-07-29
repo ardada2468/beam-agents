@@ -44,3 +44,9 @@ jobs:
 
       - name: Semantics tests (offline)
         run: make test-semantics-offline
+
+      # The tier is split across two lanes (offline here, docker-backed in
+      # integration.yml); this fails the build if any semantics-marked test
+      # escapes both selections or either selection goes empty.
+      - name: Semantics tier partition check
+        run: uv run python scripts/check_semantics_partition.py

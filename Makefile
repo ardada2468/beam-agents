@@ -28,11 +28,22 @@ test-unit: ## Run the unit test tier (offline, no docker), with coverage
 	uv run pytest -m "not integration and not semantics and not dataflow and not smoke" \
 		--cov=beam_agents --cov-report=term-missing --cov-report=xml
 
-test-integration: ## Run integration-marked tests (requires compose-up)
-	uv run pytest -m integration
+# `not semantics`: the docker semantics gate carries both markers and runs in
+# its own dedicated step (test-semantics, below) — the ONLY place it runs.
+# Without the exclusion the ~10-minute gate executes twice per integration
+# job. The trade-off is deliberate: deleting the test-semantics step from the
+# workflow now silently removes the release gate, so treat any edit to that
+# step as review-sensitive.
+test-integration: ## Run integration-marked tests except semantics gates (requires compose-up)
+	uv run pytest -m "integration and not semantics"
 
-test-semantics: ## Run semantics/correctness-marked tests (requires compose-up)
-	uv run pytest -m semantics
+# Docker-backed semantics gates only: the offline gates run (required) in ci
+# via test-semantics-offline, and re-running them here would let a new gate
+# hide in the overlap. scripts/check_semantics_partition.py enforces that the
+# two selections exactly partition the tier. No exit-5 tolerance: an empty
+# selection is a deselected gate, not a pending one.
+test-semantics: ## Run docker-backed semantics gates (requires compose-up)
+	uv run pytest -m "semantics and integration"
 
 # No exit-5 tolerance: this selection is required to be non-empty. An empty
 # collection here means the gate was accidentally deselected, not that it's
@@ -53,8 +64,10 @@ mutation: ## Run and enforce the core/ mutation gate
 coverage-ratchet: ## Fail if coverage.xml regressed vs. coverage-baseline.toml
 	uv run python scripts/coverage_ratchet.py
 
+# `--build`: the SDK harness image bakes in the current `src/beam_agents`, so a
+# stale image would run the gate against yesterday's runtime and pass.
 compose-up: ## Start the local Redpanda/Redis/Flink stack
-	$(COMPOSE) up -d --wait
+	$(COMPOSE) up -d --wait --build
 
 compose-down: ## Tear down the local stack
 	$(COMPOSE) down
