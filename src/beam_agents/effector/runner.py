@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 from beam_agents._protos import ToolIntent, ToolResult
 from beam_agents.tools.errors import ToolArgumentError, ToolError, ToolNotFoundError
+from beam_agents.tools.intent_info import IntentInfo
 
 if TYPE_CHECKING:
     from beam_agents.tools.registry import Tool, ToolRegistry
@@ -70,12 +71,17 @@ class EffectorToolRunner:
         arguments: Mapping[str, object],
         *,
         on_invoke: Callable[[], None] | None = None,
+        intent_info: IntentInfo | None = None,
     ) -> object:
         """Run ``t``; ``on_invoke`` fires once, immediately before the callable.
 
         The callback is how a caller learns that the effect may now have
         happened. Everything before it — resolving the tool, validating
         arguments — is still safely abandonable; everything after it is not.
+
+        ``intent_info`` is injected as the keyword argument ``intent`` iff the
+        tool declares it (`accepts_intent`); it never participates in argument
+        validation, which covers exactly the parsed ``args_json``.
         """
         if not t.side_effect:
             raise ReadOnlyToolError(t.name)
@@ -85,8 +91,11 @@ class EffectorToolRunner:
             raise ToolArgumentError(t.name, str(exc)) from exc
         if on_invoke is not None:
             on_invoke()
+        call_kwargs = validated.model_dump()
+        if t.accepts_intent:
+            call_kwargs["intent"] = intent_info
         return await asyncio.wait_for(
-            self._invoke(t, validated.model_dump()), timeout=self.tool_timeout_ms / 1000
+            self._invoke(t, call_kwargs), timeout=self.tool_timeout_ms / 1000
         )
 
     async def _invoke(self, t: Tool, arguments: dict[str, object]) -> object:
@@ -168,8 +177,28 @@ async def execute_intent(
     except (json.JSONDecodeError, ToolArgumentError) as exc:
         return _result(intent, ToolResult.REJECTED, now_ms, error_message=str(exc))
 
+    # For a declaring tool, hand over the intent's own wire fields, verbatim:
+    # deterministic across replays and redeliveries, which is what makes the
+    # injected identity an idempotency key. For a non-declaring tool the call
+    # is byte-identical to the pre-IntentInfo behavior — the keyword is not
+    # even passed, so runner subclasses with the historical `run` signature
+    # keep working.
+    intent_kwargs: dict[str, IntentInfo] = (
+        {
+            "intent_info": IntentInfo(
+                intent_id=intent.intent_id,
+                entity_key=intent.entity_key,
+                seq=intent.seq,
+                step_index=intent.step_index,
+                attempt=intent.attempt,
+            )
+        }
+        if tool.accepts_intent
+        else {}
+    )
+
     try:
-        value = await runner.run(tool, arguments, on_invoke=on_invoke)
+        value = await runner.run(tool, arguments, on_invoke=on_invoke, **intent_kwargs)
     except (ReadOnlyToolError, ToolArgumentError) as exc:
         # The callable was never invoked.
         return _result(intent, ToolResult.REJECTED, now_ms, error_message=str(exc))

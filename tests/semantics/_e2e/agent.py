@@ -39,7 +39,7 @@ from beam_agents.core.transform import AgentConfig, RunAgent, RunAgentOutputs
 from beam_agents.hitl import Deny, HitlPolicy, Route
 from beam_agents.model.client import LlmRequest
 from beam_agents.model.fake import FakeLLM, match_any, respond_with
-from beam_agents.tools import ToolRegistry, tool
+from beam_agents.tools import IntentInfo, ToolRegistry, tool
 
 # Key prefixes decide behavior; the gate derives its expected populations from
 # the same prefixes.
@@ -142,12 +142,15 @@ def build_run_agent(pcoll: beam.pvalue.PCollection) -> RunAgentOutputs:
 # inside the worker subprocesses the supervisor launches. Environment carries
 # the run scoping, because the effector is a separate OS process.
 #
-# The tool records executions by **entity key**, not intent_id — tools receive
-# only their parsed arguments, never the intent envelope. The two countings
-# are equivalent here by construction: each ``t-…`` key stages exactly one
-# tool intent (seq 0, step 1), and the gate separately asserts, from the
-# intents topic, that each key carries exactly one distinct ``intent_id`` —
-# making ledger-count-per-key identical to execution-count-per-intent_id.
+# The tool declares the keyword-only ``intent: IntentInfo`` parameter and
+# records by the injected ``intent_id`` directly — it is the reference
+# intent-keyed idempotent consumer (change ``add-intent-info-for-tools``):
+# an unconditional attempt increment preserves the raw at-least-once
+# measurement, and a first-writer-wins effective write models the idempotent
+# downstream that the strong-form assertion (exactly one effective execution
+# per minted intent) is stated over. The gate separately asserts, from the
+# intents topic, that each key carries exactly one distinct ``intent_id``
+# minted by the deterministic formula.
 
 
 def _build_ledger_tools() -> ToolRegistry:
@@ -163,9 +166,10 @@ def _build_ledger_tools() -> ToolRegistry:
     registry = ToolRegistry()
 
     @tool(side_effect=True)
-    def charge(key: str) -> str:
-        count = ledger.record(key)
-        return f"receipt-{key}-{count}"
+    def charge(key: str, *, intent: IntentInfo) -> str:
+        attempt = ledger.record_attempt(intent.intent_id)
+        won = ledger.record_effective(intent.intent_id, attempt=attempt)
+        return f"receipt-{key}-{'effect' if won else 'duplicate'}"
 
     registry.register(charge)
     return registry

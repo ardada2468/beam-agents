@@ -9,10 +9,14 @@ Flink TaskManager container is killed, the job cancelled, and the identical
 pipeline resubmitted with fresh state, replaying every event from the
 immutable spool. Asserted, over the whole population:
 
-- effectively-once execution (the Redis ledger, counted at the side effect
-  itself): zero lost effects, duplicates only within the SIGKILL crash window
-  (bounded; strict exactly-once with zero kills), and the full pipeline
-  replay adding zero executions;
+- the strong-form exactly-once contract (the Redis ledger, counted at the
+  side effect itself, keyed by the injected `intent.intent_id`): zero lost
+  effects, **exactly one effective execution per minted intent** (the charge
+  tool is intent-keyed idempotent via first-writer-wins, so crash-window
+  re-invocations lose the race), raw attempts duplicated only within the
+  SIGKILL crash window (bounded; exactly one attempt with zero kills), and
+  the full pipeline replay adding zero attempts and zero effective
+  executions;
 - duplicate deliveries never diverge (byte-identical results per intent_id);
 - zero lost approvals (every approval key reaches a terminal decision,
   including the fail-closed HITL-timeout fallback);
@@ -271,7 +275,7 @@ async def test_exactly_one_execution_and_zero_lost_approvals_under_kills() -> No
     expected_executions = max(1, len(tool_keys))
     chaos = ChaosExecutor(
         schedule,
-        progress=lambda: len(ledger.counts()) / expected_executions,
+        progress=lambda: len(ledger.attempts()) / expected_executions,
         on_kill_effector=lambda victim: _LOG.info(
             "chaos killed effector pid=%d", pool.kill_one(victim)
         ),
@@ -392,12 +396,21 @@ async def test_exactly_one_execution_and_zero_lost_approvals_under_kills() -> No
             "a gate that skipped its chaos proves nothing"
         )
 
-        # Ledger after phase A: effectively-once — zero lost effects, and
-        # duplicates only within the SIGKILL crash window (spec: bounded by
-        # kills and the in-flight limit; strict exactly-once when kills = 0).
-        counts_a = ledger.counts()
-        expected_ledger = {k.hex() for k in tool_keys}
-        _assert_effectively_once(counts_a, expected_ledger, phase="A", kills=len(chaos.executed))
+        # Ledger after phase A: the strong form — zero lost effects, exactly
+        # one effective execution per minted intent (first-writer-wins keyed
+        # on the injected intent_id collapses crash-window re-invocations),
+        # and raw attempts duplicated only within the SIGKILL crash window
+        # (spec: bounded by kills and the in-flight limit; exactly one
+        # attempt when kills = 0). Each t-… key stages exactly one tool
+        # intent at (seq 0, step 1), so the expected ledger members are the
+        # deterministic formula's ids — the same formula the intents-topic
+        # cross-check below holds every observed intent to.
+        attempts_a = ledger.attempts()
+        effective_a = ledger.effective()
+        expected_ledger = {intent_id_for(k, 0, 1) for k in tool_keys}
+        _assert_strong_form(
+            attempts_a, effective_a, expected_ledger, phase="A", kills=len(chaos.executed)
+        )
 
         # ---- Phase B: TM kill, cancel, resubmit, full replay from the spool ----
         # Order is load-bearing (F8): recover the TM, let the restored -a job
@@ -436,20 +449,34 @@ async def test_exactly_one_execution_and_zero_lost_approvals_under_kills() -> No
             stable = stable + 1 if now == last else 0
             last = now
 
-        # THE assertion: the full replay added zero executions. No kills fire
-        # during phase B, so the counts must be byte-for-byte what phase A
-        # left — replay determinism plus effector dedup, with no crash-window
-        # allowance at all.
-        counts_b = ledger.counts()
-        _assert_effectively_once(
-            counts_b, expected_ledger, phase="B (after full replay)", kills=len(chaos.executed)
+        # THE assertion: the full replay added zero attempts and zero
+        # effective executions. No kills fire during phase B, so both
+        # countings must be byte-for-byte what phase A left — replay
+        # determinism plus effector dedup, with no crash-window allowance
+        # at all.
+        attempts_b = ledger.attempts()
+        effective_b = ledger.effective()
+        _assert_strong_form(
+            attempts_b,
+            effective_b,
+            expected_ledger,
+            phase="B (after full replay)",
+            kills=len(chaos.executed),
         )
         changed = {
-            k: (counts_a.get(k), counts_b.get(k))
-            for k in set(counts_a) | set(counts_b)
-            if counts_a.get(k) != counts_b.get(k)
+            k: (attempts_a.get(k), attempts_b.get(k))
+            for k in set(attempts_a) | set(attempts_b)
+            if attempts_a.get(k) != attempts_b.get(k)
         }
-        assert not changed, f"the pipeline replay changed ledger counts: {changed}"
+        assert not changed, f"the pipeline replay changed ledger attempt counts: {changed}"
+        changed_effective = {
+            k: (effective_a.get(k), effective_b.get(k))
+            for k in set(effective_a) | set(effective_b)
+            if effective_a.get(k) != effective_b.get(k)
+        }
+        assert not changed_effective, (
+            f"the pipeline replay changed effective executions: {changed_effective}"
+        )
 
         # Capture every topic now — teardown deletes them.
         intents = [ToolIntent.FromString(v) for _, v in await read_topic_all(config.intents_topic)]
@@ -564,39 +591,72 @@ async def test_exactly_one_execution_and_zero_lost_approvals_under_kills() -> No
     assert not unexpected, f"unexpected error records: {sorted(unexpected)[:5]}"
 
 
-def _assert_effectively_once(
-    counts: dict[str, int], expected_members: set[str], *, phase: str, kills: int
+def _assert_strong_form(
+    attempts: dict[str, int],
+    effective: dict[str, int],
+    expected_members: set[str],
+    *,
+    phase: str,
+    kills: int,
 ) -> None:
-    """Zero lost effects; duplicates only within the SIGKILL crash window.
+    """The honest exactly-once contract, asserted in its strong form.
 
-    A kill between a tool's effect and the durable completion record
-    re-executes after lease expiry — unavoidable for non-idempotent effects
-    (design F13). Each kill can strand at most `max_concurrent_partitions`
-    in-flight executions, and a member can gain at most one extra execution
-    per kill, so with zero kills this is strict exactly-once.
+    Zero lost effects (every minted intent attempted at least once), exactly
+    one effective execution per minted intent — the charge tool keys a
+    first-writer-wins write on the injected `intent_id`, so a crash-window
+    re-invocation replays the same key and loses the race — and raw attempts
+    duplicated only within the SIGKILL crash window. A kill between a tool's
+    effect and the durable completion record re-executes after lease expiry
+    (design F13); each kill can strand at most `max_concurrent_partitions`
+    in-flight executions, and a member can gain at most one extra attempt per
+    kill, so with zero kills attempts are exactly one per intent too.
     """
-    missing = expected_members - set(counts)
+    missing = expected_members - set(attempts)
     assert not missing, (
-        f"[phase {phase}] lost effects — no execution recorded for: {sorted(missing)[:10]}"
+        f"[phase {phase}] lost effects — no attempt recorded for: {sorted(missing)[:10]}"
     )
-    extra = set(counts) - expected_members
-    assert not extra, f"[phase {phase}] executions for unknown members: {sorted(extra)[:10]}"
-    duplicated = {k: c for k, c in counts.items() if c > 1}
+    extra = set(attempts) - expected_members
+    assert not extra, f"[phase {phase}] attempts for unknown members: {sorted(extra)[:10]}"
+
+    # The strong form: exactly one effective execution per minted intent. The
+    # first-writer-wins write can succeed at most once per intent_id by
+    # construction, so presence is the whole assertion — plus attribution:
+    # the winning attempt must be one this ledger actually counted.
+    missing_effective = expected_members - set(effective)
+    assert not missing_effective, (
+        f"[phase {phase}] intents with no effective execution: {sorted(missing_effective)[:10]}"
+    )
+    extra_effective = set(effective) - expected_members
+    assert not extra_effective, (
+        f"[phase {phase}] effective executions for unknown members: {sorted(extra_effective)[:10]}"
+    )
+    unattributed = {
+        k: (winner, attempts[k])
+        for k, winner in effective.items()
+        if not 1 <= winner <= attempts[k]
+    }
+    assert not unattributed, (
+        f"[phase {phase}] effective executions won by an attempt the ledger never counted "
+        f"(winner, attempts): {sorted(unattributed.items())[:10]}"
+    )
+
+    duplicated = {k: c for k, c in attempts.items() if c > 1}
     max_duplicated_members = kills * _EFFECTOR_MAX_CONCURRENT_PARTITIONS
     assert len(duplicated) <= max_duplicated_members, (
-        f"[phase {phase}] {len(duplicated)} members duplicated, but at most "
+        f"[phase {phase}] {len(duplicated)} members re-attempted, but at most "
         f"{max_duplicated_members} are attributable to the crash window of "
-        f"{kills} kills — something beyond the documented window duplicates "
-        f"effects: {sorted(duplicated.items())[:10]}"
+        f"{kills} kills — something beyond the documented window re-invokes "
+        f"tools: {sorted(duplicated.items())[:10]}"
     )
     over_cap = {k: c for k, c in duplicated.items() if c > 1 + kills}
     assert not over_cap, (
-        f"[phase {phase}] execution counts exceed 1+kills({1 + kills}) — not "
+        f"[phase {phase}] attempt counts exceed 1+kills({1 + kills}) — not "
         f"explainable by crash-window re-execution: {sorted(over_cap.items())[:10]}"
     )
     if duplicated:
         _LOG.warning(
-            "[phase %s] crash-window duplicates (within bound, %d kills): %s",
+            "[phase %s] crash-window re-attempts (within bound, %d kills; all "
+            "collapsed to one effective execution): %s",
             phase,
             kills,
             sorted(duplicated.items()),

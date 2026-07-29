@@ -12,7 +12,9 @@ The Redis-backed ledger reader is covered by the docker-backed gate itself.
 
 from __future__ import annotations
 
+import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,7 @@ from tests.semantics._e2e.approvals import split_due
 from tests.semantics._e2e.assertions import await_condition
 from tests.semantics._e2e.chaos import ChaosExecutor, KillAction, build_schedule
 from tests.semantics._e2e.drainer import Drainer, should_seal
+from tests.semantics._e2e.ledger import ExecutionLedger
 from tests.semantics._e2e.outbox import duplicate_decision
 from tests.semantics._e2e.spool import SpoolWriter, eof_total, read_segment
 from tests.semantics._e2e.stack import InfraFailure
@@ -245,3 +248,83 @@ def test_split_due_gated_mode_releases_only_on_the_predicate() -> None:
     due, kept = split_due(queue, now=50.0, late_ready=lambda k: k in ready_keys)
     assert [i.entity_key for _, i in due] == [b"late-r-00001"]
     assert [i.entity_key for _, i in kept] == [b"late-r-00000"]
+
+
+# -- ledger: the two countings the strong form rests on --------------------------
+#
+# `record_attempt` must always increment (the raw at-least-once measurement)
+# and `record_effective` must be first-writer-wins (the modeled idempotent
+# downstream keyed on intent_id). A ledger that got either wrong would fake
+# the gate's exactly-one-effective-execution assertion.
+
+
+class _FakeRedis:
+    """Dict-backed stand-in implementing exactly the ledger's client calls."""
+
+    def __init__(self) -> None:
+        self.hashes: dict[str, dict[str, int]] = {}
+
+    def hincrby(self, key: str, field: str, amount: int) -> int:
+        bucket = self.hashes.setdefault(key, {})
+        bucket[field] = int(bucket.get(field, 0)) + amount
+        return bucket[field]
+
+    def hsetnx(self, key: str, field: str, value: int) -> int:
+        bucket = self.hashes.setdefault(key, {})
+        if field in bucket:
+            return 0
+        bucket[field] = int(value)
+        return 1
+
+    def hgetall(self, key: str) -> dict[bytes, bytes]:
+        return {k.encode(): str(v).encode() for k, v in self.hashes.get(key, {}).items()}
+
+    def delete(self, *keys: str) -> None:
+        for key in keys:
+            self.hashes.pop(key, None)
+
+    def close(self) -> None:
+        return None
+
+
+def _fake_ledger(
+    monkeypatch: pytest.MonkeyPatch, run_id: str = "run-1"
+) -> tuple[ExecutionLedger, _FakeRedis]:
+    # A whole fake `redis` module in sys.modules, not a monkeypatched
+    # attribute: the ledger imports redis lazily inside its constructor, and
+    # the ci unit lane has no real redis to patch (its absence there is the
+    # import-boundary proof).
+    fake = _FakeRedis()
+    fake_module = types.ModuleType("redis")
+    fake_module.Redis = types.SimpleNamespace(  # type: ignore[attr-defined]
+        from_url=lambda url: fake
+    )
+    monkeypatch.setitem(sys.modules, "redis", fake_module)
+    return ExecutionLedger(run_id), fake
+
+
+def test_ledger_attempts_always_increment(monkeypatch: pytest.MonkeyPatch) -> None:
+    ledger, _ = _fake_ledger(monkeypatch)
+    assert ledger.record_attempt("intent-1") == 1
+    assert ledger.record_attempt("intent-1") == 2
+    assert ledger.record_attempt("intent-2") == 1
+    assert ledger.attempts() == {"intent-1": 2, "intent-2": 1}
+
+
+def test_ledger_effective_is_first_writer_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    ledger, _ = _fake_ledger(monkeypatch)
+    assert ledger.record_effective("intent-1", attempt=1) is True
+    assert ledger.record_effective("intent-1", attempt=2) is False
+    assert ledger.record_effective("intent-2", attempt=5) is True
+    # The stored value is the winning attempt, for post-run attribution.
+    assert ledger.effective() == {"intent-1": 1, "intent-2": 5}
+
+
+def test_ledger_clear_removes_both_countings(monkeypatch: pytest.MonkeyPatch) -> None:
+    ledger, fake = _fake_ledger(monkeypatch)
+    ledger.record_attempt("intent-1")
+    ledger.record_effective("intent-1", attempt=1)
+    ledger.clear()
+    assert ledger.attempts() == {}
+    assert ledger.effective() == {}
+    assert fake.hashes == {}
