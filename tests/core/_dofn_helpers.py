@@ -96,6 +96,27 @@ async def conditional_append_agent(ctx: ActivationContext) -> Complete:
     return Complete(output=ring + b"#" + str(ctx.seq).encode())
 
 
+async def outcome_routing_agent(ctx: ActivationContext) -> Complete:
+    """Pick an outcome from the event payload, so one bounded pipeline can
+    exercise several of them at once (each on its own key).
+
+    Deliberately has no suspending branch: a suspension left unresumed in a
+    *bounded* pipeline meets the end-of-input watermark advance and the
+    real-time HITL timer at once, and which fires first is the runner's choice.
+    Suspension counting is asserted under `TestStream`, where both clocks are
+    scripted (see test_dofn_streaming).
+    """
+    if ctx.event == b"FAIL":
+        raise RuntimeError("routed failure")
+    if ctx.event == b"ACT":
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+        return Complete(output=b"acted")
+    if ctx.event == b"MODEL":
+        response = await ctx.call_model(request())
+        return Complete(output=response.response)
+    return Complete(output=ctx.event)
+
+
 async def raising_agent(ctx: ActivationContext) -> Complete:
     """Write memory, then raise — the failed activation must commit nothing."""
     ctx.memory.set("scratch", b"should-not-persist")

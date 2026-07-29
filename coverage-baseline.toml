@@ -7,4 +7,9 @@
 # 0.9275): neither side's number survives the merge. Each was measured against
 # its own tree, and the rate is a ratio over the whole project, so the combined
 # tree has to be re-measured rather than have one side picked. 402/430 branches.
-branch_rate = 0.9349
+#
+# add-runtime-metrics 0.9349 -> 0.9369. The new `observability/metrics.py` is
+# fully covered and `core/context.py` reached 100% branch coverage, which more
+# than offsets the two commit-path branches (`tool_calls`, `tokens`) that only a
+# directly-driven `_record_commit` can reach until the adapter path lands.
+branch_rate = 0.9369

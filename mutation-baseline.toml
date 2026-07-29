@@ -24,7 +24,20 @@
 # TTL re-arm are driven by fake state/timer handles in test_dofn_ttl.py and
 # test_dofn_hitl_timer.py, both inside the selection, which is why killed rose
 # 621 -> 624 over the same diff.
+# add-runtime-metrics moved dofn.py 267 -> 3, by far the largest move this file
+# has seen. The metrics work needed the DoFn's *element* path driven outside a
+# pipeline (a metric recorded on the async bridge thread is silently dropped by
+# Beam, so the tally has to be staged and recorded on the Beam thread, and that
+# had to be asserted). Driving `process`/`_commit` with fake state and timer
+# handles -- tests/core/_dofn_fakes.py, used by test_dofn_metrics.py and
+# test_dofn_activation.py -- put nearly all of `process`, `_start`, `_resume`,
+# `_activate`, and `_commit` inside the mutation selection for the first time.
+# Those mutants had always been unkillable-by-construction, not equivalent: the
+# behaviors were covered end to end by the TestPipeline/TestStream suites that
+# mutmut deselects. What the gate demanded once they became reachable was the
+# same assertions in runner-free form, which is what those two files are.
+# The 3 that remain are in `setup`/`teardown` lines no selected test executes.
 [no_tests]
 "context.py" = 0
-"dofn.py" = 267
+"dofn.py" = 3
 "transform.py" = 198
