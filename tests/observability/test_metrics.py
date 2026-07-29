@@ -28,6 +28,7 @@ from beam_agents.observability.metrics import (
     DISTRIBUTION_ITERATIONS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_MEMORY_BYTES,
+    DISTRIBUTION_OVERHEAD_MS,
     DISTRIBUTION_TOKENS,
     DISTRIBUTIONS,
     NAMESPACE,
@@ -57,6 +58,7 @@ def test_the_declared_names_are_the_seven_counters_and_five_distributions() -> N
     )
     assert DISTRIBUTIONS == (
         "activation_ms",
+        "overhead_ms",
         "llm_ms",
         "tokens",
         "memory_bytes",
@@ -73,6 +75,7 @@ def test_the_declared_names_are_the_seven_counters_and_five_distributions() -> N
     ) == COUNTERS
     assert (
         DISTRIBUTION_ACTIVATION_MS,
+        DISTRIBUTION_OVERHEAD_MS,
         DISTRIBUTION_LLM_MS,
         DISTRIBUTION_TOKENS,
         DISTRIBUTION_MEMORY_BYTES,
@@ -189,16 +192,19 @@ def test_a_fresh_tally_is_all_zero_with_no_usage_observed() -> None:
     assert tally.total_tokens == 0
     assert tally.usage_observed is False
     assert tally.llm_ms == []
+    assert tally.tool_ms == []
 
 
-def test_two_tallies_do_not_share_their_duration_list() -> None:
+def test_two_tallies_do_not_share_their_duration_lists() -> None:
     # A mutable default would make every activation in a worker share one list.
     first = ActivationTally()
     second = ActivationTally()
 
     first.llm_ms.append(5)
+    first.tool_ms.append(2)
 
     assert second.llm_ms == []
+    assert second.tool_ms == []
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -577,6 +577,7 @@ def _commit(driver: _Driver, result: ActivationResult) -> list[Any]:
         driver.dofn._commit(
             result,
             _NOW_MS,
+            5,  # activation_ms: only `overhead_ms` consumes it, not the state writes
             driver.memory,
             driver.continuation,
             driver.llm_cache,

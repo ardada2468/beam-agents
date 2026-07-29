@@ -37,7 +37,15 @@
 # mutmut deselects. What the gate demanded once they became reachable was the
 # same assertions in runner-free form, which is what those two files are.
 # The 3 that remain are in `setup`/`teardown` lines no selected test executes.
+#
+# The same change later moved transform.py 198 -> 200: `AgentConfig` gained the
+# `tool_registry` field (supplying the tools `ctx.run_tool` executes inline) and
+# `expand` passes it to the DoFn. Both mutants sit in code only the deselected
+# TestPipeline suites reach -- the identical pattern that moved this ceiling
+# 196 -> 198 for `hitl_policy`. The field and the pass-through are covered in
+# the normal suite by test_transform.py's construction test and end to end by
+# test_dofn_pipeline.py's inline-tool pipeline run.
 [no_tests]
 "context.py" = 0
 "dofn.py" = 3
-"transform.py" = 198
+"transform.py" = 200

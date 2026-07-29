@@ -18,6 +18,7 @@ from beam_agents.core.context import ActivationContext
 from beam_agents.hitl import Escalate, Route
 from beam_agents.model.client import LlmRequest, ProviderError
 from beam_agents.model.fake import FakeLLM, match_any, raise_error, respond_with
+from beam_agents.tools import ToolRegistry, tool
 
 # Tool intents get a fixed TTL in tests; the value only feeds expires_at.
 _TTL_MS = 60_000
@@ -94,6 +95,30 @@ async def conditional_append_agent(ctx: ActivationContext) -> Complete:
     ctx.memory.append("log", ctx.event, max_items=64)
     ring = b",".join(ctx.memory.ring("log"))
     return Complete(output=ring + b"#" + str(ctx.seq).encode())
+
+
+@tool
+def lookup(customer_id: str) -> str:
+    """Uppercase a customer id: the read-only test tool for inline execution."""
+    return customer_id.upper()
+
+
+def make_tool_registry() -> ToolRegistry:
+    """Registry holding the module-level `lookup` tool.
+
+    A fresh registry per call (never a module-global instance), honoring the
+    no-global-mutable-state convention; the `Tool` itself is module-level so it
+    pickles by reference into the DoFn for DirectRunner tests.
+    """
+    registry = ToolRegistry()
+    registry.register(lookup)
+    return registry
+
+
+async def inline_tool_agent(ctx: ActivationContext) -> Complete:
+    """Run the read-only `lookup` tool inline and complete with its value."""
+    value = await ctx.run_tool("lookup", {"customer_id": ctx.event.decode() or "x"})
+    return Complete(output=str(value).encode())
 
 
 async def outcome_routing_agent(ctx: ActivationContext) -> Complete:

@@ -34,8 +34,10 @@ from beam_agents.core.transform import AgentConfig, RunAgent
 from beam_agents.observability.metrics import NAMESPACE
 from tests.core._dofn_helpers import (
     append_agent,
+    inline_tool_agent,
     keyed,
     make_pong_provider,
+    make_tool_registry,
     outcome_routing_agent,
     seq_agent,
     suspend_then_complete_agent,
@@ -234,6 +236,31 @@ def test_a_suspension_is_counted_and_never_exceeds_activations() -> None:
     assert counters["suspensions"] == 1
     assert counters["suspensions"] <= counters["activations"]
     assert counters["intents_emitted"] == 1
+
+
+def test_an_inline_tool_reports_through_a_real_pipeline() -> None:
+    # Scenario: A read-only tool runs inline on the runtime surface and is
+    # counted -- end to end. Also proves an `AgentConfig.tool_registry` holding
+    # a decorated Tool (with its dynamically-created pydantic argument model)
+    # survives Beam's pickling of the DoFn to the DirectRunner worker.
+    with BeamTestPipeline() as p:
+        out = keyed(p | beam.Create([_event(b"t", b"ab")])) | RunAgent(
+            inline_tool_agent,
+            config=AgentConfig(
+                provider_factory=make_pong_provider, tool_registry=make_tool_registry()
+            ),
+        )
+        assert_that(out.output, equal_to([b"AB"]))
+
+    counters, distributions = _runtime_metrics(p.result)
+
+    assert counters["tool_calls"] == 1
+    assert counters["activations"] == 1
+    # Scenario: Overhead subtracts model and tool time from the activation --
+    # here with real clocks, so only the identities are asserted: one sample
+    # per committed activation, never exceeding the activation's wall time.
+    assert distributions["overhead_ms"].count == counters["activations"]
+    assert distributions["overhead_ms"].sum <= distributions["activation_ms"].sum
 
 
 def test_model_calls_made_on_the_bridge_thread_are_counted() -> None:

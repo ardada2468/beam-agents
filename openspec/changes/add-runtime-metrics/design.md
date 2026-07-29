@@ -95,11 +95,25 @@ Handles are built once per recorder rather than per call (`Metrics.counter()` al
 
 The tally is a frozen-at-read dataclass on `ActivationResult` and `AgentResult`. It is never written to `MemoryBlob` or `Continuation`: keeping it out of keyed state is what makes this change proto-free, golden-blob-neutral, and unable to perturb the coder round-trip.
 
-### D9. `tool_calls` is wired at the execution site even though it reads zero today
+### D9. The runtime surface gains `run_tool`, so `tool_calls` is live in the shipped pipeline
 
-Inline read-only tools execute through `AgentContext.run_tool`; `ActivationContext` has no inline-tool surface, and the DoFn drives `ActivationContext`. So `tool_calls` counts at `AgentContext.run_tool`, lands on `AgentResult`, and reads zero in the currently-shipped pipeline.
+*(Revised in-change: the first cut wired `tool_calls` only at `AgentContext.run_tool` and shipped it reading zero, since the DoFn drives `ActivationContext`, which had no inline-tool surface. Review judged a permanently-zero metric a defect, and the fix is the missing capability, not the counter.)*
 
-The alternative — omit it until the adapter path lands — was rejected because the counter is part of the requested surface and because the correct site is obvious now and will be one edit among many later. The zero is stated in the proposal so nobody debugs it as a bug. Side-effecting tools are covered by `intents_emitted`, which is the right count for them: they never execute in the pipeline.
+`ActivationContext` gains `run_tool(tool_name, arguments)` — the fast-path behavior the architecture has documented from the start ("pure/read-only tools execute inline") — backed by a `ToolRegistry` configured on `AgentConfig.tool_registry` (default: empty) and threaded `RunAgent → _AgentDoFn → run_activation → ActivationContext`. `ToolRunner.run`'s existing guard refuses `side_effect=True` tools before execution, preserving invariant 5; a refused or failing tool is not counted. `run_tool` does not advance the step cursor: the cursor mints `intent_id`s, and an inline read-only call must not perturb replay identity — pinned by a test asserting the same intent IDs with and without an interleaved tool call.
+
+Both surfaces now count at their own execution site. Each runtime execution is also timed with the injected clock into `tally.tool_ms`, which D10 subtracts. The registry (holding `Tool`s with dynamically-created pydantic argument models) pickles into the DoFn through the DirectRunner — verified by the end-to-end pipeline test rather than assumed.
+
+Side-effecting tools remain covered by `intents_emitted`: they never execute in the pipeline.
+
+### D10. `overhead_ms` publishes the release-gate figure
+
+*(Revised in-change: was an open question; review promoted it.)*
+
+The latency budget (p50 < 15 ms / p99 < 60 ms per activation) excludes LLM and tool time, but `activation_ms` includes both — so the requested twelve metrics contained no instrument for the one number that gates releases. `overhead_ms` closes that: `max(0, activation_ms − Σ llm_ms − Σ tool_ms)`, recorded in `_record_commit`, one sample per committed activation.
+
+Placement follows from what is knowable where. The subtraction needs both the activation's wall time (measured by the DoFn around the bridge submission) and the tally (inside the `ActivationResult`), so `_activate` now returns `(result, elapsed_ms)` and `_commit` carries `activation_ms` down to the recorder. A failed activation's tally never escapes — atomic staging discards it with everything else — so failures contribute `activation_ms` but no overhead sample; a wrong number would be worse than none. The clamp is not decorative: an agent that `asyncio.gather`s calls concurrently can make summed call time exceed wall time, and a negative duration sample is nonsense.
+
+This is why inline tool executions are timed at all (`tally.tool_ms`): without the subtrahend, `overhead_ms` would silently re-absorb tool time the moment anyone used `run_tool`, and the gate figure would drift exactly when the feature got used.
 
 ## Risks / Trade-offs
 

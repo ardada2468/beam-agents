@@ -61,6 +61,12 @@ COUNTER_ORPHANED_RESULTS = "orphaned_results"
 # Wall time of running the agent for one element, on every exit including
 # failure and timeout: the timeout tail is the interesting part.
 DISTRIBUTION_ACTIVATION_MS = "activation_ms"
+# The activation's wall time minus its model-call and inline-tool time, clamped
+# at zero: the runtime's own cost per committed activation, and the direct
+# instrument for the release-gating overhead budget (which excludes LLM/tool
+# time). One sample per committed activation; a failed activation's tally does
+# not escape, so it contributes `activation_ms` but no overhead sample.
+DISTRIBUTION_OVERHEAD_MS = "overhead_ms"
 # Wall time of one provider-reached model call. One sample per `llm_calls`.
 DISTRIBUTION_LLM_MS = "llm_ms"
 # Total tokens for an activation, sampled only when usage was actually decoded.
@@ -83,6 +89,7 @@ COUNTERS = (
 )
 DISTRIBUTIONS = (
     DISTRIBUTION_ACTIVATION_MS,
+    DISTRIBUTION_OVERHEAD_MS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_TOKENS,
     DISTRIBUTION_MEMORY_BYTES,
@@ -127,6 +134,9 @@ class ActivationTally:
     usage_observed: bool = False
     #: One entry per provider-reached call, in call order.
     llm_ms: list[int] = field(default_factory=list)
+    #: One entry per inline tool execution, in call order. Subtracted (with
+    #: `llm_ms`) from the activation's wall time to produce `overhead_ms`.
+    tool_ms: list[int] = field(default_factory=list)
 
 
 @runtime_checkable

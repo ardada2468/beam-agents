@@ -76,10 +76,12 @@ from beam_agents.observability.metrics import (
     DISTRIBUTION_ITERATIONS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_MEMORY_BYTES,
+    DISTRIBUTION_OVERHEAD_MS,
     DISTRIBUTION_TOKENS,
     MetricsSink,
     RuntimeMetrics,
 )
+from beam_agents.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -190,6 +192,7 @@ class _AgentDoFn(beam.DoFn):
         ttl_ms: int = _DEFAULT_TTL_MS,
         cancel_grace_s: float = 5.0,
         hitl_policy: HitlPolicy | None = None,
+        tool_registry: ToolRegistry | None = None,
         metrics: MetricsSink | None = None,
         monotonic_ns: MonotonicNs | None = None,
     ) -> None:
@@ -199,6 +202,9 @@ class _AgentDoFn(beam.DoFn):
         self._ttl_ms = ttl_ms
         self._cancel_grace_s = cancel_grace_s
         self._hitl_policy = hitl_policy if hitl_policy is not None else HitlPolicy()
+        # The read-only tools `ctx.run_tool` executes inline; empty by default,
+        # so an unconfigured pipeline refuses every inline call by name.
+        self._tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
         # `metrics`/`monotonic_ns` are test seams, not user configuration: there
         # is no `AgentConfig` knob for either, and metrics are always published.
         # Built here rather than in `setup()` so the timer callbacks (which a
@@ -297,7 +303,7 @@ class _AgentDoFn(beam.DoFn):
         cache_blob = llm_cache.read()
 
         try:
-            result = self._activate(
+            result, activation_ms = self._activate(
                 key=key,
                 seq=current_seq,
                 now_ms=now_ms,
@@ -314,7 +320,16 @@ class _AgentDoFn(beam.DoFn):
             return
 
         yield from self._commit(
-            result, now_ms, memory, continuation, llm_cache, pending, seq, ttl_timer, hitl_timer
+            result,
+            now_ms,
+            activation_ms,
+            memory,
+            continuation,
+            llm_cache,
+            pending,
+            seq,
+            ttl_timer,
+            hitl_timer,
         )
 
     def _resume(
@@ -346,7 +361,7 @@ class _AgentDoFn(beam.DoFn):
         memory_blob = memory.read()
         cache_blob = llm_cache.read()
         try:
-            result = self._activate(
+            result, activation_ms = self._activate(
                 key=key,
                 seq=cont.seq,
                 now_ms=now_ms,
@@ -366,7 +381,16 @@ class _AgentDoFn(beam.DoFn):
             return
 
         yield from self._commit(
-            result, now_ms, memory, continuation, llm_cache, pending, seq, ttl_timer, hitl_timer
+            result,
+            now_ms,
+            activation_ms,
+            memory,
+            continuation,
+            llm_cache,
+            pending,
+            seq,
+            ttl_timer,
+            hitl_timer,
         )
 
     def _activate(
@@ -382,7 +406,7 @@ class _AgentDoFn(beam.DoFn):
         resume_approval: AgentEnvelope.Approval | None = None,
         snapshot: bytes = b"",
         step_index: int = 0,
-    ) -> ActivationResult:
+    ) -> tuple[ActivationResult, int]:
         assert self._bridge is not None and self._provider is not None, "setup() not called"
         provider = self._provider
         policy = self._hitl_policy
@@ -397,7 +421,7 @@ class _AgentDoFn(beam.DoFn):
         # one clock times the whole element.
         started_ns = monotonic_ns()
         try:
-            return self._bridge.run(
+            result = self._bridge.run(
                 lambda: run_activation(
                     self._agent,
                     entity_key=key,
@@ -415,18 +439,24 @@ class _AgentDoFn(beam.DoFn):
                     intent_ttl_ms=policy.intent_ttl_ms,
                     approval_channel=policy.approval_channel,
                     monotonic_ns=monotonic_ns,
+                    tool_registry=self._tool_registry,
                 ),
                 self._activation_timeout_s,
             )
         finally:
-            self._metrics.observe(
-                DISTRIBUTION_ACTIVATION_MS, (monotonic_ns() - started_ns) // _NS_PER_MS
-            )
+            # The elapsed reading is taken in the finally so all three exits --
+            # commit, ActivationTimeout, any other failure -- share the one
+            # sample site; on success it is also what `overhead_ms` subtracts
+            # the tally's call durations from.
+            elapsed_ms = (monotonic_ns() - started_ns) // _NS_PER_MS
+            self._metrics.observe(DISTRIBUTION_ACTIVATION_MS, elapsed_ms)
+        return result, elapsed_ms
 
     def _commit(
         self,
         result: ActivationResult,
         now_ms: int,
+        activation_ms: int,
         memory: _State,
         continuation: _State,
         llm_cache: _State,
@@ -479,7 +509,7 @@ class _AgentDoFn(beam.DoFn):
         # recording placed after them would be contingent on how the consumer
         # drains it. Beam always drains fully, but the ordering must not depend
         # on that.
-        self._record_commit(result)
+        self._record_commit(result, activation_ms)
 
         yield from result.outputs
         for intent in result.intents:
@@ -487,7 +517,7 @@ class _AgentDoFn(beam.DoFn):
         for trace in result.traces:
             yield beam.pvalue.TaggedOutput("traces", trace)
 
-    def _record_commit(self, result: ActivationResult) -> None:
+    def _record_commit(self, result: ActivationResult, activation_ms: int) -> None:
         """Record one committed activation's metrics, on the Beam thread.
 
         Everything here comes from the staged `ActivationResult`: the counts and
@@ -520,6 +550,13 @@ class _AgentDoFn(beam.DoFn):
             metrics.observe(DISTRIBUTION_TOKENS, tally.total_tokens)
         for duration_ms in tally.llm_ms:
             metrics.observe(DISTRIBUTION_LLM_MS, duration_ms)
+        # The release-gate figure: the activation's wall time with its model
+        # and inline-tool time subtracted out. Clamped -- an agent that awaits
+        # calls concurrently can make the subtrahend exceed the wall time.
+        metrics.observe(
+            DISTRIBUTION_OVERHEAD_MS,
+            max(0, activation_ms - sum(tally.llm_ms) - sum(tally.tool_ms)),
+        )
 
     # -- timers ---------------------------------------------------------------
 

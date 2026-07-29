@@ -13,9 +13,11 @@ query = result.metrics().query(MetricsFilter().with_namespace("beam_agents.runti
 {m.key.metric.name: m.result for m in query[MetricResults.COUNTERS]}
 ```
 
-Nothing needs enabling: there is no configuration knob, and no `AgentConfig`
-field. Working memory's own `beam_agents.memory/soft_cap_warnings` counter is
-unchanged and keeps its separate namespace.
+Nothing needs enabling: metrics are published unconditionally, with no
+configuration knob. (`AgentConfig.tool_registry` supplies the tools
+`ctx.run_tool` executes — it configures tool execution, not metrics.) Working
+memory's own `beam_agents.memory/soft_cap_warnings` counter is unchanged and
+keeps its separate namespace.
 
 ## Counters
 
@@ -23,7 +25,7 @@ unchanged and keeps its separate namespace.
 |---|---|
 | `activations` | Once per activation that reached the commit path — a start or a resume. Same event as the `SEQ` increment. |
 | `llm_calls` | Once per model call that reached the provider. A replay-cache hit is not a call. |
-| `tool_calls` | Once per read-only tool executed inline. |
+| `tool_calls` | Once per read-only tool executed inline via `ctx.run_tool(...)`, on either activation surface. The tools come from `AgentConfig.tool_registry`. |
 | `intents_emitted` | Once per `ToolIntent` put on `.intents`, including one minted by a HITL escalation. |
 | `agent_errors` | Once per `.errors` record that is not an orphaned result (`activation_timeout`, `activation_error`, `hitl_timeout`, `ttl_wiped_suspension`). |
 | `suspensions` | Once per committed activation whose outcome was `Suspend`. |
@@ -44,17 +46,23 @@ or the benchmark suite.)
 | Distribution | One sample per |
 |---|---|
 | `activation_ms` | Agent run, **including failures and timeouts**. Sample count is therefore `activations` + failed activations. A resume refused at admission never runs the agent and is not sampled. |
+| `overhead_ms` | Committed activation: its wall time minus its model-call and inline-tool time, clamped at zero. **This is the release-gate figure** (the budget excludes LLM/tool time). Sample count equals `activations`; a failed activation's tally does not escape, so failures contribute `activation_ms` only. |
 | `llm_ms` | Provider-reached model call. Sample count equals `llm_calls`. |
 | `tokens` | Committed activation whose provider usage was actually decoded. Activations that decoded no usage contribute no sample, so the count means "activations with known usage". |
 | `memory_bytes` | Committed activation: the working-memory size that was committed. |
 | `iterations` | Committed activation: the agent steps it consumed. A resume reports only its own steps. |
 
-### `activation_ms` is not the runtime-overhead budget
+### `activation_ms` vs. `overhead_ms`
 
-`activation_ms` is total wall time and **includes provider latency**. The
+`activation_ms` is total wall time and **includes provider and tool latency** —
+useful for end-to-end latency questions, wrong for the release gate. The
 release-gating budget (p50 < 15 ms, p99 < 60 ms per activation) excludes LLM and
-tool time. The comparable figure is `activation_ms - Σ llm_ms` for an
-activation; it is not published as its own metric today.
+tool time; `overhead_ms` publishes exactly that subtraction, so it is the
+distribution to alert on for the budget. It is clamped at zero: an agent that
+awaits calls concurrently can make summed call time exceed wall time. Beam
+distributions carry no percentiles (see above), so the p99 check itself still
+belongs to the benchmark suite; `overhead_ms`'s sum/count/max give the
+dashboard-level early warning.
 
 ## What these numbers are, and are not
 
@@ -74,11 +82,6 @@ per-model, or per-error-reason breakdown here. Those dimensions are on every
 provider-reached calls, which is what makes "a replayed bundle adds zero
 provider calls" visible on a dashboard. The hit/miss split lives on the
 `LLM_CALL` traces' `beam_agents.cache_hit` attribute.
-
-**`tool_calls` reads zero today.** Inline tools execute through `AgentContext`,
-and the stateful DoFn currently drives `ActivationContext`, which has no inline
-tool surface. The counter is wired at the execution site so it starts reporting
-when the adapter path lands.
 
 ## A DirectRunner caveat for local runs
 

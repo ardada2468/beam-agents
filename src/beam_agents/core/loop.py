@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from beam_agents.core.agent import Agent
     from beam_agents.memory.facade import Compactor
     from beam_agents.model.client import LLMClient
+    from beam_agents.tools.registry import ToolRegistry
+    from beam_agents.tools.runner import ToolRunner
 
 # `DEFAULT_HITL_TIMEOUT_MS` is re-exported from `hitl` (its home, alongside the
 # rest of the HITL policy defaults) so the historical import site keeps working.
@@ -89,6 +91,8 @@ async def run_activation(
     intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
     approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
     monotonic_ns: MonotonicNs = time.monotonic_ns,
+    tool_registry: ToolRegistry | None = None,
+    tool_runner: ToolRunner | None = None,
 ) -> ActivationResult:
     """Run one activation to a terminal :class:`ActivationResult`.
 
@@ -111,6 +115,8 @@ async def run_activation(
         intent_ttl_ms=intent_ttl_ms,
         approval_channel=approval_channel,
         monotonic_ns=monotonic_ns,
+        tool_registry=tool_registry,
+        tool_runner=tool_runner,
     )
 
     ctx.stage_trace(

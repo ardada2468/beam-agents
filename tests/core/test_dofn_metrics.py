@@ -42,6 +42,7 @@ from beam_agents.observability.metrics import (
     DISTRIBUTION_ITERATIONS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_MEMORY_BYTES,
+    DISTRIBUTION_OVERHEAD_MS,
     DISTRIBUTION_TOKENS,
     ActivationTally,
     MetricsSink,
@@ -49,7 +50,9 @@ from beam_agents.observability.metrics import (
 )
 from tests.core._dofn_helpers import (
     append_agent,
+    inline_tool_agent,
     make_pong_provider,
+    make_tool_registry,
     model_agent,
     raising_agent,
     seq_agent,
@@ -178,12 +181,14 @@ def _run(
     pending: list[ToolIntent] | None = None,
     seq_value: int = 0,
     handles: dict[str, Any] | None = None,
+    tool_registry: Any = None,
 ) -> tuple[_RecordingMetrics, list[Any], _FakeSum]:
     metrics = _RecordingMetrics()
     dofn = _AgentDoFn(
         agent,
         provider_factory=provider_factory,
         activation_timeout_s=activation_timeout_s,
+        tool_registry=tool_registry,
         metrics=metrics,
         monotonic_ns=monotonic_ns if monotonic_ns is not None else _clock(),
     )
@@ -282,6 +287,37 @@ def test_the_same_clock_times_the_activation_and_its_model_call() -> None:
 
     assert metrics.samples[DISTRIBUTION_LLM_MS] == [3]
     assert metrics.samples[DISTRIBUTION_ACTIVATION_MS] == [10]
+    # Scenario: Overhead subtracts model and tool time from the activation.
+    # 10ms of wall time minus the 3ms provider call: the release-gate figure.
+    assert metrics.samples[DISTRIBUTION_OVERHEAD_MS] == [7]
+
+
+def test_an_inline_tool_is_counted_timed_and_excluded_from_overhead() -> None:
+    # Scenario: A read-only tool runs inline on the runtime surface and is
+    # counted -- through the commit path, with the tool's wall time excluded
+    # from `overhead_ms` alongside the model call's. Clock readings: activation
+    # start, tool start, tool end, activation end.
+    metrics, emitted, _ = _run(
+        inline_tool_agent,
+        _event(b"ab"),
+        tool_registry=make_tool_registry(),
+        monotonic_ns=_clock(0, 1_000_000, 3_000_000, 10_000_000),
+    )
+
+    assert _main(emitted) == [b"AB"]
+    assert metrics.counters[COUNTER_TOOL_CALLS] == 1
+    assert COUNTER_LLM_CALLS not in metrics.counters
+    assert metrics.samples[DISTRIBUTION_ACTIVATION_MS] == [10]
+    assert metrics.samples[DISTRIBUTION_OVERHEAD_MS] == [8]
+
+
+def test_a_plain_activation_has_overhead_equal_to_its_wall_time() -> None:
+    # No model calls, no tools: the whole activation is runtime overhead, and
+    # the sample count tracks `activations` one for one.
+    metrics, _, _ = _run(seq_agent, _event(), monotonic_ns=_clock(2_000_000, 8_000_000))
+
+    assert metrics.samples[DISTRIBUTION_ACTIVATION_MS] == [6]
+    assert metrics.samples[DISTRIBUTION_OVERHEAD_MS] == [6]
 
 
 # --- Requirement: a failed activation records no commit-path metric ----------
@@ -542,10 +578,11 @@ def test_a_tally_carrying_tool_calls_and_usage_records_both() -> None:
             total_tokens=41,
             usage_observed=True,
             llm_ms=[7, 9],
+            tool_ms=[2, 1, 1],
         ),
     )
 
-    dofn._record_commit(result)
+    dofn._record_commit(result, activation_ms=30)
 
     assert metrics.counters == {
         COUNTER_ACTIVATIONS: 1,
@@ -559,7 +596,33 @@ def test_a_tally_carrying_tool_calls_and_usage_records_both() -> None:
         DISTRIBUTION_ITERATIONS: [5],
         DISTRIBUTION_TOKENS: [41],
         DISTRIBUTION_LLM_MS: [7, 9],
+        # 30 - (7+9) llm - (2+1+1) tool.
+        DISTRIBUTION_OVERHEAD_MS: [10],
     }
+
+
+def test_concurrent_call_durations_clamp_overhead_at_zero() -> None:
+    # Scenario: Concurrent calls clamp overhead at zero. An agent that gathers
+    # two calls concurrently can make summed call time exceed wall time; a
+    # negative sample would be nonsense on a distribution of durations.
+    metrics = _RecordingMetrics()
+    dofn = _AgentDoFn(_unused_agent, provider_factory=make_pong_provider, metrics=metrics)
+    result = ActivationResult(
+        status="completed",
+        seq=0,
+        memory_blob=MemoryBlob(),
+        cache_blob=LlmCacheBlob(),
+        intents=[],
+        traces=[],
+        outputs=[],
+        continuation=None,
+        hitl_deadline_ms=None,
+        tally=ActivationTally(llm_calls=2, llm_ms=[8, 9]),
+    )
+
+    dofn._record_commit(result, activation_ms=10)
+
+    assert metrics.samples[DISTRIBUTION_OVERHEAD_MS] == [0]
 
 
 # --- Lifecycle: the bridge and provider this recording path runs on -----------

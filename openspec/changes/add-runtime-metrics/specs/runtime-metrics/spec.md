@@ -2,9 +2,9 @@
 
 ### Requirement: The runtime publishes a fixed metric surface under one namespace
 
-`RunAgent` SHALL publish Beam user metrics under the namespace `beam_agents.runtime`, consisting of exactly seven counters — `activations`, `llm_calls`, `tool_calls`, `intents_emitted`, `agent_errors`, `suspensions`, `orphaned_results` — and exactly five integer distributions — `activation_ms`, `llm_ms`, `tokens`, `memory_bytes`, `iterations`. Names and namespace are part of the observable contract: renaming one breaks every dashboard and alert built on it, so a rename SHALL be treated as a breaking change. The namespace SHALL be distinct from `beam_agents.memory`, which keeps its existing `soft_cap_warnings` counter unchanged.
+`RunAgent` SHALL publish Beam user metrics under the namespace `beam_agents.runtime`, consisting of exactly seven counters — `activations`, `llm_calls`, `tool_calls`, `intents_emitted`, `agent_errors`, `suspensions`, `orphaned_results` — and exactly six integer distributions — `activation_ms`, `overhead_ms`, `llm_ms`, `tokens`, `memory_bytes`, `iterations`. Names and namespace are part of the observable contract: renaming one breaks every dashboard and alert built on it, so a rename SHALL be treated as a breaking change. The namespace SHALL be distinct from `beam_agents.memory`, which keeps its existing `soft_cap_warnings` counter unchanged.
 
-Metrics SHALL be published unconditionally. There SHALL be no configuration knob to disable them and no new `AgentConfig` field.
+Metrics SHALL be published unconditionally. There SHALL be no configuration knob to disable them and no `AgentConfig` field controlling them. (`AgentConfig.tool_registry` exists to supply the tools `run_tool` executes; it configures tool execution, not metrics.)
 
 #### Scenario: Every declared metric is queryable after a pipeline run
 
@@ -58,7 +58,7 @@ The tally SHALL be worker-local: it SHALL NOT be written to `MemoryBlob`, `Conti
 
 ### Requirement: Commit-path metrics are recorded inside the commit, after state writes
 
-The DoFn's fixed commit order SHALL become `MEMORY, LLM_CACHE, CONTINUATION, PENDING, SEQ, timers, metrics, emits`. `activations`, `suspensions`, `intents_emitted`, `llm_calls`, `tool_calls`, and the `memory_bytes`, `iterations`, `tokens`, and `llm_ms` distributions SHALL be recorded at that point, so an activation that failed, timed out, or was refused admission contributes none of them — the same all-or-nothing rule the state mutations obey.
+The DoFn's fixed commit order SHALL become `MEMORY, LLM_CACHE, CONTINUATION, PENDING, SEQ, timers, metrics, emits`. `activations`, `suspensions`, `intents_emitted`, `llm_calls`, `tool_calls`, and the `memory_bytes`, `iterations`, `tokens`, `llm_ms`, and `overhead_ms` distributions SHALL be recorded at that point, so an activation that failed, timed out, or was refused admission contributes none of them — the same all-or-nothing rule the state mutations obey.
 
 `memory_bytes` SHALL sample the committed working-memory size for that activation. `iterations` SHALL sample the number of agent steps the activation consumed — the advance of the step cursor that mints intent IDs — so a resumed activation samples only its own steps, not its predecessor's.
 
@@ -106,6 +106,46 @@ This makes the replay-cache invariant observable: replaying an activation whose 
 
 - **WHEN** an activation issues a model call that misses the cache and reaches the provider
 - **THEN** `llm_calls` increments by one and exactly one `llm_ms` sample is recorded for it
+
+### Requirement: Inline read-only tools execute on the runtime surface and are counted
+
+`ActivationContext` SHALL expose `run_tool(tool_name, arguments)`, executing a `side_effect=False` tool inline against the `ToolRegistry` configured on `AgentConfig` (defaulting to an empty registry) — the documented fast-path behavior that previously existed only on the authoring surface. A `side_effect=True` tool SHALL be refused with `SideEffectToolError` before executing, preserving correctness invariant 5, and a refused or failing tool SHALL NOT be counted.
+
+Each successful inline execution SHALL add one `tool_calls` to the activation's tally and one wall-time duration measured with the injected monotonic clock, so `overhead_ms` can exclude tool time. `run_tool` SHALL NOT advance the step cursor: it mints no intent and makes no model call, so it must not perturb `intent_id` derivation or `iterations`.
+
+#### Scenario: A read-only tool runs inline on the runtime surface and is counted
+
+- **WHEN** an agent driven by the stateful DoFn calls `ctx.run_tool(...)` for a registered `side_effect=False` tool and the activation commits
+- **THEN** the tool's return value is available to the agent, and `tool_calls` reflects the execution after the pipeline completes
+
+#### Scenario: A side-effecting tool is refused and not counted
+
+- **WHEN** an agent calls `run_tool` naming a `side_effect=True` tool
+- **THEN** `SideEffectToolError` is raised before the tool executes, and `tool_calls` is unchanged
+
+#### Scenario: Inline tool execution does not advance the step cursor
+
+- **WHEN** an activation runs an inline tool between two `act(...)` calls
+- **THEN** the two intents' `intent_id`s are the same as they would be with no tool call, and `iterations` counts only the two intent steps
+
+### Requirement: `overhead_ms` isolates the runtime's own cost per committed activation
+
+The release-gating latency budget excludes LLM and tool time; `activation_ms` includes both, so it cannot instrument that budget. `overhead_ms` SHALL sample, once per committed activation, the activation's wall time minus the summed wall time of its provider-reached model calls and its inline tool executions, clamped at zero (an agent that awaits calls concurrently can make the subtrahend exceed the wall time). Its sample count SHALL equal `activations`. A failed or timed-out activation contributes an `activation_ms` sample but no `overhead_ms` sample — its tally does not escape the failed activation, so the subtraction is not computable, and a wrong number is worse than none.
+
+#### Scenario: Overhead subtracts model and tool time from the activation
+
+- **WHEN** an activation whose wall time is 10 ms spends 3 ms in a provider-reached model call and 2 ms in an inline tool, and commits
+- **THEN** one `overhead_ms` sample of 5 is recorded
+
+#### Scenario: Concurrent calls clamp overhead at zero
+
+- **WHEN** an activation's summed model and tool durations exceed its wall time because calls were awaited concurrently
+- **THEN** the `overhead_ms` sample is 0, not negative
+
+#### Scenario: A failed activation contributes no overhead sample
+
+- **WHEN** an activation raises or times out
+- **THEN** an `activation_ms` sample is recorded and no `overhead_ms` sample is
 
 ### Requirement: `tokens` is sampled only from decoded provider usage
 

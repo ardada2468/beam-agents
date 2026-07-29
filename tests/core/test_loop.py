@@ -186,6 +186,8 @@ async def test_loop_forwards_every_activation_context_input(
     resume_approval = AgentEnvelope.Approval(intent_id="intent-1", approved=True)
     compactor = object()
     monotonic_ns = _scripted_clock()
+    tool_registry = object()
+    tool_runner = object()
 
     class FakeContext:
         def __init__(self) -> None:
@@ -232,6 +234,8 @@ async def test_loop_forwards_every_activation_context_input(
         snapshot=b"snapshot",
         compactor=compactor,  # type: ignore[arg-type]
         monotonic_ns=monotonic_ns,
+        tool_registry=tool_registry,  # type: ignore[arg-type]
+        tool_runner=tool_runner,  # type: ignore[arg-type]
     )
 
     # The measurement clock is forwarded like every other injected dependency,
@@ -252,6 +256,8 @@ async def test_loop_forwards_every_activation_context_input(
         "intent_ttl_ms": DEFAULT_INTENT_TTL_MS,
         "approval_channel": DEFAULT_APPROVAL_CHANNEL,
         "monotonic_ns": monotonic_ns,
+        "tool_registry": tool_registry,
+        "tool_runner": tool_runner,
     }
     assert result.memory_blob is memory_blob
     assert result.cache_blob is cache_blob

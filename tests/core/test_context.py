@@ -31,7 +31,7 @@ from beam_agents.core.context import (
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from beam_agents.model import FakeLLM, LlmRequest, StagingSink, TokenUsage, match_any, respond_with
 from beam_agents.model.replay_cache import compute_cache_key as real_compute_cache_key
-from beam_agents.tools import SideEffectToolError, ToolRegistry, tool
+from beam_agents.tools import SideEffectToolError, ToolNotFoundError, ToolRegistry, tool
 
 from ._context_helpers import make_context
 
@@ -994,6 +994,92 @@ async def test_a_resumed_activation_counts_only_its_own_steps() -> None:
 
     assert ctx.step_index == 5
     assert ctx.tally().iterations == 2
+
+
+async def test_activation_context_runs_a_read_only_tool_inline_and_counts_it() -> None:
+    # Scenario: A read-only tool runs inline on the runtime surface and is
+    # counted. The runtime surface previously had no inline-tool path at all,
+    # which is why `tool_calls` could only ever read zero in a pipeline.
+    calls: list[str] = []
+
+    @tool
+    def lookup(customer_id: str) -> str:
+        calls.append(customer_id)
+        return customer_id.upper()
+
+    registry = ToolRegistry()
+    registry.register(lookup)
+    ctx = _activation_context(
+        tool_registry=registry,
+        monotonic_ns=_scripted_clock(1_000_000, 3_500_000, 4_000_000, 8_000_000),
+    )
+
+    value = await ctx.run_tool("lookup", {"customer_id": "abc"})
+    second = await ctx.run_tool("lookup", {"customer_id": "def"})
+
+    tally = ctx.tally()
+    assert value == "ABC"
+    assert second == "DEF"
+    assert calls == ["abc", "def"]
+    # One increment per execution -- two calls accumulate, not overwrite.
+    assert tally.tool_calls == 2
+    # Timed with the same injected clock as model calls, so `overhead_ms` can
+    # exclude tool time from the activation's wall clock. 2.5ms floors to a
+    # whole-millisecond integer -- the only thing a Beam distribution carries.
+    assert tally.tool_ms == [2, 4]
+    assert all(isinstance(sample, int) for sample in tally.tool_ms)
+
+
+async def test_activation_context_refuses_a_side_effect_tool_uncounted() -> None:
+    # Scenario: A side-effecting tool is refused and not counted. Correctness
+    # invariant 5: `ctx.act(...)` is the only effect path.
+    executed: list[object] = []
+
+    @tool(side_effect=True)
+    def charge_card(amount: int) -> None:
+        executed.append(amount)
+
+    registry = ToolRegistry()
+    registry.register(charge_card)
+    ctx = _activation_context(tool_registry=registry)
+
+    with pytest.raises(SideEffectToolError):
+        await ctx.run_tool("charge_card", {"amount": 5})
+
+    assert executed == []
+    assert ctx.tally().tool_calls == 0
+    assert ctx.tally().tool_ms == []
+
+
+async def test_activation_context_run_tool_unknown_tool_is_refused() -> None:
+    ctx = _activation_context()
+
+    with pytest.raises(ToolNotFoundError):
+        await ctx.run_tool("nope", {})
+
+    assert ctx.tally().tool_calls == 0
+
+
+async def test_run_tool_does_not_advance_the_step_cursor() -> None:
+    # Scenario: Inline tool execution does not advance the step cursor. The
+    # cursor mints intent IDs; a tool call that moved it would change every
+    # subsequent intent_id and break replay identity.
+    @tool
+    def lookup(customer_id: str) -> str:
+        return customer_id
+
+    registry = ToolRegistry()
+    registry.register(lookup)
+    ctx = _activation_context(tool_registry=registry)
+
+    first = ctx.act("http.post", "{}", ttl_ms=1_000)
+    await ctx.run_tool("lookup", {"customer_id": "abc"})
+    second = ctx.act("http.post", "{}", ttl_ms=1_000)
+
+    assert first == intent_id_for(b"key", 8, 0)
+    assert second == intent_id_for(b"key", 8, 1)
+    assert ctx.tally().iterations == 2
+    assert ctx.tally().tool_calls == 1
 
 
 def test_the_tally_never_reaches_the_persisted_blobs() -> None:

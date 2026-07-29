@@ -31,6 +31,7 @@ from beam_agents.core.transform import (
     _validate_kv_input,
 )
 from beam_agents.hitl import HitlPolicy
+from beam_agents.tools import ToolRegistry
 from tests.core._dofn_helpers import (
     append_agent,
     make_pong_provider,
@@ -122,6 +123,18 @@ def test_config_carries_a_default_hitl_policy() -> None:
     config = AgentConfig(provider_factory=make_pong_provider)
     assert config.hitl_policy == HitlPolicy()
     assert config.hitl_policy.max_escalations == 0
+
+
+def test_config_carries_an_empty_default_tool_registry_or_the_supplied_one() -> None:
+    # An unconfigured pipeline refuses every inline `run_tool` by name rather
+    # than executing something unregistered; a supplied registry is held as-is.
+    default_config = AgentConfig(provider_factory=make_pong_provider)
+    assert isinstance(default_config.tool_registry, ToolRegistry)
+    assert default_config.tool_registry.tools_schema == []
+
+    registry = ToolRegistry()
+    config = AgentConfig(provider_factory=make_pong_provider, tool_registry=registry)
+    assert config.tool_registry is registry
 
 
 @pytest.mark.parametrize(

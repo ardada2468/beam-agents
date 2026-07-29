@@ -42,3 +42,14 @@
 - [x] 6.3 `make coverage-ratchet` at or above baseline; raise `coverage-baseline.toml` if the new module improves it.
 - [x] 6.4 `make mutation` passes; re-check `mutation-baseline.toml`'s `dofn.py` and `context.py` ceilings and document any move in the file's comment, following the precedent set by the previous two changes. **Driving the element path with fake handles pulled ~264 previously unreachable mutants into the selection; killing them needed `tests/core/test_dofn_activation.py` (routing, activation inputs, commit semantics, failure exits) and two renumbered `mutation-exclusions.toml` entries. `dofn.py` 267 -> 3.**
 - [x] 6.5 `uv run pre-commit run --all-files` clean.
+
+## 7. Revision: make `tool_calls` live and publish `overhead_ms` (review feedback)
+
+- [x] 7.1 Spec: widen the fixed surface to six distributions (`overhead_ms`), add the "inline read-only tools execute on the runtime surface" and "`overhead_ms` isolates the runtime's own cost" requirements with scenarios, and scope the no-config-knob sentence to metrics (the new `AgentConfig.tool_registry` configures tools, not metrics).
+- [x] 7.2 Tests first: `ActivationContext.run_tool` executes/counts/times a read-only tool, refuses `side_effect=True` uncounted, leaves the step cursor alone; `overhead_ms` = activation − Σ llm − Σ tool via scripted clocks, clamped at zero for concurrent calls, absent on failure; end-to-end pipeline run proving `tool_calls` and `overhead_ms` reach `result.metrics()` and that a registry holding a decorated `Tool` (dynamic pydantic model) pickles into the DoFn through the DirectRunner.
+- [x] 7.3 `observability/metrics.py`: `overhead_ms` name + `ActivationTally.tool_ms`.
+- [x] 7.4 `ActivationContext`: `tool_registry`/`tool_runner` injection and `run_tool` (counted and timed after a successful return only); threaded through `run_activation`.
+- [x] 7.5 `_AgentDoFn`: `tool_registry` parameter forwarded into the activation; `_activate` returns `(result, elapsed_ms)`; `_commit`/`_record_commit` carry `activation_ms` and record `overhead_ms` clamped at zero; `testing/chaos.py` mirrors the widened `_commit` signature.
+- [x] 7.6 `AgentConfig.tool_registry` (default empty registry) passed by `RunAgent.expand`.
+- [x] 7.7 Docs: `docs/metrics.md` gains `overhead_ms`, drops the "tool_calls reads zero" caveat, and points the release gate at `overhead_ms` directly.
+- [x] 7.8 Gates re-run: lint/type/unit/semantics clean; mutation gate passed after killing the two `run_tool` survivors (`+= 1` vs `= 1`, float vs floor division) and documenting transform.py's 198 → 200 ceiling move (field default + expand pass-through, the `hitl_policy` precedent); coverage ratchet re-checked.

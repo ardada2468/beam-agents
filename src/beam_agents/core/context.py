@@ -345,6 +345,8 @@ class ActivationContext:
         intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
         approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
         monotonic_ns: MonotonicNs = time.monotonic_ns,
+        tool_registry: ToolRegistry | None = None,
+        tool_runner: ToolRunner | None = None,
     ) -> None:
         self.entity_key = entity_key
         self.seq = seq
@@ -373,6 +375,8 @@ class ActivationContext:
         self._traces: list[TraceEvent] = []
         self._monotonic_ns = monotonic_ns
         self._tally = ActivationTally()
+        self._tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
+        self._tool_runner = tool_runner if tool_runner is not None else ToolRunner()
 
     # -- agent-facing API -----------------------------------------------------
 
@@ -421,6 +425,28 @@ class ActivationContext:
         self._tally.llm_ms.append(elapsed_ns // _NS_PER_MS)
         self._stage_llm_trace(step, cache_hit=False, model_id=request.model_id)
         return response
+
+    async def run_tool(self, tool_name: str, arguments: Mapping[str, object]) -> object:
+        """Run a ``side_effect=False`` tool inline via the injected ``ToolRunner``.
+
+        The fast-path behavior the architecture documents ("pure/read-only
+        tools execute inline"), on the runtime surface the stateful DoFn
+        actually drives. ``ToolRunner.run`` refuses a ``side_effect=True`` tool
+        with ``SideEffectToolError`` before it executes (correctness invariant
+        5); a refused or failing tool is not counted.
+
+        Deliberately does NOT advance the step cursor: the cursor mints intent
+        IDs and orders replay-cache entries, and an inline read-only call must
+        not perturb either. The wall time is measured with the injected clock
+        so ``overhead_ms`` can exclude tool time alongside model time.
+        """
+        tool = self._tool_registry.get(tool_name)
+        started_ns = self._monotonic_ns()
+        value = await self._tool_runner.run(tool, arguments)
+        elapsed_ns = self._monotonic_ns() - started_ns
+        self._tally.tool_calls += 1
+        self._tally.tool_ms.append(elapsed_ns // _NS_PER_MS)
+        return value
 
     def act(self, tool_name: str, args_json: str, *, ttl_ms: int | None = None) -> str:
         """Stage a side-effect ``ToolIntent`` and return its deterministic ID.
