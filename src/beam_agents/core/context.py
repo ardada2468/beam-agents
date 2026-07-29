@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import Mapping
-from dataclasses import dataclass
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 
 from beam_agents._protos import (
     AgentEnvelope,
@@ -52,8 +53,18 @@ from beam_agents.model.facade import (
     TokenUsage,
 )
 from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
+from beam_agents.observability.metrics import ActivationTally
 from beam_agents.tools.registry import ToolRegistry
 from beam_agents.tools.runner import ToolRunner
+
+# Injected monotonic clock for duration measurement. Injected like every other
+# non-determinism source (`now_ms`, `rng`, `sleep`) so tests script exact
+# durations instead of sleeping -- and read ONLY for measurement: no staged
+# effect, cache key, intent ID, deadline, or branch depends on the value, so
+# replay determinism is untouched. Event time is unusable here: `now_ms` is
+# frozen per activation by design, so every duration from it would be zero.
+MonotonicNs = Callable[[], int]
+_NS_PER_MS = 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +82,9 @@ class AgentResult:
     usage: TokenUsage
     memory_blob: MemoryBlob | None
     cache_blob: LlmCacheBlob | None
+    #: Worker-local metric tally (never persisted). Defaulted so the historical
+    #: construction sites keep working.
+    tally: ActivationTally = field(default_factory=ActivationTally)
 
 
 class AgentContext:
@@ -140,6 +154,7 @@ class AgentContext:
         self._prompt_tokens = 0
         self._completion_tokens = 0
         self._total_tokens = 0
+        self._tally = ActivationTally()
         self._drained = False
 
     # -- activation scope -------------------------------------------------
@@ -240,7 +255,13 @@ class AgentContext:
         raises `SideEffectToolError` rather than executing.
         """
         tool = self._tool_registry.get(tool_name)
-        return await self._tool_runner.run(tool, arguments)
+        value = await self._tool_runner.run(tool, arguments)
+        # Counted after the call returns, so a refused side-effect tool (or a
+        # failing one) is not counted as an execution. This is the only site
+        # where a tool actually runs inside the pipeline; side-effecting tools
+        # leave as intents and are counted by `intents_emitted`.
+        self._tally.tool_calls += 1
+        return value
 
     # -- outputs --------------------------------------------------------------
 
@@ -257,6 +278,12 @@ class AgentContext:
         self._prompt_tokens += usage.prompt_tokens
         self._completion_tokens += usage.completion_tokens
         self._total_tokens += usage.total_tokens
+        # The facade calls this only on a provider-reached call, so the flag
+        # means "a real response was decoded" -- which is what lets the `tokens`
+        # distribution skip activations whose usage nobody decoded rather than
+        # padding it with zeros.
+        self._tally.total_tokens += usage.total_tokens
+        self._tally.usage_observed = True
 
     # -- drain ------------------------------------------------------------
 
@@ -277,6 +304,9 @@ class AgentContext:
             completion_tokens=self._completion_tokens,
             total_tokens=self._total_tokens,
         )
+        # This surface's step cursor starts at zero, so its advance *is* the
+        # activation's step count.
+        self._tally.iterations = self._step_index
         return AgentResult(
             outputs=tuple(self._outputs),
             intents=tuple(self._intents),
@@ -284,6 +314,7 @@ class AgentContext:
             usage=usage,
             memory_blob=memory_blob,
             cache_blob=cache_blob,
+            tally=self._tally,
         )
 
 
@@ -313,6 +344,9 @@ class ActivationContext:
         step_index: int = 0,
         intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
         approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
+        monotonic_ns: MonotonicNs = time.monotonic_ns,
+        tool_registry: ToolRegistry | None = None,
+        tool_runner: ToolRunner | None = None,
     ) -> None:
         self.entity_key = entity_key
         self.seq = seq
@@ -333,8 +367,16 @@ class ActivationContext:
         # restarting the counter would re-mint an intent_id the suspension
         # already used and the effector would dedup the new effect away.
         self._step_index = step_index
+        # ...which is why `iterations` is measured against the seed rather than
+        # read off the cursor: a resume must report its own steps, not the
+        # suspended activation's as well.
+        self._start_step_index = step_index
         self._intents: list[ToolIntent] = []
         self._traces: list[TraceEvent] = []
+        self._monotonic_ns = monotonic_ns
+        self._tally = ActivationTally()
+        self._tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
+        self._tool_runner = tool_runner if tool_runner is not None else ToolRunner()
 
     # -- agent-facing API -----------------------------------------------------
 
@@ -365,13 +407,46 @@ class ActivationContext:
         )
         cached = self._replay_cache.get(cache_key)
         if cached is not None and not cached.digest_only:
+            # A hit is not a call: it neither counts nor contributes a duration
+            # sample. Counting it would inflate `llm_calls` (the cost and
+            # rate-limit signal) and its microsecond duration would drag
+            # `llm_ms` toward the cache-hit ratio instead of provider latency.
+            # The clock is not even read here.
             self._stage_llm_trace(step, cache_hit=True, model_id=request.model_id)
             return LlmResponse(cached.response)
 
+        started_ns = self._monotonic_ns()
         response = await self._provider.complete(request)
+        elapsed_ns = self._monotonic_ns() - started_ns
         self._replay_cache.put(cache_key, response.response)
+        # One increment and exactly one sample per provider-reached call, at the
+        # same site, so the sample count always equals `llm_calls`.
+        self._tally.llm_calls += 1
+        self._tally.llm_ms.append(elapsed_ns // _NS_PER_MS)
         self._stage_llm_trace(step, cache_hit=False, model_id=request.model_id)
         return response
+
+    async def run_tool(self, tool_name: str, arguments: Mapping[str, object]) -> object:
+        """Run a ``side_effect=False`` tool inline via the injected ``ToolRunner``.
+
+        The fast-path behavior the architecture documents ("pure/read-only
+        tools execute inline"), on the runtime surface the stateful DoFn
+        actually drives. ``ToolRunner.run`` refuses a ``side_effect=True`` tool
+        with ``SideEffectToolError`` before it executes (correctness invariant
+        5); a refused or failing tool is not counted.
+
+        Deliberately does NOT advance the step cursor: the cursor mints intent
+        IDs and orders replay-cache entries, and an inline read-only call must
+        not perturb either. The wall time is measured with the injected clock
+        so ``overhead_ms`` can exclude tool time alongside model time.
+        """
+        tool = self._tool_registry.get(tool_name)
+        started_ns = self._monotonic_ns()
+        value = await self._tool_runner.run(tool, arguments)
+        elapsed_ns = self._monotonic_ns() - started_ns
+        self._tally.tool_calls += 1
+        self._tally.tool_ms.append(elapsed_ns // _NS_PER_MS)
+        return value
 
     def act(self, tool_name: str, args_json: str, *, ttl_ms: int | None = None) -> str:
         """Stage a side-effect ``ToolIntent`` and return its deterministic ID.
@@ -439,10 +514,22 @@ class ActivationContext:
     def stage_trace_event(self, event: TraceEvent) -> None:
         self._traces.append(event)
 
-    def accumulate_usage(self, usage: object) -> None:  # pragma: no cover - thin sink
-        # Usage accounting is folded into trace attributes by the model layer;
-        # the runtime keeps no separate usage tally in this change.
-        return None
+    def accumulate_usage(self, usage: TokenUsage) -> None:
+        """Accumulate decoded provider usage into the activation's tally.
+
+        The model facade calls this only on a provider-reached call (a cache
+        hit reports no usage), so `usage_observed` means "a real response was
+        decoded". `call_model` on this surface awaits the provider directly and
+        never decodes the opaque response bytes, so an activation that only uses
+        `call_model` reports no usage and contributes no `tokens` sample --
+        which is honest, where a zero sample would not be.
+
+        This does NOT count `llm_calls`: that is counted in `call_model`, at the
+        one site that knows a provider was reached, so the `llm_ms` sample count
+        can never drift from the call count.
+        """
+        self._tally.total_tokens += usage.total_tokens
+        self._tally.usage_observed = True
 
     # -- loop-driver read-back ------------------------------------------------
 
@@ -457,6 +544,24 @@ class ActivationContext:
     @property
     def step_index(self) -> int:
         return self._step_index
+
+    @property
+    def iterations(self) -> int:
+        """Steps this activation consumed: the step cursor's advance.
+
+        There is no loop counter to read -- the driver invokes the agent once
+        and its internal control flow is opaque -- so the observable measure of
+        "how much work did this activation do" is the advance of the same
+        monotonic index that mints `intent_id`s.
+        """
+        return self._step_index - self._start_step_index
+
+    def tally(self) -> ActivationTally:
+        """The activation's worker-local metric tally, with `iterations`
+        resolved from the step cursor. Idempotent; never persisted.
+        """
+        self._tally.iterations = self.iterations
+        return self._tally
 
     def memory_blob(self) -> MemoryBlob:
         return self._memory.to_blob()

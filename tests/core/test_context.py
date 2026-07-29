@@ -9,6 +9,7 @@ and the immutable `AgentResult` bundle.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 
 import pytest
 
@@ -30,7 +31,7 @@ from beam_agents.core.context import (
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from beam_agents.model import FakeLLM, LlmRequest, StagingSink, TokenUsage, match_any, respond_with
 from beam_agents.model.replay_cache import compute_cache_key as real_compute_cache_key
-from beam_agents.tools import SideEffectToolError, ToolRegistry, tool
+from beam_agents.tools import SideEffectToolError, ToolNotFoundError, ToolRegistry, tool
 
 from ._context_helpers import make_context
 
@@ -861,3 +862,309 @@ async def test_activation_context_model_call_uses_all_cache_dimensions_and_trace
     assert miss.start_ms == miss.end_ms == 123
     assert hit.start_ms == hit.end_ms == 123
     assert ctx.cache_blob().entries[0].response == b"response"
+
+
+# --- Requirement: the per-activation metric tally ----------------------------
+
+
+def _scripted_clock(*readings_ns: int) -> Callable[[], int]:
+    """Monotonic-clock double returning `readings_ns` in order.
+
+    Exhausting it raises `StopIteration`, so a test that scripts exactly the
+    readings it expects also proves no *extra* reading was taken -- which is how
+    the cache-hit path is pinned as untimed.
+    """
+    remaining = iter(readings_ns)
+    return lambda: next(remaining)
+
+
+def _activation_context(**kwargs: object) -> ActivationContext:
+    defaults: dict[str, object] = {
+        "entity_key": b"key",
+        "seq": 8,
+        "now_ms": 123,
+        "provider": FakeLLM([(match_any(), respond_with(b"response"))]),
+        "memory_blob": None,
+        "cache_blob": None,
+    }
+    defaults.update(kwargs)
+    return ActivationContext(**defaults)  # type: ignore[arg-type]
+
+
+async def test_a_provider_reached_model_call_is_counted_and_timed() -> None:
+    # Scenario: A provider-reached call is timed once. The duration comes from
+    # the injected monotonic clock -- never from `now_ms`, which is frozen per
+    # activation and would make every duration zero.
+    ctx = _activation_context(monotonic_ns=_scripted_clock(1_000_000, 6_500_000))
+
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["hello"], tools_schema=None, sampling_params=None)
+    )
+
+    tally = ctx.tally()
+    assert tally.llm_calls == 1
+    # 5.5ms of elapsed nanoseconds, floored: the sample is whole milliseconds,
+    # which is what a Beam distribution (integer-only) can carry.
+    assert tally.llm_ms == [5]
+    assert isinstance(tally.llm_ms[0], int)
+
+
+async def test_a_cache_hit_is_neither_counted_nor_timed() -> None:
+    # Scenario: A cache hit is not a call. The clock is scripted with exactly
+    # the two readings the single miss needs, so a hit that reached for the
+    # clock at all would raise StopIteration instead of quietly recording a
+    # near-zero sample that deflates the latency distribution.
+    fake = FakeLLM([(match_any(), respond_with(b"response"))])
+    ctx = _activation_context(provider=fake, monotonic_ns=_scripted_clock(0, 2_000_000))
+    request = LlmRequest(model_id="m", messages=["hello"], tools_schema=None, sampling_params=None)
+
+    await ctx.call_model(request)
+    await ctx.call_model(request)
+
+    tally = ctx.tally()
+    assert fake.call_count == 1
+    assert tally.llm_calls == 1
+    assert tally.llm_ms == [2]
+
+
+async def test_llm_ms_records_one_sample_per_provider_reached_call() -> None:
+    # The sample count equals `llm_calls` by construction: both move at the
+    # same site, so a dashboard can divide one by the other.
+    ctx = _activation_context(monotonic_ns=_scripted_clock(0, 3_000_000, 10_000_000, 17_000_000))
+
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+    )
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["b"], tools_schema=None, sampling_params=None)
+    )
+
+    tally = ctx.tally()
+    assert tally.llm_calls == len(tally.llm_ms) == 2
+    assert tally.llm_ms == [3, 7]
+
+
+def test_activation_context_accumulates_decoded_usage() -> None:
+    # Scenario: Decoded usage is sampled. The model facade reports usage through
+    # this sink on provider-reached calls only; before this capability the
+    # runtime discarded it.
+    ctx = _activation_context()
+
+    assert ctx.tally().usage_observed is False
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7))
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2))
+
+    tally = ctx.tally()
+    assert tally.total_tokens == 9
+    assert tally.usage_observed is True
+
+
+def test_an_activation_that_decoded_no_usage_observes_none() -> None:
+    # Scenario: An activation with no decoded usage contributes no sample. The
+    # flag, not the count, is what distinguishes "nobody decoded" from "the
+    # model genuinely reported zero".
+    ctx = _activation_context()
+
+    assert ctx.tally().usage_observed is False
+    assert ctx.tally().total_tokens == 0
+
+
+async def test_iterations_counts_this_activations_own_steps() -> None:
+    ctx = _activation_context(monotonic_ns=_scripted_clock(0, 0))
+
+    assert ctx.tally().iterations == 0
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["hello"], tools_schema=None, sampling_params=None)
+    )
+    ctx.act("http.post", "{}", ttl_ms=1_000)
+
+    assert ctx.tally().iterations == 2
+
+
+async def test_a_resumed_activation_counts_only_its_own_steps() -> None:
+    # Scenario: A resumed activation samples only its own steps. The cursor is
+    # seeded from the continuation so intent IDs cannot collide; sampling the
+    # cursor itself would re-count the suspended activation's work on resume.
+    ctx = _activation_context(step_index=3, monotonic_ns=_scripted_clock(0, 0))
+
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["hello"], tools_schema=None, sampling_params=None)
+    )
+    ctx.act("http.post", "{}", ttl_ms=1_000)
+
+    assert ctx.step_index == 5
+    assert ctx.tally().iterations == 2
+
+
+async def test_activation_context_runs_a_read_only_tool_inline_and_counts_it() -> None:
+    # Scenario: A read-only tool runs inline on the runtime surface and is
+    # counted. The runtime surface previously had no inline-tool path at all,
+    # which is why `tool_calls` could only ever read zero in a pipeline.
+    calls: list[str] = []
+
+    @tool
+    def lookup(customer_id: str) -> str:
+        calls.append(customer_id)
+        return customer_id.upper()
+
+    registry = ToolRegistry()
+    registry.register(lookup)
+    ctx = _activation_context(
+        tool_registry=registry,
+        monotonic_ns=_scripted_clock(1_000_000, 3_500_000, 4_000_000, 8_000_000),
+    )
+
+    value = await ctx.run_tool("lookup", {"customer_id": "abc"})
+    second = await ctx.run_tool("lookup", {"customer_id": "def"})
+
+    tally = ctx.tally()
+    assert value == "ABC"
+    assert second == "DEF"
+    assert calls == ["abc", "def"]
+    # One increment per execution -- two calls accumulate, not overwrite.
+    assert tally.tool_calls == 2
+    # Timed with the same injected clock as model calls, so `overhead_ms` can
+    # exclude tool time from the activation's wall clock. 2.5ms floors to a
+    # whole-millisecond integer -- the only thing a Beam distribution carries.
+    assert tally.tool_ms == [2, 4]
+    assert all(isinstance(sample, int) for sample in tally.tool_ms)
+
+
+async def test_activation_context_refuses_a_side_effect_tool_uncounted() -> None:
+    # Scenario: A side-effecting tool is refused and not counted. Correctness
+    # invariant 5: `ctx.act(...)` is the only effect path.
+    executed: list[object] = []
+
+    @tool(side_effect=True)
+    def charge_card(amount: int) -> None:
+        executed.append(amount)
+
+    registry = ToolRegistry()
+    registry.register(charge_card)
+    ctx = _activation_context(tool_registry=registry)
+
+    with pytest.raises(SideEffectToolError):
+        await ctx.run_tool("charge_card", {"amount": 5})
+
+    assert executed == []
+    assert ctx.tally().tool_calls == 0
+    assert ctx.tally().tool_ms == []
+
+
+async def test_activation_context_run_tool_unknown_tool_is_refused() -> None:
+    ctx = _activation_context()
+
+    with pytest.raises(ToolNotFoundError):
+        await ctx.run_tool("nope", {})
+
+    assert ctx.tally().tool_calls == 0
+
+
+async def test_run_tool_does_not_advance_the_step_cursor() -> None:
+    # Scenario: Inline tool execution does not advance the step cursor. The
+    # cursor mints intent IDs; a tool call that moved it would change every
+    # subsequent intent_id and break replay identity.
+    @tool
+    def lookup(customer_id: str) -> str:
+        return customer_id
+
+    registry = ToolRegistry()
+    registry.register(lookup)
+    ctx = _activation_context(tool_registry=registry)
+
+    first = ctx.act("http.post", "{}", ttl_ms=1_000)
+    await ctx.run_tool("lookup", {"customer_id": "abc"})
+    second = ctx.act("http.post", "{}", ttl_ms=1_000)
+
+    assert first == intent_id_for(b"key", 8, 0)
+    assert second == intent_id_for(b"key", 8, 1)
+    assert ctx.tally().iterations == 2
+    assert ctx.tally().tool_calls == 1
+
+
+def test_the_tally_never_reaches_the_persisted_blobs() -> None:
+    # Scenario: The tally never reaches keyed state. It is worker-local
+    # measurement; persisting it would put a wall-clock reading into a blob the
+    # retry-determinism gate compares byte for byte.
+    clean = _activation_context()
+    counted = _activation_context()
+    counted.accumulate_usage(TokenUsage(prompt_tokens=9, completion_tokens=9, total_tokens=18))
+    counted.tally().llm_ms.append(41)
+
+    assert counted.memory_blob().SerializeToString(
+        deterministic=True
+    ) == clean.memory_blob().SerializeToString(deterministic=True)
+    assert counted.cache_blob().SerializeToString(
+        deterministic=True
+    ) == clean.cache_blob().SerializeToString(deterministic=True)
+    continuation = counted.build_continuation(snapshot=b"s", adapter="a", deadline_ms=9)
+    assert continuation.SerializeToString(deterministic=True) == clean.build_continuation(
+        snapshot=b"s", adapter="a", deadline_ms=9
+    ).SerializeToString(deterministic=True)
+
+
+async def test_agent_context_counts_an_inline_tool_call() -> None:
+    # Inline read-only tools are the only tools that execute in the pipeline;
+    # side-effecting ones are counted by `intents_emitted` instead, because they
+    # never run here.
+    @tool
+    def lookup(customer_id: str) -> str:
+        return customer_id.upper()
+
+    registry = ToolRegistry()
+    registry.register(lookup)
+    ctx = make_context(tool_registry=registry)
+
+    await ctx.run_tool("lookup", {"customer_id": "abc"})
+    await ctx.run_tool("lookup", {"customer_id": "def"})
+
+    result = ctx.drain()
+    assert result.tally.tool_calls == 2
+
+
+async def test_a_refused_side_effect_tool_is_not_counted_as_a_tool_call() -> None:
+    calls: list[object] = []
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, calls)
+    ctx = make_context(tool_registry=registry)
+
+    with pytest.raises(SideEffectToolError):
+        await ctx.run_tool("charge_card", {"amount": 5})
+
+    assert ctx.drain().tally.tool_calls == 0
+
+
+def test_agent_context_usage_accumulates_across_calls() -> None:
+    # Two provider-reached calls in one activation report usage twice; the tally
+    # is the activation's total, not its last call's.
+    ctx = make_context()
+
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3))
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=4, completion_tokens=6, total_tokens=10))
+
+    result = ctx.drain()
+    assert result.tally.total_tokens == 13
+    assert result.tally.usage_observed is True
+
+
+async def test_agent_result_carries_the_tally() -> None:
+    calls: list[object] = []
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, calls)
+    fake = FakeLLM([(match_any(), respond_with(b"hi"))])
+    ctx = make_context(provider=fake, tool_registry=registry)
+
+    await ctx.model.complete(
+        LlmRequest(model_id="m-1", messages=[], tools_schema=[], sampling_params={}),
+        entity_key=ctx.entity_key,
+        seq=ctx.seq,
+        step_index=0,
+    )
+    ctx.act("charge_card", {"amount": 5})
+
+    result = ctx.drain()
+    n = len(b"hi")
+    assert result.tally.total_tokens == 2 * n
+    assert result.tally.usage_observed is True
+    # One staged intent, so one step consumed.
+    assert result.tally.iterations == 1
