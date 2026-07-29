@@ -164,6 +164,13 @@ disable_error_code = ["type-arg"]
 module = "tests.core.test_coders"
 disable_error_code = ["no-untyped-call"]
 
+# Same Beam-untyped-API relaxation for the metrics seam: Beam's metric cells
+# (`inc`/`update`) and the test-side MetricsContainer/state-sampler helpers are
+# all untyped.
+[[tool.mypy.overrides]]
+module = ["beam_agents.observability.metrics", "tests.core.test_dofn_metrics"]
+disable_error_code = ["no-untyped-call"]
+
 # Same Beam-untyped-API relaxation as beam_agents.core.transform (type-arg,
 # no-any-return) for the KV-keying test helper and construction-time/sink
 # tests exercising RunAgent/AgentConfig's PCollection-typed seams directly.

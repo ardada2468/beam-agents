@@ -152,6 +152,29 @@ def _tool_intent_approval() -> ToolIntent:
     )
 
 
+def _tool_intent_traced() -> ToolIntent:
+    """An intent carrying its activation's `trace_id`.
+
+    `trace_id` was added after the v1 baseline blobs were written, so this
+    fixture (not `tool_intent`, which is deliberately left as the pre-`trace_id`
+    bytes) is what pins the new field's encoding. The value is the 16-byte
+    width the schema requires, not an arbitrary-length blob.
+    """
+    return ToolIntent(
+        intent_id="cccccccc-dddd-5eee-8fff-000000000000",
+        entity_key=b"entity-1",
+        seq=7,
+        step_index=4,
+        tool_name="http.post",
+        args_json='{"url":"https://example.test"}',
+        created_at_ms=_T0,
+        expires_at_ms=_T0 + 60_000,
+        attempt=0,
+        kind=ToolIntent.TOOL,
+        trace_id=bytes.fromhex("0123456789abcdef0123456789abcdef"),
+    )
+
+
 def _continuation() -> Continuation:
     return Continuation(
         state_schema_version=1,
@@ -195,6 +218,7 @@ GOLDEN: dict[str, Message] = {
     "memory_blob": _memory_blob(),
     "tool_intent": _tool_intent(),
     "tool_intent_approval": _tool_intent_approval(),
+    "tool_intent_traced": _tool_intent_traced(),
     "tool_result": _tool_result(),
     "trace_event": _trace_event(),
     "agent_envelope": _agent_envelope(),

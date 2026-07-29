@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from beam_agents._protos import Continuation, ToolIntent
+from beam_agents._protos import Continuation, ToolIntent, TraceEvent
 from tests.core.golden.generate import GOLDEN
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -55,3 +55,42 @@ def test_pre_v1_baseline_blobs_decode_with_fields_added_later() -> None:
     cont = Continuation()
     cont.ParseFromString((GOLDEN_DIR / "continuation.bin").read_bytes())
     assert cont.escalations == 0
+
+    # Scenario: An intent written without trace_id still decodes.
+    # Same bytes, one schema generation later: `trace_id` is additive under
+    # state_schema_version = 1, so a pre-field intent reads as "no trace
+    # correlation available" rather than failing.
+    assert intent.trace_id == b""
+
+
+def test_trace_event_correlation_ids_round_trip_at_wire_widths() -> None:
+    # Scenario: Correlation identifiers round-trip at their wire widths.
+    event = TraceEvent(
+        trace_id=bytes(range(16)),
+        span_id=bytes(range(8)),
+        parent_span_id=bytes(range(8, 16)),
+    )
+    decoded = TraceEvent()
+    decoded.ParseFromString(event.SerializeToString(deterministic=True))
+
+    assert decoded.trace_id == bytes(range(16))
+    assert decoded.span_id == bytes(range(8))
+    assert decoded.parent_span_id == bytes(range(8, 16))
+
+
+def test_suspended_event_type_round_trips() -> None:
+    # Scenario: The suspension event type round-trips.
+    event = TraceEvent(event_type=TraceEvent.SUSPENDED)
+    decoded = TraceEvent()
+    decoded.ParseFromString(event.SerializeToString(deterministic=True))
+    assert decoded.event_type == TraceEvent.SUSPENDED
+
+    # A reader that predates the value sees an unrecognized enum number, not a
+    # parse failure. Proto3 open enums keep the number, so decoding the same
+    # bytes into a message whose enum stops at ERROR yields 7 — which is what
+    # an older binding does, and why this is additive.
+    assert TraceEvent.SUSPENDED == 7
+    assert decoded.event_type not in (
+        TraceEvent.EVENT_TYPE_UNSPECIFIED,
+        TraceEvent.ERROR,
+    )

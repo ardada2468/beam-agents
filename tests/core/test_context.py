@@ -30,9 +30,10 @@ from beam_agents.core.context import (
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from beam_agents.model import FakeLLM, LlmRequest, StagingSink, TokenUsage, match_any, respond_with
 from beam_agents.model.replay_cache import compute_cache_key as real_compute_cache_key
+from beam_agents.observability import ROLE_ACTIVATION, span_id_for, trace_id_for
 from beam_agents.tools import SideEffectToolError, ToolRegistry, tool
 
-from ._context_helpers import make_context
+from ._context_helpers import decode_len_based, make_context
 
 
 def _register_side_effect_tool(registry: ToolRegistry, calls: list[object]) -> None:
@@ -568,7 +569,11 @@ async def test_result_carries_every_staged_effect_category() -> None:
 
     assert result.outputs == ("output-a",)
     assert len(result.intents) == 1
-    assert len(result.traces) == 1
+    # One INTENT_EMITTED for the staged intent, one LLM_CALL for the model call.
+    assert [event.event_type for event in result.traces] == [
+        TraceEvent.INTENT_EMITTED,
+        TraceEvent.LLM_CALL,
+    ]
     n = len(b"hi")
     assert result.usage.total_tokens == 2 * n
     assert result.memory_blob is not None
@@ -762,7 +767,9 @@ def test_activation_context_stages_complete_intents_and_continuations() -> None:
     assert continuation.deadline_ms == 999
 
 
-def test_activation_context_stages_trace_objects_without_rewriting_them() -> None:
+def test_activation_context_stages_the_same_trace_objects_it_was_given() -> None:
+    # Staging correlates in place (see the stamping tests below) but never
+    # substitutes a different object or reorders the staged sequence.
     ctx = ActivationContext(
         entity_key=b"key",
         seq=1,
@@ -843,21 +850,246 @@ async def test_activation_context_model_call_uses_all_cache_dimensions_and_trace
         ),
     ]
     assert ctx.step_index == 3
-    assert len(ctx.staged_traces) == 2
-    miss, hit = ctx.staged_traces
+    # The `act` above stages its own INTENT_EMITTED ahead of the two calls.
+    assert [event.event_type for event in ctx.staged_traces] == [
+        TraceEvent.INTENT_EMITTED,
+        TraceEvent.LLM_CALL,
+        TraceEvent.LLM_CALL,
+    ]
+    _, miss, hit = ctx.staged_traces
     assert miss.entity_key == hit.entity_key == b"key"
     assert miss.seq == hit.seq == 8
     assert miss.step_index == 1
     assert hit.step_index == 2
-    assert miss.event_type == hit.event_type == TraceEvent.LLM_CALL
+    # No `decode` is configured here, so the token counts are genuinely
+    # unknown and are omitted rather than reported as zero.
     assert dict(miss.attributes) == {
+        "gen_ai.operation.name": "chat",
         "gen_ai.request.model": "model-1",
         "beam_agents.cache_hit": "false",
+        "beam_agents.billed": "true",
     }
     assert dict(hit.attributes) == {
+        "gen_ai.operation.name": "chat",
         "gen_ai.request.model": "model-1",
         "beam_agents.cache_hit": "true",
+        "beam_agents.billed": "false",
     }
     assert miss.start_ms == miss.end_ms == 123
     assert hit.start_ms == hit.end_ms == 123
     assert ctx.cache_blob().entries[0].response == b"response"
+
+
+# --- Requirement: Correlation stamped at the staging boundary ----------------
+
+
+def _activation_context(**overrides: object) -> ActivationContext:
+    kwargs: dict[str, object] = {
+        "entity_key": b"key",
+        "seq": 8,
+        "now_ms": 123,
+        "provider": FakeLLM([]),
+        "memory_blob": None,
+        "cache_blob": None,
+    }
+    kwargs.update(overrides)
+    return ActivationContext(**kwargs)  # type: ignore[arg-type]
+
+
+def test_an_uncorrelated_event_is_stamped_on_staging() -> None:
+    # Scenario: An uncorrelated event is stamped on staging.
+    ctx = _activation_context()
+    ctx.stage_trace_event(TraceEvent(event_type=TraceEvent.LLM_CALL, step_index=2))
+
+    event = ctx.staged_traces[0]
+    assert event.trace_id == trace_id_for(b"key", 8)
+    assert event.span_id == span_id_for(b"key", 8, "LLM_CALL", 2)
+    assert event.parent_span_id == span_id_for(b"key", 8, ROLE_ACTIVATION, 0)
+
+
+def test_a_producer_supplied_parent_is_preserved_by_the_context() -> None:
+    # Scenario: A producer-supplied parent is preserved.
+    ctx = _activation_context()
+    ctx.stage_trace(
+        TraceEvent(event_type=TraceEvent.LLM_CALL, step_index=2, parent_span_id=bytes(range(8)))
+    )
+
+    assert ctx.staged_traces[0].parent_span_id == bytes(range(8))
+
+
+def test_both_context_surfaces_stamp_identically() -> None:
+    # Scenario: Both context surfaces emit the same event shape — the two
+    # surfaces must not disagree about identity for the same activation.
+    agent_ctx = make_context(entity_key=b"key", seq=8, now_ms=123)
+    activation_ctx = _activation_context()
+
+    agent_ctx.stage_trace_event(TraceEvent(event_type=TraceEvent.LLM_CALL, step_index=2))
+    activation_ctx.stage_trace_event(TraceEvent(event_type=TraceEvent.LLM_CALL, step_index=2))
+
+    staged = agent_ctx.drain().traces[0]
+    assert staged.SerializeToString(deterministic=True) == activation_ctx.staged_traces[
+        0
+    ].SerializeToString(deterministic=True)
+
+
+def test_a_resumed_context_parents_its_children_to_its_own_span() -> None:
+    ctx = _activation_context(
+        step_index=4, resume_result=ToolResult(intent_id="i-1", status=ToolResult.OK)
+    )
+    ctx.stage_trace_event(TraceEvent(event_type=TraceEvent.LLM_CALL, step_index=5))
+
+    event = ctx.staged_traces[0]
+    assert event.trace_id == trace_id_for(b"key", 8)
+    assert event.parent_span_id == span_id_for(b"key", 8, ROLE_ACTIVATION, 4)
+
+
+# --- Requirement: Intent, tool, and suspension child events ------------------
+
+
+def test_each_staged_intent_is_traced() -> None:
+    # Scenario: Each staged intent is traced.
+    ctx = _activation_context()
+
+    first = ctx.act("charge", '{"amount":5}', ttl_ms=60)
+    second = ctx.request_approval('{"amount":5}', ttl_ms=90)
+
+    events = [e for e in ctx.staged_traces if e.event_type == TraceEvent.INTENT_EMITTED]
+    assert len(events) == 2
+    assert events[0].attributes["beam_agents.intent_id"] == first
+    assert events[0].attributes["beam_agents.tool_name"] == "charge"
+    assert events[0].attributes["beam_agents.intent_kind"] == "TOOL"
+    assert events[0].attributes["beam_agents.expires_at_ms"] == "183"
+    assert events[1].attributes["beam_agents.intent_id"] == second
+    assert events[1].attributes["beam_agents.intent_kind"] == "APPROVAL"
+    assert events[1].attributes["beam_agents.expires_at_ms"] == "213"
+    # Each event sits at its own step, so the two get distinct spans and a
+    # reader can order them against the activation's other events.
+    assert [e.step_index for e in events] == [0, 1]
+    assert events[0].span_id == span_id_for(b"key", 8, "INTENT_EMITTED", 0)
+    assert events[1].span_id == span_id_for(b"key", 8, "INTENT_EMITTED", 1)
+    assert all(e.start_ms == e.end_ms == 123 for e in events)
+
+
+async def test_a_read_only_tool_call_is_traced_without_perturbing_intent_ids() -> None:
+    # Scenario: A read-only tool call is traced without perturbing intent ids.
+    # The regression this guards: if `run_tool` advanced the intent step
+    # cursor, every intent staged after a tool call would get a different
+    # intent_id, silently invalidating in-flight continuations.
+    registry = ToolRegistry()
+    calls: list[object] = []
+    _register_side_effect_tool(registry, calls)
+
+    @tool()
+    def lookup(customer: str) -> str:
+        return f"found {customer}"
+
+    registry.register(lookup)
+    ctx = make_context(entity_key=b"key-1", seq=3, now_ms=456, tool_registry=registry)
+
+    await ctx.run_tool("lookup", {"customer": "alice"})
+    ctx.act("charge_card", {"amount": 5})
+    # A second call *after* an intent: its `step_index` must have moved with
+    # the intent cursor while its span index moved on the tool counter, which
+    # is what keeps the two numbering schemes visibly separate.
+    await ctx.run_tool("lookup", {"customer": "bob"})
+    # A third call: two are not enough to tell `+= 1` from `= 1`.
+    await ctx.run_tool("lookup", {"customer": "carol"})
+
+    result = ctx.drain()
+    assert result.intents[0].intent_id == intent_id_for(b"key-1", 3, 0)
+    tool_events = [e for e in result.traces if e.event_type == TraceEvent.TOOL_CALL]
+    assert len(tool_events) == 3
+    assert tool_events[0].attributes["beam_agents.tool_name"] == "lookup"
+    assert tool_events[0].parent_span_id == span_id_for(b"key-1", 3, ROLE_ACTIVATION, 0)
+    assert [e.step_index for e in tool_events] == [0, 1, 1]
+    assert [e.span_id for e in tool_events] == [
+        span_id_for(b"key-1", 3, "TOOL_CALL", index) for index in (0, 1, 2)
+    ]
+    assert all(e.start_ms == e.end_ms == 456 for e in tool_events)
+
+
+# --- Requirement: trace_id propagates into emitted intents -------------------
+
+
+def test_a_staged_intent_carries_the_activations_trace_id() -> None:
+    # Scenario: A committed intent carries the activation's trace id.
+    ctx = _activation_context()
+    ctx.act("charge", "{}", ttl_ms=60)
+
+    assert ctx.staged_intents[0].trace_id == trace_id_for(b"key", 8)
+
+
+def test_the_agent_context_surface_also_propagates_trace_id() -> None:
+    registry = ToolRegistry()
+    _register_side_effect_tool(registry, [])
+    ctx = make_context(entity_key=b"key-1", seq=3, now_ms=456, tool_registry=registry)
+
+    ctx.act("charge_card", {"amount": 5})
+    ctx.act("charge_card", {"amount": 6})
+
+    result = ctx.drain()
+    assert result.intents[0].trace_id == trace_id_for(b"key-1", 3)
+    events = [e for e in result.traces if e.event_type == TraceEvent.INTENT_EMITTED]
+    assert [e.step_index for e in events] == [0, 1]
+    assert events[0].attributes["beam_agents.expires_at_ms"] == str(456 + DEFAULT_INTENT_TTL_MS)
+    assert all(e.start_ms == e.end_ms == 456 for e in events)
+
+
+def test_replay_restages_a_byte_identical_intent_including_trace_id() -> None:
+    # Scenario: Replay produces byte-identical intents with the trace id populated.
+    def stage() -> bytes:
+        ctx = _activation_context()
+        ctx.act("charge", '{"amount":5}', ttl_ms=60)
+        return ctx.staged_intents[0].SerializeToString(deterministic=True)
+
+    assert stage() == stage()
+
+
+def test_intent_ids_are_unchanged_by_the_new_field() -> None:
+    # Scenario: Intent ids are unchanged by the new field.
+    ctx = _activation_context()
+    intent_id = ctx.act("charge", "{}", ttl_ms=60)
+
+    assert intent_id == intent_id_for(b"key", 8, 0)
+    assert ctx.staged_intents[0].intent_id == intent_id
+
+
+# --- Requirement: Token counts are truthful or absent ------------------------
+
+
+async def test_activation_context_cache_hit_reports_stored_usage() -> None:
+    # Scenario: A cache-hit call reports the stored response's real token counts.
+    # Scenario: A cache hit is marked unbilled.
+    fake = FakeLLM([(match_any(), respond_with(b"0123456789"))])
+    ctx = _activation_context(provider=fake, decode=decode_len_based)
+    request = LlmRequest(model_id="m-1", messages=[], tools_schema=[], sampling_params={})
+
+    await ctx.call_model(request)
+    await ctx.call_model(request)
+
+    miss, hit = [e for e in ctx.staged_traces if e.event_type == TraceEvent.LLM_CALL]
+    assert miss.attributes["beam_agents.cache_hit"] == "false"
+    assert miss.attributes["beam_agents.billed"] == "true"
+    assert hit.attributes["beam_agents.cache_hit"] == "true"
+    assert hit.attributes["beam_agents.billed"] == "false"
+    # The stored response is decoded on the hit: same real counts, not zeros
+    # and not absent.
+    assert hit.attributes["gen_ai.usage.input_tokens"] == "10"
+    assert hit.attributes["gen_ai.usage.output_tokens"] == "10"
+    assert miss.attributes["gen_ai.usage.input_tokens"] == "10"
+
+
+async def test_activation_context_omits_usage_when_no_decode_is_configured() -> None:
+    # Scenario: Unknown usage is omitted, not zeroed. Without a provider decode
+    # the counts are genuinely unknown, and a "0" would read as a real
+    # zero-token call to anything summing the attribute.
+    fake = FakeLLM([(match_any(), respond_with(b"hello"))])
+    ctx = _activation_context(provider=fake)
+
+    request = LlmRequest(model_id="m-1", messages=[], tools_schema=[], sampling_params={})
+    await ctx.call_model(request)
+
+    event = ctx.staged_traces[0]
+    assert "gen_ai.usage.input_tokens" not in event.attributes
+    assert "gen_ai.usage.output_tokens" not in event.attributes
+    assert event.attributes["beam_agents.billed"] == "true"

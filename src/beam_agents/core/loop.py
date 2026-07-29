@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from beam_agents.core.agent import Agent
     from beam_agents.memory.facade import Compactor
     from beam_agents.model.client import LLMClient
+    from beam_agents.model.facade import Decode
 
 # `DEFAULT_HITL_TIMEOUT_MS` is re-exported from `hitl` (its home, alongside the
 # rest of the HITL policy defaults) so the historical import site keeps working.
@@ -81,6 +82,7 @@ async def run_activation(
     step_index: int = 0,
     intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
     approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
+    decode: Decode | None = None,
 ) -> ActivationResult:
     """Run one activation to a terminal :class:`ActivationResult`.
 
@@ -102,30 +104,18 @@ async def run_activation(
         step_index=step_index,
         intent_ttl_ms=intent_ttl_ms,
         approval_channel=approval_channel,
+        decode=decode,
     )
 
-    ctx.stage_trace(
-        TraceEvent(
-            entity_key=entity_key,
-            seq=seq,
-            event_type=TraceEvent.ACTIVATION_START,
-            start_ms=now_ms,
-            end_ms=now_ms,
-        )
-    )
+    # The attempt's activation span, taken from the context rather than rebuilt:
+    # a second `ActivationTrace` with the same inputs would be a second source of
+    # truth for identity, free to drift from the one the child events use. A
+    # resume shares the suspended activation's `seq`, so it recomputes the same
+    # trace ID and hangs its own span under the initial attempt's (design D2).
+    trace = ctx.trace
+    ctx.stage_trace(trace.activation_start())
 
     outcome = await agent(ctx)
-
-    ctx.stage_trace(
-        TraceEvent(
-            entity_key=entity_key,
-            seq=seq,
-            step_index=ctx.step_index,
-            event_type=TraceEvent.ACTIVATION_END,
-            start_ms=now_ms,
-            end_ms=now_ms,
-        )
-    )
 
     if isinstance(outcome, Suspend):
         timeout_deadline_ms = now_ms + (
@@ -144,6 +134,18 @@ async def run_activation(
             adapter=outcome.adapter,
             deadline_ms=deadline_ms,
         )
+        # What the suspension is waiting on, and until when: the state an
+        # operator most wants to see, so it gets its own event rather than
+        # living only in an ACTIVATION_END attribute (design D6).
+        ctx.stage_trace(
+            trace.suspended(
+                step_index=ctx.step_index,
+                deadline_ms=deadline_ms,
+                adapter=outcome.adapter,
+                pending_intent_ids=tuple(continuation.pending_intent_ids),
+            )
+        )
+        ctx.stage_trace(trace.activation_end(status="suspended", step_index=ctx.step_index))
         return ActivationResult(
             status="suspended",
             seq=seq,
@@ -159,6 +161,7 @@ async def run_activation(
     if not isinstance(outcome, Complete):  # pragma: no cover - defensive
         raise TypeError(f"agent returned a non-Outcome value: {outcome!r}")
 
+    ctx.stage_trace(trace.activation_end(status="completed", step_index=ctx.step_index))
     outputs = [outcome.output] if outcome.output else []
     return ActivationResult(
         status="completed",

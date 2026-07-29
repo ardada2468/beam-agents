@@ -221,6 +221,35 @@ Each DoFn failure route SHALL emit an `ERROR` `TraceEvent` on `.traces` alongsid
 - **WHEN** an activation stages trace events and then fails
 - **THEN** none of those staged events are emitted, and the only trace record for the failure is the synthesized `ERROR` event
 
+### Requirement: Activation latency is measured as Beam metrics, not span timestamps
+
+The system SHALL report activation wall-time as Beam metrics in the `beam_agents` namespace — a distribution `activation_ms` and per-outcome counters `activations_completed`, `activations_suspended`, and `activations_failed` — measured by the DoFn around the bridge call with an injected monotonic clock that defaults to the wall clock. Trace events SHALL NOT carry wall-clock durations: their `start_ms`/`end_ms` stay on the injected activation clock so a replayed bundle emits byte-identical records. The latency distribution SHALL contain only successful (completed or suspended) activations; a failed activation SHALL increment `activations_failed` and contribute no latency sample, and a refused resume SHALL record no activation metric at all. Recording SHALL be a silent no-op when no metrics container is installed.
+
+#### Scenario: A completed activation records its latency and outcome
+
+- **WHEN** an activation completes under an injected monotonic clock advancing 250 ms across the activation
+- **THEN** the `activation_ms` distribution gains one sample of 250 and `activations_completed` increments by one
+
+#### Scenario: A suspending activation counts as suspended
+
+- **WHEN** an activation returns `Suspend`
+- **THEN** `activations_suspended` increments and the latency distribution gains one sample
+
+#### Scenario: A failed activation counts as failed without a latency sample
+
+- **WHEN** an activation times out or raises
+- **THEN** `activations_failed` increments and the `activation_ms` distribution is unchanged
+
+#### Scenario: A refused resume is not an activation
+
+- **WHEN** a resume fails admission (`orphaned_result`)
+- **THEN** no activation metric moves; the `.errors` dead-letter record carries the signal
+
+#### Scenario: Activation metrics surface through the runner
+
+- **WHEN** a pipeline runs one completing activation on a real runner
+- **THEN** querying the runner's metrics for the `beam_agents` namespace reports `activations_completed = 1` and one `activation_ms` sample
+
 ### Requirement: The traces output is deliverable to a configured sink
 
 `RunAgent` SHALL expose all trace events on its `.traces` tagged output, and a configured `AgentConfig.traces_to` SHALL resolve to a transform that serializes `TraceEvent` messages into the form its scheme accepts: deterministic protobuf bytes keyed by `entity_key` for `kafka://` and `pubsub://`, and a flat row with hex-encoded identifiers and key/value attributes for `bigquery://`. An unset `traces_to` SHALL leave `.traces` exposed to the caller unchanged.

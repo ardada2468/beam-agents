@@ -24,7 +24,25 @@
 # TTL re-arm are driven by fake state/timer handles in test_dofn_ttl.py and
 # test_dofn_hitl_timer.py, both inside the selection, which is why killed rose
 # 621 -> 624 over the same diff.
+# add-trace-events moved both numbers, in opposite directions:
+#   dofn.py 267 -> 3. The `.traces` work needed the DoFn's failure routes under
+#     test, and the fake-handle suites that do it (test_dofn_failure_traces.py,
+#     test_dofn_commit.py) drive `process()` directly, so they are inside the
+#     mutation selection -- unlike the Beam-pipeline suites, which are the only
+#     thing that had ever reached `process`/`_start`/`_resume`/`_commit` and are
+#     deselected here. That moved 264 mutants out of this bucket, and the new
+#     commit/routing assertions kill them: element routing by payload variant,
+#     the exact value written to each state spec, the fixed commit order, the
+#     SEQ increment, both timer arms, and every argument the layers forward down
+#     to the activation. The 3 that remain are in `_activate`'s lambda closure.
+#   transform.py 198 -> 240. All 42 are in `_WriteTraces` and the `traces_to`
+#     branch of `DefaultSinkResolver.resolve`, which only test_transform.py
+#     reaches -- and that suite IS deselected (it drives TestPipeline/TestStream;
+#     see the [tool.mutmut] comment in pyproject.toml), so its mutants can only
+#     ever land here. The encoder is covered in the normal suite twice over:
+#     directly in tests/observability/test_exporters.py, and through the
+#     transform in test_transform.py's `_WriteTraces` pipeline test.
 [no_tests]
 "context.py" = 0
-"dofn.py" = 267
-"transform.py" = 198
+"dofn.py" = 3
+"transform.py" = 240

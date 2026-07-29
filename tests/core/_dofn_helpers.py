@@ -46,6 +46,19 @@ def make_slow_provider() -> FakeLLM:
     return FakeLLM([(match_any(), respond_with(b"pong", latency_ms=30_000))])
 
 
+def make_briefly_slow_provider() -> FakeLLM:
+    """Provider slow enough to blow a millisecond-scale activation timeout, but
+    fast enough to *finish* well inside a test's own patience.
+
+    The distinction matters for the timeout bound itself: against
+    ``make_slow_provider``'s 30s, an activation that ignored its timeout would
+    simply hang, which is indistinguishable from a slow test. Against this one
+    it completes and commits, so a test asserting the timeout error fails
+    outright.
+    """
+    return FakeLLM([(match_any(), respond_with(b"pong", latency_ms=300))])
+
+
 def make_failing_provider() -> FakeLLM:
     """Provider that always raises a ``ProviderError``."""
     return FakeLLM([(match_any(), raise_error(ProviderError("boom")))])
@@ -117,6 +130,17 @@ async def timeout_or_append_agent(ctx: ActivationContext) -> Complete:
     if ctx.event == b"SLOW":
         return await hang_agent(ctx)
     return await append_agent(ctx)
+
+
+async def model_then_act_agent(ctx: ActivationContext) -> Complete:
+    """Call the model, then stage an intent, then complete.
+
+    One activation that exercises every child-event kind the fast path can
+    produce, so a pipeline test can assert the whole trace shape at once.
+    """
+    resp = await ctx.call_model(request())
+    ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+    return Complete(output=resp.response)
 
 
 async def suspend_then_complete_agent(ctx: ActivationContext) -> Complete | Suspend:

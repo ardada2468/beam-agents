@@ -27,7 +27,7 @@ class MemoryBlob(_message.Message):
     def __init__(self, state_schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[MemoryBlob.MemoryEntry, _Mapping]]] = ..., total_value_bytes: _Optional[int] = ...) -> None: ...
 
 class ToolIntent(_message.Message):
-    __slots__ = ("intent_id", "entity_key", "seq", "step_index", "tool_name", "args_json", "created_at_ms", "expires_at_ms", "attempt", "kind")
+    __slots__ = ("intent_id", "entity_key", "seq", "step_index", "tool_name", "args_json", "created_at_ms", "expires_at_ms", "attempt", "kind", "trace_id")
     class Kind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
         TOOL_KIND_UNSPECIFIED: _ClassVar[ToolIntent.Kind]
@@ -46,6 +46,7 @@ class ToolIntent(_message.Message):
     EXPIRES_AT_MS_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
+    TRACE_ID_FIELD_NUMBER: _ClassVar[int]
     intent_id: str
     entity_key: bytes
     seq: int
@@ -56,7 +57,8 @@ class ToolIntent(_message.Message):
     expires_at_ms: int
     attempt: int
     kind: ToolIntent.Kind
-    def __init__(self, intent_id: _Optional[str] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., tool_name: _Optional[str] = ..., args_json: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., attempt: _Optional[int] = ..., kind: _Optional[_Union[ToolIntent.Kind, str]] = ...) -> None: ...
+    trace_id: bytes
+    def __init__(self, intent_id: _Optional[str] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., tool_name: _Optional[str] = ..., args_json: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., attempt: _Optional[int] = ..., kind: _Optional[_Union[ToolIntent.Kind, str]] = ..., trace_id: _Optional[bytes] = ...) -> None: ...
 
 class ToolResult(_message.Message):
     __slots__ = ("intent_id", "entity_key", "seq", "status", "payload", "error_message", "completed_at_ms")
@@ -99,6 +101,7 @@ class TraceEvent(_message.Message):
         INTENT_EMITTED: _ClassVar[TraceEvent.EventType]
         ACTIVATION_END: _ClassVar[TraceEvent.EventType]
         ERROR: _ClassVar[TraceEvent.EventType]
+        SUSPENDED: _ClassVar[TraceEvent.EventType]
     EVENT_TYPE_UNSPECIFIED: TraceEvent.EventType
     ACTIVATION_START: TraceEvent.EventType
     LLM_CALL: TraceEvent.EventType
@@ -106,6 +109,7 @@ class TraceEvent(_message.Message):
     INTENT_EMITTED: TraceEvent.EventType
     ACTIVATION_END: TraceEvent.EventType
     ERROR: TraceEvent.EventType
+    SUSPENDED: TraceEvent.EventType
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]

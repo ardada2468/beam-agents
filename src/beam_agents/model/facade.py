@@ -31,6 +31,16 @@ from beam_agents.model.client import (
     RateLimitError,
 )
 from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
+from beam_agents.observability import (
+    ATTEMPTS,
+    CACHE_HIT,
+    CIRCUIT_STATE,
+    ERROR_TYPE,
+    OPERATION_CHAT,
+    OPERATION_NAME,
+    REQUEST_MODEL,
+    usage_attributes,
+)
 
 Sleep = Callable[[int], Awaitable[None]]
 
@@ -405,15 +415,23 @@ class LlmFacade:
         error: BaseException | None,
     ) -> None:
         attributes = {
-            "gen_ai.request.model": model_id,
-            "gen_ai.usage.input_tokens": str(usage.prompt_tokens if usage is not None else 0),
-            "gen_ai.usage.output_tokens": str(usage.completion_tokens if usage is not None else 0),
-            "beam_agents.cache_hit": "true" if cache_hit else "false",
-            "beam_agents.attempts": str(attempts),
-            "beam_agents.circuit_state": self._breaker.state.value,
+            OPERATION_NAME: OPERATION_CHAT,
+            REQUEST_MODEL: model_id,
+            CACHE_HIT: "true" if cache_hit else "false",
+            ATTEMPTS: str(attempts),
+            CIRCUIT_STATE: self._breaker.state.value,
+            # Usage is reported when a response was decoded (including the
+            # stored response on a cache hit) and omitted otherwise: a "0" for
+            # a call that never got a response is indistinguishable from a real
+            # zero-token call to anything summing the attribute. `billed`
+            # separates a hit's already-paid-for tokens from new provider spend.
+            **usage_attributes(usage, billed=not cache_hit and usage is not None),
         }
         if error is not None:
-            attributes["error.type"] = type(error).__name__
+            attributes[ERROR_TYPE] = type(error).__name__
+        # Correlation (trace_id/span_id/parent_span_id) is deliberately left
+        # unset: the staging sink stamps it, so this facade needs no trace
+        # parameters (design D3).
         event = TraceEvent(
             entity_key=entity_key,
             seq=seq,

@@ -20,10 +20,10 @@
 #   "beam_agents.core.loop.xǁLoopDriverǁ_advance__mutmut_12" = "Reorders operands of a commutative `and`; identical semantics."
 
 [mutants]
-"beam_agents.core.context.xǁAgentContextǁ__init____mutmut_41" = "Initial `_drained = None` is observably identical to `False`: both are private, falsy sentinels and the first drain replaces either with `True`."
+"beam_agents.core.context.xǁAgentContextǁ__init____mutmut_50" = "Initial `_drained = None` is observably identical to `False`: both are private, falsy sentinels and the first drain replaces either with `True`."
 "beam_agents.core.context.xǁAgentContextǁ_stage_intent__mutmut_6" = "`json.dumps(ensure_ascii=None)` is identical to `ensure_ascii=False` because the option is consumed only by truth-value testing."
 "beam_agents.core.context.xǁAgentContextǁ_stage_intent__mutmut_7" = "`json.dumps(allow_nan=None)` is identical to `allow_nan=False` because the option is consumed only by truth-value testing."
-"beam_agents.core.context.xǁActivationContextǁcall_model__mutmut_35" = "Passing `cache_hit=None` is identical to `False`: `_stage_llm_trace` only selects `true` for truthy values and emits `false` for both."
-"beam_agents.core.context.xǁActivationContextǁ_stage_intent__mutmut_18" = "For a protobuf scalar constructor field, `attempt=None` is treated as omitted and produces the same default integer value `0` and wire bytes."
-"beam_agents.core.context.xǁActivationContextǁ_stage_intent__mutmut_28" = "Omitting protobuf scalar field `attempt` produces the same default integer value `0` and wire bytes as explicitly passing `attempt=0`."
+"beam_agents.core.context.xǁActivationContextǁcall_model__mutmut_37" = "Passing `cache_hit=None` is identical to `False`: `_stage_llm_trace` selects `true` only for truthy values, and `billed=not cache_hit` is `True` for both."
+"beam_agents.core.context.xǁActivationContextǁ_stage_intent__mutmut_21" = "For a protobuf scalar constructor field, `attempt=None` is treated as omitted and produces the same default integer value `0` and wire bytes."
+"beam_agents.core.context.xǁActivationContextǁ_stage_intent__mutmut_32" = "Omitting protobuf scalar field `attempt` produces the same default integer value `0` and wire bytes as explicitly passing `attempt=0`."
 "beam_agents.core.dofn.xǁ_AgentDoFnǁ_route_timeout__mutmut_12" = "Omitting `kind=\"timer\"` when building the FallbackContext is identical to passing it: `FallbackContext.kind` defaults to `\"timer\"`, the only kind that exists."

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from beam_agents._protos import Continuation, LlmCacheBlob, MemoryBlob, ToolIntent
+from apache_beam.utils.timestamp import Timestamp
+
+from beam_agents._protos import Continuation, LlmCacheBlob, MemoryBlob, ToolIntent, TraceEvent
 from beam_agents.core.agent import Complete
 from beam_agents.core.context import ActivationContext
 from beam_agents.core.dofn import (
@@ -20,8 +22,10 @@ from beam_agents.core.dofn import (
     _AgentDoFn,
 )
 from beam_agents.model.fake import FakeLLM
+from beam_agents.observability import ROLE_TIMER, span_id_for, trace_id_for
 
 _KEY = b"k"
+_FIRED_AT_MS = 12_000
 
 
 class _FakeState:
@@ -72,6 +76,7 @@ def _fire(cont: Continuation | None) -> tuple[list[Any], list[_FakeState]]:
     emitted = list(
         dofn.on_ttl(
             key=_KEY,
+            timestamp=Timestamp(micros=_FIRED_AT_MS * 1000),
             memory=memory,
             continuation=continuation,
             llm_cache=llm_cache,
@@ -93,19 +98,30 @@ def test_a_ttl_fire_over_a_live_suspension_emits_a_dead_letter_record() -> None:
     # it must not vanish without a trace.
     emitted, states = _fire(_continuation())
 
-    assert len(emitted) == 1
-    tagged = emitted[0]
-    assert tagged.tag == "errors"
-    assert tagged.value == ActivationError(
+    error, trace = emitted
+    assert error.tag == "errors"
+    assert error.value == ActivationError(
         _KEY, REASON_TTL_WIPED_SUSPENSION, "seq=3,deadline_ms=9000"
     )
+    # Scenario: A TTL-wiped suspension is traced. The dead-letter record names
+    # the key; the trace event puts the loss in the suspended activation's own
+    # trace, where the events that led up to it already are.
+    assert trace.tag == "traces"
+    assert trace.value.event_type == TraceEvent.ERROR
+    assert trace.value.trace_id == trace_id_for(_KEY, 3)
+    assert trace.value.attributes["beam_agents.reason"] == REASON_TTL_WIPED_SUSPENSION
+    assert trace.value.start_ms == _FIRED_AT_MS
+    # The `timer` role: this fired outside any activation, so its span must not
+    # collide with a step the activation itself may have traced.
+    assert trace.value.span_id == span_id_for(_KEY, 3, ROLE_TIMER, 0)
     # The wipe is unconditional: reporting the loss does not rescue the key.
     assert all(state.cleared for state in states)
 
 
 def test_a_ttl_fire_with_no_live_suspension_stays_silent() -> None:
     # Scenario: A TTL fire with no live suspension stays silent. The overwhelming
-    # majority of TTL fires are ordinary idle-key GC and must not dead-letter.
+    # majority of TTL fires are ordinary idle-key GC and must not dead-letter,
+    # and must not manufacture a trace for a key that did nothing wrong.
     emitted, states = _fire(None)
 
     assert emitted == []
