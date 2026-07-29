@@ -189,6 +189,17 @@ async def model_then_act_agent(ctx: ActivationContext) -> Complete:
     return Complete(output=resp.response)
 
 
+async def model_act_then_fail_agent(ctx: ActivationContext) -> Complete:
+    """Call the model, stage an intent, then raise.
+
+    The enriched `activation_error` route sees a failure at step 2 whose last
+    staged event is the intent's — the position the failure context must name.
+    """
+    await ctx.call_model(request())
+    ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+    raise RuntimeError("agent blew up")
+
+
 async def suspend_then_complete_agent(ctx: ActivationContext) -> Complete | Suspend:
     """Suspend on the first activation (emitting an intent); complete on resume.
 

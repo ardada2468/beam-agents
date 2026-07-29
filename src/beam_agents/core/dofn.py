@@ -53,7 +53,12 @@ from beam_agents.core.agent import FallbackContext, intent_id_for
 from beam_agents.core.bridge import ActivationTimeout, AsyncBridge
 from beam_agents.core.coders import DeterministicProtoCoder
 from beam_agents.core.context import MonotonicNs
-from beam_agents.core.loop import ActivationResult, run_activation
+from beam_agents.core.loop import (
+    ActivationFailed,
+    ActivationResult,
+    FailureContext,
+    run_activation,
+)
 from beam_agents.hitl import (
     HITL_TIMEOUT_OUTPUT,
     REASON_HITL_TIMEOUT,
@@ -322,6 +327,12 @@ class _AgentDoFn(beam.DoFn):
             yield self._dead_letter(key, REASON_TIMEOUT)
             yield _error_trace(key, current_seq, now_ms, REASON_TIMEOUT)
             return
+        except ActivationFailed as failed:
+            # The agent raised inside the wrap: both records carry the failure
+            # position. Ordered ahead of the generic fallback, which would
+            # otherwise name the wrapper and drop the enrichment.
+            yield from self._failed_activation(key, current_seq, now_ms, failed)
+            return
         except Exception as exc:
             # Any activation failure fails closed: route to errors, commit nothing.
             yield self._dead_letter(key, REASON_ERROR, repr(exc))
@@ -396,6 +407,12 @@ class _AgentDoFn(beam.DoFn):
         except ActivationTimeout:
             yield self._dead_letter(key, REASON_TIMEOUT)
             yield _error_trace(key, cont.seq, now_ms, REASON_TIMEOUT)
+            return
+        except ActivationFailed as failed:
+            # The agent raised inside the wrap: both records carry the failure
+            # position. Ordered ahead of the generic fallback, which would
+            # otherwise name the wrapper and drop the enrichment.
+            yield from self._failed_activation(key, cont.seq, now_ms, failed)
             return
         except Exception as exc:
             # Any activation failure fails closed: route to errors, commit nothing.
@@ -777,6 +794,30 @@ class _AgentDoFn(beam.DoFn):
             ),
         )
 
+    def _failed_activation(
+        self, key: bytes, seq: int, now_ms: int, failed: ActivationFailed
+    ) -> Iterator[beam.pvalue.TaggedOutput]:
+        """The enriched `activation_error` route: both records from one context.
+
+        The dead-letter detail keeps leading with the *original* exception's
+        ``repr`` — the cause, not the wrapper — so existing triage habits and
+        prefix-matching consumers keep working; the position suffix and the
+        trace attributes are built from the same :class:`FailureContext`, so
+        the two records cannot disagree. Still counted through `_dead_letter`,
+        the single chokepoint.
+        """
+        cause = failed.__cause__ if failed.__cause__ is not None else failed
+        context = failed.context
+        yield self._dead_letter(key, REASON_ERROR, f"{cause!r}{context.detail_suffix()}")
+        yield _error_trace(
+            key,
+            seq,
+            now_ms,
+            REASON_ERROR,
+            error_type=type(cause).__name__,
+            failure=context,
+        )
+
     # -- metrics --------------------------------------------------------------
 
     def _dead_letter(self, key: bytes, reason: str, detail: str = "") -> beam.pvalue.TaggedOutput:
@@ -837,17 +878,19 @@ def _error_trace(
     *,
     error_type: str = "",
     role: str | None = None,
+    failure: FailureContext | None = None,
 ) -> beam.pvalue.TaggedOutput:
     """An `ERROR` trace event for a failure route, synthesized here (design D5).
 
-    Built from what the DoFn already holds — key, seq, clock, reason — and
-    never from the failed activation's staged effects, which stay discarded.
-    Emitting it mutates no state: a trace is an output record, not keyed state,
-    so correctness invariant 1 is untouched. It lands in the same trace as the
+    Built from what the DoFn already holds — key, seq, clock, reason, and on
+    the `activation_error` route the failure-position scalars — and never from
+    the failed activation's staged *effects*, which stay discarded. Emitting it
+    mutates no state: a trace is an output record, not keyed state, so
+    correctness invariant 1 is untouched. It lands in the same trace as the
     activation's committed events, or stands alone as a one-event trace when
     nothing committed.
     """
     trace = ActivationTrace(entity_key=entity_key, seq=seq, now_ms=now_ms)
     return beam.pvalue.TaggedOutput(
-        "traces", trace.error(reason=reason, error_type=error_type, role=role)
+        "traces", trace.error(reason=reason, error_type=error_type, role=role, failure=failure)
     )

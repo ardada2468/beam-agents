@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from beam_agents._protos import TraceEvent
 
 if TYPE_CHECKING:
+    from beam_agents.core.loop import FailureContext
     from beam_agents.model.facade import TokenUsage
 
 # Fixed namespace for deterministic trace/span IDs. Distinct from the intent
@@ -57,6 +58,14 @@ BILLED = "beam_agents.billed"
 ATTEMPTS = "beam_agents.attempts"
 CIRCUIT_STATE = "beam_agents.circuit_state"
 REASON = "beam_agents.reason"
+# Failure-position metadata on the `activation_error` route's ERROR event:
+# scalars describing where the failed activation was, never what it staged.
+# Absent (not defaulted) on routes where no context is reachable — the timeout
+# route, failures before context construction, and the non-activation routes.
+FAILURE_STEP = "beam_agents.failure.step"
+FAILURE_LAST_EVENT = "beam_agents.failure.last_event"
+FAILURE_STAGED_INTENTS = "beam_agents.failure.staged_intents"
+FAILURE_LLM_CALLS = "beam_agents.failure.llm_calls"
 ACTIVATION_STATUS = "beam_agents.activation.status"
 ACTIVATION_KIND = "beam_agents.activation.kind"
 INTENT_ID = "beam_agents.intent_id"
@@ -260,15 +269,28 @@ class ActivationTrace:
         )
         return event
 
-    def error(self, *, reason: str, error_type: str = "", role: str | None = None) -> TraceEvent:
+    def error(
+        self,
+        *,
+        reason: str,
+        error_type: str = "",
+        role: str | None = None,
+        failure: FailureContext | None = None,
+    ) -> TraceEvent:
         """A failure record, synthesized from what the caller already holds (D5).
 
-        Never derived from a failed activation's staged effects: those stay
-        discarded, so correctness invariant 1 is untouched.
+        Never derived from a failed activation's staged *effects*: those stay
+        discarded, so correctness invariant 1 is untouched. ``failure``, when
+        the route has one, adds the ``beam_agents.failure.*`` position scalars —
+        counts and kinds about the rolled-back context, never its contents.
+        Routes with no reachable context omit them entirely (absent, not
+        defaulted).
         """
         attributes = {REASON: reason}
         if error_type:
             attributes[ERROR_TYPE] = error_type
+        if failure is not None:
+            attributes.update(failure.trace_attributes())
         return self._event(TraceEvent.ERROR, step_index=0, attributes=attributes, role=role)
 
     def _event(

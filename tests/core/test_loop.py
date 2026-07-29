@@ -7,6 +7,7 @@ and error propagation (which leaves nothing to commit).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 
 import pytest
@@ -15,7 +16,12 @@ import beam_agents.core.loop as loop_module
 from beam_agents._protos import AgentEnvelope, LlmCacheBlob, MemoryBlob, ToolResult, TraceEvent
 from beam_agents.core.agent import Complete, Suspend
 from beam_agents.core.context import ActivationContext
-from beam_agents.core.loop import DEFAULT_HITL_TIMEOUT_MS, run_activation
+from beam_agents.core.loop import (
+    DEFAULT_HITL_TIMEOUT_MS,
+    ActivationFailed,
+    FailureContext,
+    run_activation,
+)
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from beam_agents.observability import (
     ROLE_ACTIVATION,
@@ -30,6 +36,7 @@ from tests.core._dofn_helpers import (
     make_pong_provider,
     model_agent,
     raising_agent,
+    request,
     seq_agent,
     suspend_then_act_again_agent,
     suspend_then_complete_agent,
@@ -326,9 +333,10 @@ async def test_resume_uses_continuation_seq_and_completes() -> None:
 
 
 async def test_agent_error_propagates_and_stages_nothing() -> None:
-    # The exception surfaces; the caller commits nothing, so no ActivationResult
-    # (and therefore no staged blob) escapes.
-    with pytest.raises(RuntimeError, match="agent blew up"):
+    # The failure surfaces (wrapped, with the original attached as the cause);
+    # the caller commits nothing, so no ActivationResult (and therefore no
+    # staged blob) escapes.
+    with pytest.raises(ActivationFailed) as excinfo:
         await run_activation(
             raising_agent,
             entity_key=b"k",
@@ -338,6 +346,160 @@ async def test_agent_error_propagates_and_stages_nothing() -> None:
             memory_blob=None,
             cache_blob=None,
         )
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "agent blew up"
+
+
+# --- Requirement: agent failures carry their position out (add-failure-context)
+
+
+async def test_an_agent_failure_is_wrapped_with_its_position() -> None:
+    # Scenario: A raising activation is traced with its error type and failure
+    # position (loop-level half): one provider-reached call (step 0), one
+    # staged intent (step 1), then the raise — so the cursor reads 2 and the
+    # last staged event is the intent's.
+    async def agent(ctx: ActivationContext) -> Complete:
+        await ctx.call_model(request())
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=60_000)
+        raise RuntimeError("agent blew up")
+
+    with pytest.raises(ActivationFailed) as excinfo:
+        await run_activation(
+            agent,
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=make_pong_provider(),
+            memory_blob=None,
+            cache_blob=None,
+        )
+
+    failure = excinfo.value
+    assert isinstance(failure.__cause__, RuntimeError)
+    assert str(failure.__cause__) == "agent blew up"
+    assert failure.context == FailureContext(
+        step_index=2, last_event="INTENT_EMITTED", staged_intents=1, llm_calls=1
+    )
+    # The wrapper's own message names the position: it is what a log shows if
+    # the exception ever escapes the DoFn's handling.
+    assert str(failure) == "activation failed at step 2 after INTENT_EMITTED"
+
+
+async def test_a_cache_hit_does_not_count_toward_the_failure_llm_calls() -> None:
+    # `llm_calls` is provider-reached calls, matching the metrics vocabulary: a
+    # replayed activation that fails after a cache hit reports zero, though the
+    # hit still consumed a step and staged its LLM_CALL trace.
+    provider = make_pong_provider()
+    first = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=provider,
+        memory_blob=None,
+        cache_blob=None,
+    )
+    assert provider.call_count == 1
+
+    async def agent(ctx: ActivationContext) -> Complete:
+        await ctx.call_model(request())
+        raise RuntimeError("after the hit")
+
+    with pytest.raises(ActivationFailed) as excinfo:
+        await run_activation(
+            agent,
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=provider,
+            memory_blob=None,
+            cache_blob=first.cache_blob,
+        )
+
+    assert provider.call_count == 1
+    assert excinfo.value.context == FailureContext(
+        step_index=1, last_event="LLM_CALL", staged_intents=0, llm_calls=0
+    )
+
+
+async def test_cancellation_is_never_wrapped() -> None:
+    # Scenario: Cancellation is never wrapped. `CancelledError` is how the
+    # bridge's timeout cancellation completes; wrapping it would corrupt the
+    # cancellation semantics, so only `Exception` is caught.
+    async def agent(_ctx: object) -> Complete:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_activation(
+            agent,  # type: ignore[arg-type]
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=make_pong_provider(),
+            memory_blob=None,
+            cache_blob=None,
+        )
+
+
+async def test_a_failure_before_the_start_event_reports_an_empty_last_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The wrap window opens before ACTIVATION_START is staged: a failure in
+    # that sliver (here: the trace surface itself raising) has no last event,
+    # and the context reports "" rather than a fabricated kind.
+    class NoTraceContext:
+        def __init__(self, **_kwargs: object) -> None:
+            self.step_index = 0
+            self.staged_intents: list[object] = []
+            self.staged_traces: list[TraceEvent] = []
+
+        @property
+        def trace(self) -> ActivationTrace:
+            raise RuntimeError("trace surface unavailable")
+
+        def tally(self) -> ActivationTally:
+            return ActivationTally()
+
+    monkeypatch.setattr(loop_module, "ActivationContext", NoTraceContext)
+
+    with pytest.raises(ActivationFailed) as excinfo:
+        await run_activation(
+            seq_agent,
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=make_pong_provider(),
+            memory_blob=None,
+            cache_blob=None,
+        )
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert excinfo.value.context == FailureContext(
+        step_index=0, last_event="", staged_intents=0, llm_calls=0
+    )
+
+
+async def test_a_failure_before_any_staging_reports_the_activation_start() -> None:
+    # The driver stages ACTIVATION_START before the agent runs, so even an
+    # agent that raises immediately has a position: step 0, after the start.
+    async def agent(_ctx: object) -> Complete:
+        raise ValueError("early")
+
+    with pytest.raises(ActivationFailed) as excinfo:
+        await run_activation(
+            agent,  # type: ignore[arg-type]
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=make_pong_provider(),
+            memory_blob=None,
+            cache_blob=None,
+        )
+
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert excinfo.value.context == FailureContext(
+        step_index=0, last_event="ACTIVATION_START", staged_intents=0, llm_calls=0
+    )
 
 
 async def test_loop_forwards_every_activation_context_input(
@@ -640,13 +802,12 @@ async def test_the_tally_does_not_change_the_committed_blobs() -> None:
 
 
 async def test_non_outcome_error_includes_the_returned_value() -> None:
+    # The defensive TypeError is raised inside the wrap window (everything
+    # after context construction), so it arrives wrapped like an agent raise.
     async def agent(_ctx: object) -> str:
         return "invalid"
 
-    with pytest.raises(
-        TypeError,
-        match=r"^agent returned a non-Outcome value: 'invalid'$",
-    ):
+    with pytest.raises(ActivationFailed) as excinfo:
         await run_activation(
             agent,  # type: ignore[arg-type]
             entity_key=b"k",
@@ -656,3 +817,6 @@ async def test_non_outcome_error_includes_the_returned_value() -> None:
             memory_blob=None,
             cache_blob=None,
         )
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, TypeError)
+    assert str(cause) == "agent returned a non-Outcome value: 'invalid'"
