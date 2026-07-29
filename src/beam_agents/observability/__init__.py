@@ -41,6 +41,15 @@ Timestamps come from the injected activation clock, so spans are zero-width by
 design (D7): *duration* belongs to the metrics surface below, never to trace
 bytes, which stay byte-identical under replay.
 
+**Delivery** (:mod:`.exporters`, :mod:`.otlp`, the ``trace-exporters``
+capability): ``AgentConfig.traces_to`` ships the stream to a sink —
+``kafka://``/``pubsub://`` (deterministic keyed bytes), ``bigquery://`` (flat
+rows against the published ``TRACE_TABLE_SCHEMA``; the writer provisions a
+day-partitioned, ``trace_id``-clustered table itself), or ``otlp://`` (a
+batched, non-blocking OTLP/HTTP exporter that is best-effort by contract:
+delivery failure drops and counts under ``beam_agents.otlp``, never stalls or
+fails a bundle). See ``docs/traces.md`` for the operator-facing story.
+
 **Metrics** (:mod:`.metrics`, the ``runtime-metrics`` capability): the
 runner-visible counters and distributions an operator reads off a Dataflow job
 page or a Flink metrics reporter — including ``activation_ms`` and the

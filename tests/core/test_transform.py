@@ -12,6 +12,11 @@ from unittest import mock
 
 import apache_beam as beam
 import pytest
+
+# Imported at module scope (unlike the runtime's lazy resolver imports) so the
+# writer-configuration tests can assert against the real classes; the poison
+# test below patches sys.modules, which module-level bindings don't defeat.
+from apache_beam.io.gcp.bigquery import BigQueryDisposition, WriteToBigQuery
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Aliased: a bare "TestPipeline" name would be mis-collected by pytest.
@@ -33,6 +38,8 @@ from beam_agents.core.transform import (
 )
 from beam_agents.hitl import HitlPolicy
 from beam_agents.observability import trace_event_to_row, trace_id_for
+from beam_agents.observability.exporters import TRACE_TABLE_SCHEMA
+from beam_agents.observability.otlp import WriteTracesToOtlp
 from beam_agents.tools import ToolRegistry
 from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import (
@@ -419,6 +426,134 @@ def test_the_traces_encoder_hands_the_sink_what_its_scheme_accepts(
             p | beam.Create([_TRACE_EVENT]) | _WriteTraces(beam.Map(lambda x: x), to_row=to_row)
         )
         assert_that(written, equal_to(expected))
+
+
+# --- Requirement: An `otlp://` traces sink scheme ------------------------------
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "otlp://collector:4318",
+        "otlp://collector",  # port defaults
+        "otlp://collector:4318?tls=true&batch_size=64&flush_deadline_s=2.5"
+        "&queue_batches=4&service_name=my-pipeline",
+    ],
+)
+def test_otlp_uri_validates_for_traces_to(uri: str) -> None:
+    DefaultSinkResolver().validate("traces_to", uri)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "otlp://",  # no host
+        "otlp://collector:not-a-port",  # unparseable port
+        "otlp://collector:4318/some/path",  # the /v1/traces path is implied
+        "otlp://collector:4318?batch_size=zero",  # unparseable int
+        "otlp://collector:4318?flush_deadline_s=soon",  # unparseable float
+        "otlp://collector:4318?batch_size=0",  # not positive
+        "otlp://collector:4318?queue_batches=0",  # not positive
+        "otlp://collector:4318?flush_deadline_s=0",  # not positive
+        "otlp://collector:4318?tls=maybe",  # not a bool
+        "otlp://collector:4318?bogus=1",  # unknown option
+    ],
+)
+def test_malformed_otlp_uri_fails_at_construction(uri: str) -> None:
+    # Scenario: A malformed OTLP URI fails at construction.
+    with pytest.raises(UnknownSinkSchemeError, match=r"otlp://<host>:<port>"):
+        DefaultSinkResolver().validate("traces_to", uri)
+
+
+@pytest.mark.parametrize("field_name", ["intents_to", "errors_to"])
+def test_otlp_is_refused_for_the_intents_and_errors_sinks(field_name: str) -> None:
+    # Scenario: OTLP is refused for the intents and errors sinks — they are
+    # correctness-bearing streams and must not ride a best-effort exporter.
+    kwargs: dict[str, Any] = {field_name: "otlp://collector:4318"}
+    with pytest.raises(ValueError, match="best-effort"):
+        AgentConfig(provider_factory=make_pong_provider, **kwargs)
+
+
+@pytest.mark.parametrize("field_name", ["intents_to", "errors_to"])
+def test_otlp_refusal_also_guards_resolution(field_name: str) -> None:
+    # A resolver used directly (not through AgentConfig) must refuse too.
+    with pytest.raises(UnknownSinkSchemeError, match="best-effort"):
+        DefaultSinkResolver().resolve(field_name, "otlp://collector:4318")
+
+
+def test_otlp_validation_does_not_import_the_otlp_dependency() -> None:
+    # Scenario: Validation does not import the OTLP dependency.
+    with mock.patch.dict(sys.modules, {"opentelemetry": None}):
+        DefaultSinkResolver().validate("traces_to", "otlp://collector:4318")
+        AgentConfig(provider_factory=make_pong_provider, traces_to="otlp://collector:4318")
+
+
+def test_otlp_resolves_to_the_export_transform_with_knobs_applied() -> None:
+    transform = DefaultSinkResolver().resolve(
+        "traces_to",
+        "otlp://collector:4318?batch_size=64&flush_deadline_s=2.5"
+        "&queue_batches=4&service_name=my-pipeline",
+    )
+
+    assert isinstance(transform, WriteTracesToOtlp)
+    assert transform._endpoint == "http://collector:4318/v1/traces"
+    assert transform._batch_size == 64
+    assert transform._flush_deadline_s == 2.5
+    assert transform._queue_batches == 4
+    assert transform._service_name == "my-pipeline"
+
+
+def test_otlp_resolution_defaults_are_the_documented_ones() -> None:
+    transform = DefaultSinkResolver().resolve("traces_to", "otlp://collector:4318")
+
+    assert isinstance(transform, WriteTracesToOtlp)
+    assert transform._batch_size == 512
+    assert transform._flush_deadline_s == 5.0
+    assert transform._queue_batches == 8
+    assert transform._service_name == "beam-agents"
+
+
+def test_otlp_tls_and_default_port_shape_the_endpoint() -> None:
+    tls = DefaultSinkResolver().resolve("traces_to", "otlp://collector:4318?tls=true")
+    default_port = DefaultSinkResolver().resolve("traces_to", "otlp://collector")
+
+    assert isinstance(tls, WriteTracesToOtlp)
+    assert tls._endpoint == "https://collector:4318/v1/traces"
+    assert isinstance(default_port, WriteTracesToOtlp)
+    assert default_port._endpoint == "http://collector:4318/v1/traces"
+
+
+# --- Requirement: A self-provisioning BigQuery traces writer -------------------
+
+
+def test_a_bigquery_traces_sink_carries_schema_and_dispositions() -> None:
+    # Scenario: The writer carries schema and dispositions.
+    transform = DefaultSinkResolver().resolve(
+        "traces_to", "bigquery://my-project/my_dataset/traces"
+    )
+
+    assert isinstance(transform, _WriteTraces)
+    writer = transform._sink
+    assert isinstance(writer, WriteToBigQuery)
+    assert writer.schema == TRACE_TABLE_SCHEMA
+    assert writer.create_disposition == BigQueryDisposition.CREATE_IF_NEEDED
+    assert writer.write_disposition == BigQueryDisposition.WRITE_APPEND
+    assert writer.additional_bq_parameters == {
+        "timePartitioning": {"type": "DAY", "field": "event_time"},
+        "clustering": {"fields": ["trace_id"]},
+    }
+    assert writer.table_reference.projectId == "my-project"
+    assert writer.table_reference.datasetId == "my_dataset"
+    assert writer.table_reference.tableId == "traces"
+
+
+def test_other_bigquery_sinks_are_not_schema_d() -> None:
+    # `errors_to`/`intents_to` BigQuery resolution is unchanged: the trace
+    # table's schema must not leak onto other streams' writers.
+    writer = DefaultSinkResolver().resolve("errors_to", "bigquery://my-project/my_dataset/errs")
+
+    assert isinstance(writer, WriteToBigQuery)
+    assert writer.schema is None
 
 
 def test_other_sinks_are_not_wrapped_in_the_traces_encoder() -> None:

@@ -56,7 +56,22 @@
 # 196 -> 198 for `hitl_policy`. The field and the pass-through are covered in
 # the normal suite by test_transform.py's construction test and end to end by
 # test_dofn_pipeline.py's inline-tool pipeline run.
+#
+# add-trace-exporters moved transform.py 242 -> 371: `DefaultSinkResolver` grew
+# the `otlp://` scheme (`_parse_otlp_uri` and its option parsers, the
+# non-traces-field refusal in `validate`, `_otlp_transform`) and the schema'd
+# `_traces_bigquery_writer`, all in the resolver territory only the deselected
+# test_transform.py reaches -- the identical pattern that moved this ceiling
+# 198 -> 240 for `_WriteTraces`. Splitting the new (pipeline-free) sink tests
+# into a mutmut-selected file was tried and reverted: mutmut resolves test
+# reach per *function*, so partially covering `_parse`/`resolve`/
+# `_write_transform` reclassified every kafka/pubsub-arm mutant in them from
+# "no tests" to "survived" (92 of them), and killing those requires asserting
+# cross-language `WriteToKafka`/`WriteToPubSub` construction internals from
+# inside the selection. The new branches are covered in the normal suite by
+# test_transform.py's otlp/BigQuery resolver tests and end to end by
+# tests/observability/test_otlp.py's pipeline run.
 [no_tests]
 "context.py" = 0
 "dofn.py" = 3
-"transform.py" = 242
+"transform.py" = 371

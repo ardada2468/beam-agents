@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from beam_agents._protos import TraceEvent
 from beam_agents.observability import serialize_trace_event, trace_event_to_row
+from beam_agents.observability.exporters import TRACE_TABLE_SCHEMA
 
 _EVENT = TraceEvent(
     trace_id=bytes(range(16)),
@@ -57,6 +58,7 @@ def test_bigquery_encoding_is_a_row_not_a_proto() -> None:
     assert row["event_type"] == "LLM_CALL"
     assert row["start_ms"] == 1_700_000_000_000
     assert row["end_ms"] == 1_700_000_000_000
+    assert row["event_time"] == "2023-11-14T22:13:20+00:00"
     assert row["attributes"] == [
         {"key": "beam_agents.cache_hit", "value": "true"},
         {"key": "gen_ai.request.model", "value": "m-1"},
@@ -76,3 +78,57 @@ def test_an_empty_event_encodes_without_correlation_ids() -> None:
     assert row["trace_id"] == ""
     assert row["event_type"] == "EVENT_TYPE_UNSPECIFIED"
     assert row["attributes"] == []
+    assert row["event_time"] == "1970-01-01T00:00:00+00:00"
+
+
+# --- Requirement: A published BigQuery trace-table schema ---------------------
+
+
+def test_event_time_derives_from_start_ms() -> None:
+    # Scenario: event_time derives from start_ms — epoch milliseconds UTC,
+    # millisecond precision preserved, identical across encodings.
+    event = TraceEvent(start_ms=1_700_000_000_123)
+
+    one = trace_event_to_row(event)
+    two = trace_event_to_row(event)
+
+    assert one["event_time"] == "2023-11-14T22:13:20.123000+00:00"
+    assert one["event_time"] == two["event_time"]
+
+
+def test_schema_and_row_encoder_agree() -> None:
+    # Scenario: Schema and row encoder agree — every row key appears in the
+    # schema and the schema declares nothing the encoder does not produce.
+    row = trace_event_to_row(_EVENT)
+    fields = {f["name"]: f for f in TRACE_TABLE_SCHEMA["fields"]}
+
+    assert set(fields) == set(row)
+
+    attributes = fields.pop("attributes")
+    assert attributes["type"] == "RECORD"
+    assert attributes["mode"] == "REPEATED"
+    assert [(f["name"], f["type"], f["mode"]) for f in attributes["fields"]] == [
+        ("key", "STRING", "NULLABLE"),
+        ("value", "STRING", "NULLABLE"),
+    ]
+    assert set(row["attributes"][0]) == {"key", "value"}
+
+    expected_scalar_types = {
+        "trace_id": "STRING",
+        "span_id": "STRING",
+        "parent_span_id": "STRING",
+        "entity_key": "STRING",
+        "seq": "INT64",
+        "step_index": "INT64",
+        "event_type": "STRING",
+        "start_ms": "INT64",
+        "end_ms": "INT64",
+        "event_time": "TIMESTAMP",
+    }
+    assert {name: f["type"] for name, f in fields.items()} == expected_scalar_types
+    assert all(f["mode"] == "NULLABLE" for f in fields.values())
+
+    # Each declared type accepts the encoded value.
+    python_types = {"STRING": str, "INT64": int, "TIMESTAMP": str}
+    for name, field in fields.items():
+        assert isinstance(row[name], python_types[field["type"]]), name
