@@ -20,4 +20,13 @@
 # add-errors-sink-encoding: 0.9424 (the errors encoders are branch-free and
 # fully covered, and threading `event_time_ms` through every `_dead_letter`
 # call site brought core/dofn.py's remaining failure-exit branches in).
-branch_rate = 0.9424
+#
+# add-langgraph-adapter: 0.9433 (the adapter package lands at 96% branch
+# coverage — its remaining partials are contextvar/isinstance guards exercised
+# only one way per test — pulling the project rate up).
+#
+# Merge resolution (add-errors-sink-encoding 0.9424, add-langgraph-adapter
+# 0.9433, add-trace-exporters 0.9491): same rule as the merges above — the
+# combined tree is re-measured, not picked from a side. Measured on the
+# combined tree: RATE_PLACEHOLDER.
+branch_rate = RATE_PLACEHOLDER

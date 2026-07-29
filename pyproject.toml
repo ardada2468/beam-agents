@@ -24,6 +24,13 @@ effector = [
   "redis",
   "google-cloud-bigtable",
 ]
+# The LangGraph adapter (`beam_agents.adapters.langgraph`). Core never imports
+# LangGraph: `import beam_agents` must succeed without this extra, and the
+# adapter package is the only module allowed to import langgraph at top level.
+langgraph = [
+  "langgraph>=1.0,<2",
+  "langchain-core>=1.0,<2",
+]
 
 # The effector is a service, so it gets a console entry point. It is the only
 # executable this package ships; the runtime itself is a library embedded in a
@@ -48,6 +55,12 @@ test = [
   "pytest-cov",
   "hypothesis",
   "mutmut",
+  # The LangGraph adapter's unit tests need the framework itself. Mirrored from
+  # the `langgraph` extra (same pattern as `integration` mirroring `effector`):
+  # the offline import boundary is proven by tests/adapters/test_import_isolation
+  # blocking the import, not by the package's absence from the environment.
+  "langgraph>=1.0,<2",
+  "langchain-core>=1.0,<2",
 ]
 lint = [
   "ruff",
@@ -103,6 +116,11 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["PLR2004"]
+# The package `__getattr__` resolves adapter classes lazily, on purpose: the
+# adapters' framework dependencies are optional extras and `import beam_agents`
+# must never import them. PLC0415 (imports not at top-level) is exactly what
+# that design requires here.
+"src/beam_agents/__init__.py" = ["PLC0415"]
 # Beam's stateful-DoFn API *requires* state/timer handles to be declared as
 # argument defaults (`state=beam.DoFn.StateParam(SPEC)`); B008 (no calls in
 # defaults) is a false positive for this idiom.
@@ -224,6 +242,21 @@ disable_error_code = ["override"]
 [[tool.mypy.overrides]]
 module = "beam_agents.memory.facade"
 disable_error_code = ["no-untyped-call"]
+
+# Same Beam-untyped-metrics relaxation for the LangGraph adapter's transport
+# fallback counter.
+[[tool.mypy.overrides]]
+module = "beam_agents.adapters.langgraph.transport"
+disable_error_code = ["no-untyped-call"]
+
+# The LangGraph adapter tests drive LangGraph's four-parameter generics
+# (StateGraph/CompiledStateGraph — spelling every parameter would obscure the
+# scenarios) and, in the e2e module, Beam's untyped TestPipeline/TestStream/
+# assert_that API — the same relaxations the other framework-driving test
+# modules get. Everything else in these modules stays strictly typed.
+[[tool.mypy.overrides]]
+module = "tests.adapters.*"
+disable_error_code = ["type-arg", "no-untyped-call"]
 
 # Same Beam-untyped-metrics relaxation for the runtime metric recorder, which
 # calls `inc`/`update` on Beam's delegating handles.

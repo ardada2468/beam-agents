@@ -23,6 +23,7 @@ def test_public_surface_is_run_agent_config_outputs_and_hitl_policy() -> None:
         "Escalate",
         "FallbackContext",
         "HitlPolicy",
+        "LangGraphAgent",
         "RunAgent",
         "RunAgentOutputs",
     }
@@ -40,6 +41,11 @@ def test_import_has_no_side_effects() -> None:
     # Inspect the source rather than `dir(beam_agents)`, which picks up
     # submodules once imported and instrumentation artifacts (mutmut injects a
     # `MutantDict`), neither of which are re-exports.
+    #
+    # The single sanctioned function is the module-level `__getattr__` that
+    # lazily resolves optional-extra adapter classes (PEP 562): defining it has
+    # no import-time side effect, and it is what keeps adapter frameworks out
+    # of the core import graph.
     assert beam_agents.__file__ is not None
     source = Path(beam_agents.__file__).read_text()
     body = ast.parse(source).body
@@ -50,5 +56,6 @@ def test_import_has_no_side_effects() -> None:
             node,
             (ast.Expr, ast.ImportFrom, ast.Import, ast.Assign, ast.AnnAssign),
         )
+        and not (isinstance(node, ast.FunctionDef) and node.name == "__getattr__")
     ]
     assert offenders == [], "beam_agents/__init__.py must only import and re-export names"
