@@ -60,8 +60,10 @@ release-gating budget (p50 < 15 ms, p99 < 60 ms per activation) excludes LLM and
 tool time; `overhead_ms` publishes exactly that subtraction, so it is the
 distribution to alert on for the budget. It is clamped at zero: an agent that
 awaits calls concurrently can make summed call time exceed wall time. Beam
-distributions carry no percentiles (see above), so the p99 check itself still
-belongs to the benchmark suite; `overhead_ms`'s sum/count/max give the
+distributions carry no percentiles (see above), so the p99 check itself is
+rendered by the benchmark suite ([`docs/benchmarks.md`](benchmarks.md) — its
+`overhead_*ms` tiers record the *same* subtraction per activation and its gate
+enforces the p50/p99 budget); `overhead_ms`'s sum/count/max give the
 dashboard-level early warning.
 
 ## What these numbers are, and are not

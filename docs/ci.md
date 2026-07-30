@@ -8,7 +8,7 @@ Four workflows under `.github/workflows/`, one per testing tier in
 | `ci.yml`            | push to `main`, pull request      | lint, type, unit (3.11–3.12 × ubuntu) | yes |
 | `integration.yml`   | push to `main`, pull request      | integration + semantics (docker compose) | yes |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
-| `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation unconditionally; dataflow and provider smoke tests when credentials exist | no |
+| `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation and the [benchmark suite](benchmarks.md) unconditionally; dataflow and provider smoke tests when credentials exist | no |
 
 Every workflow step maps 1:1 to a `Makefile` target — see the
 [`Makefile`](../Makefile) for the exact commands `ci-lint`, `ci-unit`, etc.
@@ -28,6 +28,19 @@ Once this repository has a GitHub remote, mark `ci`, `integration`, and
 `quality` as required status checks on `main` under
 **Settings → Branches → Branch protection rules**. `nightly` is intentionally
 not required.
+
+## The benchmark lane
+
+The nightly `bench` job runs `make bench` then `make bench-gate` and uploads
+`bench-results/*.json` + `bench-report.md` as the stably named
+`benchmark-report` artifact, which the release process attaches to each
+release. It is **release-blocking, not merge-blocking**: `project.md` says
+benchmark regressions are release blockers, and pyperf's methodology assumes a
+quieter machine than a shared PR runner. The one-iteration smoke tests in
+`tests/benchmarks/` ride the required `ci` lane instead, so a runtime refactor
+that breaks a benchmark fails at PR time. See
+[`docs/benchmarks.md`](benchmarks.md) for what each dimension measures, how to
+read the report, and the baseline-update procedure.
 
 ## Mutation-tested surface
 
