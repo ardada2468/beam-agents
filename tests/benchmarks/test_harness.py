@@ -9,9 +9,9 @@ the absolutes, is the baseline-tracked quantity).
 from __future__ import annotations
 
 import pytest
-from scripts import bench_gate
 
 from benchmarks.bench_overhead_tiers import overhead_sample
+from scripts import bench_gate
 
 
 def _scripted_clock(*readings_s: float) -> object:

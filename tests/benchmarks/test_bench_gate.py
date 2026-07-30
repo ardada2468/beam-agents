@@ -11,9 +11,19 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pyperf
 import pytest
+
+# These tests build real pyperf Benchmark objects to feed the gate, so unlike
+# test_bench_smoke.py they genuinely need the `bench` group. The required `ci`
+# unit lane does not sync it, so skip rather than error there; the nightly
+# bench lane runs them for real.
+if TYPE_CHECKING:
+    import pyperf
+else:
+    pyperf = pytest.importorskip("pyperf", reason="the bench dependency group is not synced")
+
 from scripts import bench_gate
 
 # Flat per-benchmark default values in seconds, comfortably inside both the

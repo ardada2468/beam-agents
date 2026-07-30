@@ -49,3 +49,18 @@ Task 3.2 asks for "one pyperf benchmark per tier in one JSON file", and the gate
 Registering all three tiers on one `Runner` would therefore force one density on all three — either a 2000 ms tier that dominates the suite's runtime budget, or a 50 ms tier too thin for a p99. Neither is acceptable; the p99 is the whole point of the gated tier, and the ≤ 10-minute suite budget is a stated risk mitigation.
 
 Resolution, entirely inside the module and invisible to the gate: running `benchmarks.bench_overhead_tiers` without `--tier` orchestrates one subprocess `pyperf` run per tier, each with its own pinned `TIER_SETTINGS` entry and `--loops 1`, all appending into the single `--output` JSON. `--tier <ms>` is the per-tier entry point (manager and worker alike, carried into workers via pyperf's `add_cmdline_args`). The artifact contract is unchanged — `bench-results/bench_overhead_tiers.json` holds exactly the three named benchmarks — so no spec, design decision, or gate constant moved. No artifact edit was required for this; it is recorded here because the module's `main()` is structurally unlike the other four.
+
+## 8. Revision: keep the gate importable without the `bench` group (integration)
+
+- [x] 8.1 `scripts/bench_gate.py` raised `SystemExit(1)` at import when pyperf was missing, but the
+  required `ci` unit lane syncs only lint/typecheck/test — never `bench`. `tests/benchmarks/`
+  imports the module, so on that lane pytest aborted collection with an INTERNALERROR
+  (`SystemExit` during collection), taking the whole required lane down. Moved the loud message
+  and non-zero exit into `main()` and left a module-level `_PYPERF_IMPORT_ERROR` sentinel: the
+  CLI still fails loudly with the same text, while importing stays safe. This preserves the
+  design's own intent — `test_bench_smoke.py` needs only `EXPECTED_RESULTS` (no pyperf), so the
+  benchmark-rot check keeps running in the required lane, which is exactly why D1 put it there.
+- [x] 8.2 `tests/benchmarks/test_bench_gate.py` genuinely builds `pyperf.Benchmark` objects, so it
+  now `pytest.importorskip`s pyperf (with a `TYPE_CHECKING` import so `--strict` still resolves
+  the annotations) and skips on the unit lane instead of erroring. Verified both ways: without
+  pyperf 13 passed / 1 skipped; with pyperf 27 passed. `make lint`, `make type` clean.

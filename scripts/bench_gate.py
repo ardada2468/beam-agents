@@ -37,15 +37,17 @@ from pathlib import Path
 try:
     # Import-the-authority (the `mutation_gate.py` stance): pyperf's own
     # Benchmark loader and percentile math rather than hand-parsed JSON. A
-    # loud ImportError if pyperf moves is the right failure mode for a gate.
+    # loud failure if pyperf moves is the right failure mode for a gate.
     import pyperf
 except ImportError as exc:  # pragma: no cover - environment error, not logic
-    print(
-        f"error: cannot import pyperf ({exc}). "
-        "Install the bench dependency group: uv sync --group bench",
-        file=sys.stderr,
-    )
-    raise SystemExit(1) from exc
+    # Deferred to `main()` rather than raised here: the required `ci` unit lane
+    # syncs lint/typecheck/test but NOT the `bench` group, and
+    # tests/benchmarks/test_bench_smoke.py imports this module for
+    # EXPECTED_RESULTS alone (no pyperf) to keep the benchmark-rot check in that
+    # lane. Failing at import would abort collection instead.
+    _PYPERF_IMPORT_ERROR: ImportError | None = exc
+else:
+    _PYPERF_IMPORT_ERROR = None
 
 RESULTS_DIR = Path("bench-results")
 BASELINE_PATH = Path("benchmark-baseline.toml")
@@ -374,6 +376,14 @@ def render_report(
 
 
 def main() -> int:
+    if _PYPERF_IMPORT_ERROR is not None:
+        print(
+            f"error: cannot import pyperf ({_PYPERF_IMPORT_ERROR}). "
+            "Install the bench dependency group: uv sync --group bench",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         results = load_results()
         baseline = load_baseline()

@@ -137,7 +137,7 @@ packages = ["src/beam_agents"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests", "examples"]
+src = ["src", "tests", "examples", "benchmarks"]
 # Generated protobuf bindings are committed but never hand-edited or linted.
 extend-exclude = ["src/beam_agents/_protos/*_pb2.py", "src/beam_agents/_protos/*_pb2.pyi"]
 
@@ -226,18 +226,14 @@ ignore = [
 "examples/slack_approval/slack.py" = ["PLC0415"]
 
 [tool.ruff.lint.isort]
-# `examples/` is repo-root sample code outside the wheel; without this ruff
-# would sort its imports with the third-party block.
-known-first-party = ["examples"]
+# `examples/` and `benchmarks/` are repo-root code outside the wheel and
+# outside the `src` roots above; without this ruff would sort their imports
+# with the third-party block.
+known-first-party = ["examples", "benchmarks"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-
-# `benchmarks/` sits at the repo root outside the `src` roots above; without
-# this, isort would sort its intra-package imports as third-party.
-[tool.ruff.lint.isort]
-known-first-party = ["benchmarks"]
 
 [tool.mypy]
 strict = true

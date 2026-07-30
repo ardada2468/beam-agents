@@ -14,9 +14,9 @@ import importlib
 from pathlib import Path
 
 import pytest
-from scripts import bench_gate
 
 from benchmarks import _harness, bench_state_commit, bench_suspension_roundtrip
+from scripts import bench_gate
 
 _BENCHMARKS_DIR = Path(_harness.__file__).resolve().parent
 _MODULE_NAMES = sorted(path.stem for path in _BENCHMARKS_DIR.glob("bench_*.py"))
