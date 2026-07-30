@@ -189,6 +189,9 @@ ignore = [
 # is the same Beam-requires-it-as-a-default idiom as core/dofn.py, and the doc
 # must show the working form rather than a lint-shaped variant of it.
 "tests/examples/test_failure_streak_alarm.py" = ["B008"]
+# The docs/continuous_eval.md example, copied verbatim: same state/timer
+# handle-as-default idiom as above.
+"tests/examples/test_continuous_eval.py" = ["B008"]
 # The gate module itself: same lazy-aiokafka constraint (it is *collected* in
 # the offline lane, where aiokafka is absent — deselection happens after
 # import), and the single long test function is one scenario told in phases,
@@ -278,16 +281,18 @@ module = "tests.examples.test_failure_streak_alarm"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # The runnable docs examples and their tests drive Beam's untyped pipeline API
-# (Create/TestStream/WithKeys/Map/Filter, TestPipeline/assert_that) — the same
-# per-module relaxation every pipeline-driving test module carries. Everything
-# non-Beam in these modules stays strictly typed; tests.examples.test_docs_snippets
-# and test_failure_streak_alarm keep their own (stricter/other) settings.
+# (Create/TestStream/WithKeys/Map/Filter/WindowInto/CombinePerKey,
+# TestPipeline/assert_that) — the same per-module relaxation every
+# pipeline-driving test module carries. Everything non-Beam in these modules
+# stays strictly typed; tests.examples.test_docs_snippets and
+# test_failure_streak_alarm keep their own (stricter/other) settings.
 [[tool.mypy.overrides]]
 module = [
     "examples.*",
     "tests.examples.test_hello_world",
     "tests.examples.test_fraud_triage",
     "tests.examples.test_iot_reaction",
+    "tests.examples.test_continuous_eval",
 ]
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
