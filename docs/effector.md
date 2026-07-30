@@ -137,7 +137,10 @@ the return value as canonical JSON.
 `--approvals-to` and never executed; no `ToolResult` is published, because the
 answer comes back as an `AgentEnvelope.Approval` on the approvals topic. It is
 marked terminal so a redelivery cannot notify twice. Expired approvals are
-refused like any other intent.
+refused like any other intent. Fronting that channel is your job, not the
+runtime's — see [the Slack approval surface example](examples/slack-approval.md)
+for a worked one (Block Kit buttons, verdict → envelope keyed by `entity_key`,
+fail-closed TTL at the surface).
 
 **A busy claim blocks, it does not skip.** If another worker holds a live
 lease, the effector waits (bounded by the lease) rather than committing past
