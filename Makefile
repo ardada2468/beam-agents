@@ -4,7 +4,13 @@ COMPOSE := docker compose -f docker/compose.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-up-core compose-down compose-logs harness-build proto docs docs-serve
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-down compose-logs harness-build proto docs docs-serve
+
+BENCH_RESULTS := bench-results
+# Local-iteration knob only. CI pins the modules' own sampling constants by
+# passing nothing here (the e2e gate's discipline: env knobs tune local runs,
+# never the gated one).
+BENCH_ARGS ?=
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-18s %s\n", $$1, $$2}'
@@ -72,6 +78,20 @@ mutation: ## Run and enforce the core/ mutation gate
 
 coverage-ratchet: ## Fail if coverage.xml regressed vs. coverage-baseline.toml
 	uv run python scripts/coverage_ratchet.py
+
+# Offline (no docker, no network, FakeLLM only). One JSON per benchmark under
+# bench-results/, which bench-gate is the single reader of. `--fast` (via
+# BENCH_ARGS) is for local iteration; CI runs the pinned defaults.
+bench: ## Run the offline pyperf benchmark suite into bench-results/
+	mkdir -p $(BENCH_RESULTS)
+	uv run python -m benchmarks.bench_noop_throughput -o $(BENCH_RESULTS)/bench_noop_throughput.json $(BENCH_ARGS)
+	uv run python -m benchmarks.bench_overhead_tiers -o $(BENCH_RESULTS)/bench_overhead_tiers.json $(BENCH_ARGS)
+	uv run python -m benchmarks.bench_suspension_roundtrip -o $(BENCH_RESULTS)/bench_suspension_roundtrip.json $(BENCH_ARGS)
+	uv run python -m benchmarks.bench_state_commit -o $(BENCH_RESULTS)/bench_state_commit.json $(BENCH_ARGS)
+	uv run python -m benchmarks.bench_runinference_compare -o $(BENCH_RESULTS)/bench_runinference_compare.json $(BENCH_ARGS)
+
+bench-gate: ## Enforce the latency budget + benchmark-baseline.toml, render bench-report.md
+	uv run python scripts/bench_gate.py
 
 # `--build`: the SDK harness image bakes in the current `src/beam_agents`, so a
 # stale image would run the gate against yesterday's runtime and pass.

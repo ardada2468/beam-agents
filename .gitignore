@@ -34,6 +34,11 @@ htmlcov/
 .mutmut-cache
 mutants/
 
+# pyperf benchmark results and the generated gate report (make bench /
+# make bench-gate); the committed history is benchmark-baseline.toml.
+bench-results/
+bench-report.md
+
 # e2e gate runtime artifacts (spool segments, worker logs, thread dumps).
 # The directory itself is committed (.gitkeep): the compose bind mount must
 # exist in a fresh checkout, or docker creates it root-owned on Linux CI

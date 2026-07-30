@@ -149,6 +149,11 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["PLR2004"]
+# The benchmark modules import pyperf inside `main()`, on purpose: pyperf is
+# the `bench` dependency group, which the required `ci` lane does not sync, and
+# the unit-tier smoke tests must still import every module and run its timed
+# functions. PLC0415-is-the-point, the same rationale as core/transform.py.
+"benchmarks/bench_*.py" = ["PLC0415"]
 # The package `__getattr__` resolves adapter classes lazily, on purpose: the
 # adapters' framework dependencies are optional extras and `import beam_agents`
 # must never import them. PLC0415 (imports not at top-level) is exactly what
@@ -229,12 +234,17 @@ known-first-party = ["examples"]
 quote-style = "double"
 indent-style = "space"
 
+# `benchmarks/` sits at the repo root outside the `src` roots above; without
+# this, isort would sort its intra-package imports as third-party.
+[tool.ruff.lint.isort]
+known-first-party = ["benchmarks"]
+
 [tool.mypy]
 strict = true
 python_version = "3.11"
-# `examples` is held to the same strict bar as `src` (see the slack-approval
-# change, tasks 8.1) even though it ships outside the wheel.
-files = ["src", "tests", "examples"]
+# `examples` and `benchmarks` are held to the same strict bar as `src` (see the
+# slack-approval change, tasks 8.1) even though they ship outside the wheel.
+files = ["src", "tests", "examples", "benchmarks"]
 enable_error_code = ["ignore-without-code"]
 warn_unreachable = true
 
@@ -245,6 +255,20 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "google.*"
 ignore_missing_imports = true
+
+# pyperf ships no py.typed marker; the benchmark harness and the bench gate
+# import it as the authority on benchmark loading/percentiles.
+[[tool.mypy.overrides]]
+module = "pyperf.*"
+ignore_missing_imports = true
+
+# The benchmark harness drives the same two untyped surfaces the DoFn-driving
+# test modules do: Beam's stateful-DoFn/pipeline API (process(**handles),
+# Create/Map/RunInference, unparameterized generics) and pyperf's Runner
+# reading as Any. Everything else in benchmarks/ stays strictly typed.
+[[tool.mypy.overrides]]
+module = "benchmarks.*"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # The effector's transport/dedup clients are optional dependencies (the
 # `effector` extra) and are deliberately absent from the `ci` lane's environment,

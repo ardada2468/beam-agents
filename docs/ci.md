@@ -10,7 +10,7 @@ plus the docs build:
 | `integration.yml` → `integration` job | push to `main`, pull request | integration minus semantics gates (core services only: Redpanda, Redis, GCP emulators via `make compose-up-core`) | yes |
 | `integration.yml` → `flink-minicluster` job | push to `main`, pull request | docker-backed semantics gates on the Flink mini-cluster (`make test-semantics` + `make test-conformance-flink`, full compose stack) | yes (add to required contexts at merge) |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
-| `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation unconditionally; dataflow and provider smoke tests when credentials exist | no |
+| `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation and the [benchmark suite](benchmarks.md) unconditionally; dataflow and provider smoke tests when credentials exist | no |
 | `docs.yml`          | push to `main`, pull request      | docs (strict `mkdocs` build; Pages deploy from `main`) | no (see the docs-workflow note) |
 
 The two `integration.yml` jobs run in parallel and re-run independently: a
@@ -56,6 +56,19 @@ not required. Note the asymmetry inherited from the job split: the base job
 deliberately kept the `integration` context name (renaming a required context
 strands branch protection), while `flink-minicluster` is a new context that
 must be *added* — until it is, the Flink gates run but are not merge-blocking.
+
+## The benchmark lane
+
+The nightly `bench` job runs `make bench` then `make bench-gate` and uploads
+`bench-results/*.json` + `bench-report.md` as the stably named
+`benchmark-report` artifact, which the release process attaches to each
+release. It is **release-blocking, not merge-blocking**: `project.md` says
+benchmark regressions are release blockers, and pyperf's methodology assumes a
+quieter machine than a shared PR runner. The one-iteration smoke tests in
+`tests/benchmarks/` ride the required `ci` lane instead, so a runtime refactor
+that breaks a benchmark fails at PR time. See
+[`docs/benchmarks.md`](benchmarks.md) for what each dimension measures, how to
+read the report, and the baseline-update procedure.
 
 ## Mutation-tested surface
 

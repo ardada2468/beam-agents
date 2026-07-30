@@ -31,6 +31,45 @@ jobs:
       - name: Mutation testing
         run: make mutation
 
+  # Release-blocking in the same sense as the mutation job: a red bench run
+  # blocks tagging a release, not merging a PR. pyperf's methodology assumes a
+  # quiet machine, so this never runs per-PR (design D3); `workflow_dispatch`
+  # covers the on-demand "does this PR cost latency?" case. The sampling
+  # parameters are the modules' pinned constants — no env knobs here, matching
+  # the e2e gate's discipline.
+  bench:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --group test --group bench
+
+      - name: Benchmarks
+        run: make bench
+
+      - name: Benchmark gate
+        run: make bench-gate
+
+      # Stable artifact name: the release process attaches the most recent
+      # green report (add-0-1-0-release consumes `benchmark-report`).
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: |
+            bench-results/*.json
+            bench-report.md
+          if-no-files-found: error
+
   dataflow:
     timeout-minutes: 30
     runs-on: ubuntu-latest
