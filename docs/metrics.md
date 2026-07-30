@@ -30,6 +30,7 @@ keeps its separate namespace.
 | `agent_errors` | Once per `.errors` record that is not an orphaned result (`activation_timeout`, `activation_error`, `hitl_timeout`, `ttl_wiped_suspension`). |
 | `suspensions` | Once per committed activation whose outcome was `Suspend`. |
 | `orphaned_results` | Once per `.errors` record with reason `orphaned_result`. |
+| `longterm_upserts` | Once per long-term memory row flushed through the `MemoryStore` in a committed activation's commit tail (`docs/memory.md`). A failed activation flushes nothing and a failed flush fails the activation, so this only counts durable writes on the committed path. |
 
 Two identities hold by construction, and are worth alerting on if they break:
 

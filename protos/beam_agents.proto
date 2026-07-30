@@ -236,3 +236,22 @@ message LlmCacheBlob {
   // re-serialize.
   int64 total_response_bytes = 3;
 }
+
+// One long-term memory row: the versioned envelope every MemoryStore backend
+// stores byte-identically (serialized with deterministic=true), keyed by
+// (entity_key, key) with entity_key carried as the backend's row/document key
+// rather than inside the envelope. `seq` is additionally stored backend-
+// natively (8-byte big-endian) so each backend's atomic primitive can enforce
+// the "apply iff incoming seq >= stored seq" upsert guard without decoding
+// this message. Additive: no existing message or field changes.
+message LongTermRecord {
+  uint32 state_schema_version = 1;
+  // The record's name within its entity's namespace; non-empty.
+  string key = 2;
+  // Opaque agent-owned payload bytes.
+  bytes value = 3;
+  // The staging activation's per-key monotonic counter; the upsert guard.
+  int64 seq = 4;
+  // The staging activation's frozen clock (unix-epoch ms).
+  int64 updated_at_ms = 5;
+}

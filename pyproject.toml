@@ -51,6 +51,17 @@ otlp = [
 vllm = [
   "vllm>=0.6",
 ]
+# The long-term MemoryStore backends (`beam_agents.memory.stores`). The runtime
+# never imports these: `import beam_agents.memory.stores` — and the ABC, factory,
+# and in-memory store — must work with none of them installed, which the
+# import-boundary test proves. Each backend imports its client inside its own
+# constructor, the same pattern as the effector's dedup stores.
+memory-stores = [
+  "google-cloud-bigtable",
+  "redis",
+  "google-cloud-firestore",
+  "sqlalchemy[asyncio]",
+]
 
 # The effector is a service, so it gets a console entry point. It is the only
 # executable this package ships; the runtime itself is a library embedded in a
@@ -87,6 +98,12 @@ test = [
   # mirrors the `otlp` extra rather than depending on it; the import-boundary
   # test proves the runtime still imports and validates without it installed.
   "opentelemetry-proto>=1.20",
+  # The SQLAlchemy MemoryStore's offline conformance leg runs against
+  # `sqlite+aiosqlite` — no docker, no server. Mirrored from the
+  # `memory-stores` extra (same pattern as `langgraph`/`otlp` above); the
+  # import-boundary test still proves the subpackage imports without it.
+  "sqlalchemy[asyncio]",
+  "aiosqlite",
 ]
 lint = [
   "ruff",
@@ -105,6 +122,11 @@ integration = [
   "google-cloud-pubsub",
   "redis",
   "google-cloud-bigtable",
+  # The long-term MemoryStore's live-backend legs (Redis, the Bigtable and
+  # Firestore emulators) need the same clients the `memory-stores` extra ships.
+  # Mirrored here rather than depending on the extra, so the `ci` unit lane —
+  # which syncs only lint/typecheck/test — still proves the offline boundary.
+  "google-cloud-firestore",
 ]
 bench = [
   "pyperf",
@@ -192,6 +214,17 @@ ignore = [
 "src/beam_agents/effector/sources.py" = ["PLC0415"]
 "src/beam_agents/effector/sinks.py" = ["PLC0415"]
 "src/beam_agents/effector/dedup.py" = ["PLC0415"]
+# The long-term MemoryStore backends import their client libraries (bigtable,
+# redis, firestore, sqlalchemy) inside constructors and call sites, on purpose:
+# those are the optional `memory-stores` extra and
+# `import beam_agents.memory.stores` must succeed with none of them installed.
+# `base.py` lazily imports the backend modules from the factory for the same
+# reason. Same PLC0415-is-the-point rationale as above.
+"src/beam_agents/memory/stores/base.py" = ["PLC0415"]
+"src/beam_agents/memory/stores/bigtable.py" = ["PLC0415"]
+"src/beam_agents/memory/stores/redis.py" = ["PLC0415"]
+"src/beam_agents/memory/stores/firestore.py" = ["PLC0415"]
+"src/beam_agents/memory/stores/sql.py" = ["PLC0415"]
 # The e2e gate's harness: B008 is the same Beam RestrictionParam/
 # WatermarkEstimatorParam-as-default idiom as core/dofn.py, and PLC0415 lazy
 # aiokafka imports keep these modules importable in the offline lane (host
@@ -279,6 +312,16 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "slack_sdk.*"
 ignore_missing_imports = true
+
+# The Firestore store's client is the optional `memory-stores` extra and is
+# absent from the `ci` lane where mypy runs, so `google.cloud.firestore` reads
+# as a missing attribute of the `google.cloud` namespace package, and its
+# `async_transactional` decorator (untyped gencode) makes the guarded upsert
+# read as untyped. Both are properties of an absent, unstubbed client, not of
+# this module; the rest of strict mode still applies.
+[[tool.mypy.overrides]]
+module = "beam_agents.memory.stores.firestore"
+disable_error_code = ["attr-defined", "untyped-decorator"]
 
 # Generated protobuf stubs use bare `Mapping` in a few __init__ signatures,
 # which trips strict `type-arg`. The gencode is never hand-edited, so we relax
@@ -455,6 +498,12 @@ disable_error_code = ["no-untyped-call"]
 
 [[tool.mypy.overrides]]
 module = "tests.semantics.test_retry_determinism"
+disable_error_code = ["no-untyped-call"]
+
+# Same Beam-untyped-API relaxation for the long-term flush's chaos gate, which
+# drives the same TestPipeline/TestStream/assert_that surface.
+[[tool.mypy.overrides]]
+module = "tests.semantics.test_longterm_retry_determinism"
 disable_error_code = ["no-untyped-call"]
 
 # The e2e gate and its harness drive Beam's untyped pipeline-construction API

@@ -11,6 +11,6 @@ hook so compaction strategies can ship without touching the facade.
 Importing this package has no side effects.
 """
 
-from beam_agents.memory.facade import Compactor, Memory, MemoryOverflow
+from beam_agents.memory.facade import Compactor, LongtermMemory, Memory, MemoryOverflow
 
-__all__ = ["Compactor", "Memory", "MemoryOverflow"]
+__all__ = ["Compactor", "LongtermMemory", "Memory", "MemoryOverflow"]

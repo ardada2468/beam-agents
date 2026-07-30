@@ -78,12 +78,14 @@ from beam_agents.hitl import (
     Route,
     intent_expired,
 )
+from beam_agents.memory.stores import MemoryStore, build_memory_store, parse_memory_store_uri
 from beam_agents.observability import ROLE_TIMER, ActivationTrace
 from beam_agents.observability.metrics import (
     COUNTER_ACTIVATIONS,
     COUNTER_AGENT_ERRORS,
     COUNTER_INTENTS_EMITTED,
     COUNTER_LLM_CALLS,
+    COUNTER_LONGTERM_UPSERTS,
     COUNTER_ORPHANED_RESULTS,
     COUNTER_SUSPENSIONS,
     COUNTER_TOOL_CALLS,
@@ -175,6 +177,15 @@ class ActivationError:
     event_time_ms: int = 0
 
 
+async def _build_store(scheme: str, parts: tuple[str, ...]) -> MemoryStore:
+    """Construct the long-term store on the bridge loop.
+
+    A coroutine because backend constructors bind async clients to the running
+    loop; ``build_memory_store`` itself is synchronous and import-lazy.
+    """
+    return build_memory_store(scheme, parts)
+
+
 def _ms_timestamp(ms: int) -> Timestamp:
     """Beam ``Timestamp`` from unix-epoch milliseconds."""
     return Timestamp(micros=ms * 1000)
@@ -227,6 +238,7 @@ class _AgentDoFn(beam.DoFn):
         tool_registry: ToolRegistry | None = None,
         metrics: MetricsSink | None = None,
         monotonic_ns: MonotonicNs | None = None,
+        longterm_memory: str | None = None,
     ) -> None:
         self._agent = agent
         self._provider_factory = provider_factory
@@ -249,17 +261,34 @@ class _AgentDoFn(beam.DoFn):
         self._monotonic_ns: MonotonicNs = (
             monotonic_ns if monotonic_ns is not None else time.monotonic_ns
         )
+        # The long-term store's URI, already grammar-validated by `AgentConfig`.
+        # `None` means the tier is off: no store is constructed and
+        # `ctx.memory.longterm` raises actionably.
+        self._longterm_memory = longterm_memory
         self._bridge: AsyncBridge | None = None
         self._provider: LLMClient | None = None
+        self._longterm_store: MemoryStore | None = None
 
-    # -- lifecycle: one bridge thread + provider per DoFn instance -------------
+    # -- lifecycle: one bridge thread + provider + store per DoFn instance -----
 
     def setup(self) -> None:
         self._bridge = AsyncBridge(cancel_grace_s=self._cancel_grace_s)
         self._bridge.start()
         self._provider = self._provider_factory()
+        if self._longterm_memory is not None:
+            # One client per DoFn instance, built on the bridge loop and shared
+            # across keys — the sanctioned kind of worker-local sharing (like
+            # the httpx pools), not cross-key mutable state (design D6).
+            scheme, parts = parse_memory_store_uri(self._longterm_memory)
+            self._longterm_store = self._bridge.run(
+                lambda: _build_store(scheme, parts), self._activation_timeout_s
+            )
 
     def teardown(self) -> None:
+        store = self._longterm_store
+        if store is not None and self._bridge is not None:
+            self._bridge.run(store.close, self._activation_timeout_s)
+        self._longterm_store = None
         if self._bridge is not None:
             self._bridge.stop()
             self._bridge = None
@@ -482,6 +511,7 @@ class _AgentDoFn(beam.DoFn):
     ) -> tuple[ActivationResult, int]:
         assert self._bridge is not None and self._provider is not None, "setup() not called"
         provider = self._provider
+        longterm_store = self._longterm_store
         policy = self._hitl_policy
         decode = self._decode
         monotonic_ns = self._monotonic_ns
@@ -515,6 +545,7 @@ class _AgentDoFn(beam.DoFn):
                     decode=decode,
                     monotonic_ns=monotonic_ns,
                     tool_registry=self._tool_registry,
+                    longterm_store=longterm_store,
                 ),
                 self._activation_timeout_s,
             )
@@ -613,6 +644,11 @@ class _AgentDoFn(beam.DoFn):
             # Keeps `intents_emitted` equal to the element count on `.intents`;
             # `_escalate` counts the one intent it mints outside this path.
             metrics.incr(COUNTER_INTENTS_EMITTED, len(result.intents))
+        if result.upserts:
+            # The flush already happened (commit tail, inside the activation);
+            # counting here keeps it on the committed path, so a discarded
+            # attempt's flush is not counted twice with its retry's.
+            metrics.incr(COUNTER_LONGTERM_UPSERTS, len(result.upserts))
         if tally.llm_calls:
             metrics.incr(COUNTER_LLM_CALLS, tally.llm_calls)
         if tally.tool_calls:

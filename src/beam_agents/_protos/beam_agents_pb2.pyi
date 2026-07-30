@@ -222,3 +222,17 @@ class LlmCacheBlob(_message.Message):
     entries: _containers.RepeatedCompositeFieldContainer[LlmCacheBlob.LlmCacheEntry]
     total_response_bytes: int
     def __init__(self, state_schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[LlmCacheBlob.LlmCacheEntry, _Mapping]]] = ..., total_response_bytes: _Optional[int] = ...) -> None: ...
+
+class LongTermRecord(_message.Message):
+    __slots__ = ("state_schema_version", "key", "value", "seq", "updated_at_ms")
+    STATE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    SEQ_FIELD_NUMBER: _ClassVar[int]
+    UPDATED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    state_schema_version: int
+    key: str
+    value: bytes
+    seq: int
+    updated_at_ms: int
+    def __init__(self, state_schema_version: _Optional[int] = ..., key: _Optional[str] = ..., value: _Optional[bytes] = ..., seq: _Optional[int] = ..., updated_at_ms: _Optional[int] = ...) -> None: ...

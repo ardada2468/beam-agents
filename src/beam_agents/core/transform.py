@@ -48,6 +48,7 @@ from beam_agents.core.error_records import (
     serialize_error_envelope,
 )
 from beam_agents.hitl import HitlPolicy
+from beam_agents.memory.stores import parse_memory_store_uri
 from beam_agents.observability import serialize_trace_event, trace_event_to_row
 from beam_agents.tools import ToolRegistry
 
@@ -418,6 +419,11 @@ class AgentConfig:
     traces_to: str | None = field(default=None, kw_only=True)
     errors_to: str | None = field(default=None, kw_only=True)
     sink_resolver: SinkResolver = field(default_factory=DefaultSinkResolver, kw_only=True)
+    # The long-term `MemoryStore` URI. `None` (the default) leaves the tier off:
+    # no store is constructed and `ctx.memory.longterm` raises actionably, so an
+    # unconfigured pipeline behaves exactly as before. Validated below by the
+    # import-free grammar check, like the sink URIs.
+    longterm_memory: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _require_positive("activation_timeout_s", self.activation_timeout_s)
@@ -432,6 +438,10 @@ class AgentConfig:
             uri = getattr(self, field_name)
             if uri is not None:
                 self.sink_resolver.validate(field_name, uri)
+        if self.longterm_memory is not None:
+            # Grammar only, and deliberately import-free: no backend client is
+            # imported until the DoFn's `setup()` builds the store.
+            parse_memory_store_uri(self.longterm_memory, field="longterm_memory")
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,6 +498,7 @@ class RunAgent(beam.PTransform):
             hitl_policy=self._config.hitl_policy,
             decode=self._config.decode,
             tool_registry=self._config.tool_registry,
+            longterm_memory=self._config.longterm_memory,
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
