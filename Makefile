@@ -4,7 +4,7 @@ COMPOSE := docker compose -f docker/compose.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-up-core compose-down compose-logs harness-build proto
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-18s %s\n", $$1, $$2}'
@@ -75,11 +75,62 @@ coverage-ratchet: ## Fail if coverage.xml regressed vs. coverage-baseline.toml
 
 # `--build`: the SDK harness image bakes in the current `src/beam_agents`, so a
 # stale image would run the gate against yesterday's runtime and pass.
+# COMPOSE_UP_FLAGS is overridable for CI ONLY where the flink-minicluster job
+# just built the image from the same checkout (harness-build/buildx) and a
+# compose `--build` in the daemon's builder could not see that cache anyway:
+# `make compose-up COMPOSE_UP_FLAGS=--wait`. Locally, keep the default.
+COMPOSE_UP_FLAGS ?= --wait --build
 compose-up: ## Start the local Redpanda/Redis/Flink stack
-	$(COMPOSE) up -d --wait --build
+	$(COMPOSE) up -d $(COMPOSE_UP_FLAGS)
+
+# The base integration lane's services only — no Flink JobManager/TaskManager,
+# no jobserver, no SDK-harness build. Service-list audit (2026-07-30): the
+# `integration and not semantics` tests reach exactly Redpanda
+# (localhost:19092 — tests/actions/test_write_intents_integration.py,
+# tests/effector/test_service_integration.py), Redis (localhost:16379 —
+# tests/effector/test_dedup_redis.py, test_service_integration.py), the
+# Pub/Sub emulator (localhost:8085 — test_write_intents_integration.py,
+# test_service_integration.py), and the Bigtable emulator (localhost:8086 —
+# tests/effector/test_dedup_bigtable.py). Nothing else in that selection
+# touches Flink (docker/compose.yaml: only the Beam-on-Flink gates submit
+# jobs). If a new test needs another service, grow this list — loudly.
+compose-up-core: ## Start only the non-Flink services (base integration lane)
+	$(COMPOSE) up -d --wait redpanda redis pubsub-emulator bigtable-emulator
+
+# Local-parity equivalent of the flink-minicluster job's cached buildx build
+# (the CI step uses docker/build-push-action with the same tag and file).
+# HARNESS_CACHE_ARGS is empty locally; CI passes the type=gha cache arguments.
+HARNESS_CACHE_ARGS ?=
+harness-build: ## Build the SDK-harness image via buildx (cache args overridable)
+	docker buildx build --load -t beam-agents-sdk-harness:2.72.0 \
+		-f docker/sdk-harness.Dockerfile $(HARNESS_CACHE_ARGS) .
 
 compose-down: ## Tear down the local stack
 	$(COMPOSE) down
+
+# Failure diagnostics for the docker lanes, run by CI `if: failure()` strictly
+# BEFORE `compose-down` removes the containers — and usable locally after a
+# red `make test-semantics`. Everything is best-effort (`|| true` / error
+# notes): a missing service or an unreachable Flink REST API must never fail
+# the capture, and teardown must still run. Spool *segment* files are
+# deliberately excluded (large, content-free for debugging); the harness's
+# `*-tm-threads.txt` thread dumps are the diagnostics worth keeping.
+LOGS_DIR ?= compose-diagnostics
+compose-logs: ## Collect compose service logs + Flink diagnostics into LOGS_DIR
+	mkdir -p $(LOGS_DIR)
+	for svc in redpanda redis pubsub-emulator bigtable-emulator \
+			flink-jobmanager flink-taskmanager flink-jobserver beam-sdk-harness; do \
+		$(COMPOSE) logs --no-color --timestamps $$svc > $(LOGS_DIR)/$$svc.log 2>&1 || true; \
+	done
+	cp docker/e2e-spool/*-tm-threads.txt $(LOGS_DIR)/ 2>/dev/null || true
+	curl -fsS --max-time 10 http://localhost:18081/jobs/overview \
+		> $(LOGS_DIR)/flink-jobs-overview.json 2>/dev/null \
+		|| echo "flink REST /jobs/overview unreachable at capture time" \
+			> $(LOGS_DIR)/flink-jobs-overview.json
+	curl -fsS --max-time 10 http://localhost:18081/taskmanagers \
+		> $(LOGS_DIR)/flink-taskmanagers.json 2>/dev/null \
+		|| echo "flink REST /taskmanagers unreachable at capture time" \
+			> $(LOGS_DIR)/flink-taskmanagers.json
 
 proto: ## Regenerate protobuf Python bindings from protos/*.proto
 	scripts/gen_proto.sh

@@ -21,9 +21,13 @@ contributor may already be running locally:
 
 ## The Beam-on-Flink path
 
-`flink-jobserver` and `beam-sdk-harness` exist for one test: the effectively-once
-end-to-end semantics gate. Nothing else in the suite submits a Beam job, and
-neither service is needed by the rest of the `integration` tier.
+`flink-jobserver` and `beam-sdk-harness` exist for the two Beam-on-Flink
+suites: the effectively-once end-to-end semantics gate
+(`make test-semantics`) and the adapter conformance matrix's Flink leg
+(`make test-conformance-flink`). Nothing else in the suite submits a Beam
+job, and neither service is needed by the rest of the `integration` tier —
+which is why CI's base integration job brings up only the non-Flink services
+via `make compose-up-core`.
 
 Three constraints are load-bearing and were established empirically — changing
 any of them silently breaks the gate:
@@ -48,8 +52,10 @@ Python-native sources and sinks.
 ## Usage
 
 ```sh
-make compose-up    # docker compose -f docker/compose.yaml up -d, waits for healthy
-make compose-down  # tears the stack down
+make compose-up       # full stack: docker compose up -d --wait --build
+make compose-up-core  # non-Flink services only (Redpanda, Redis, GCP emulators)
+make compose-down     # tears the stack down
+make compose-logs     # collect service logs + Flink diagnostics (LOGS_DIR=...)
 ```
 
 Unit tests never require this stack. Only `integration`- and

@@ -18,24 +18,34 @@
 #    forbids. Baking the dependencies in makes worker restart a process spawn.
 #
 # Built by `docker compose -f docker/compose.yaml build beam-sdk-harness`, which
-# `make compose-up` performs as part of bringing the stack up.
+# `make compose-up` performs as part of bringing the stack up. In CI the
+# flink-minicluster job builds the same tag via buildx with a GHA layer cache
+# (`make harness-build` is the local-parity command) and then starts compose
+# with the rebuild suppressed (`COMPOSE_UP_FLAGS=--wait`).
 
 FROM apache/beam_python3.11_sdk:2.72.0@sha256:9f42fcb45dd6831662830c36f107be4e60036170fb344d5bf55c3cdf5c46448e
 
-# `--no-deps` for beam_agents itself: apache-beam is already present at exactly
-# the matching version, and letting pip resolve `apache-beam[gcp]>=2.60` would
-# fight the image's own install. The runtime deps beam_agents actually needs at
-# import time are named explicitly instead. `aiokafka` is for the e2e gate's
-# outbox DoFn, which publishes intents to Kafka from inside this container.
+# Third-party dependencies FIRST, before any repo files are copied: this layer
+# depends only on the pins in this Dockerfile line, so a `src/`-only change
+# reuses it from cache instead of re-downloading everything (the
+# flink-minicluster CI job persists it via a buildx type=gha layer cache).
+# The runtime deps beam_agents actually needs at import time are named
+# explicitly (see the `--no-deps` install below). `aiokafka` is for the e2e
+# gate's outbox DoFn, which publishes intents to Kafka from inside this
+# container. `langgraph`/`langchain-core` mirror the `langgraph` extra: the
+# adapter conformance matrix's Flink leg runs the LangGraph adapter's cells
+# inside this harness, so the framework must be importable here (the LangGraph
+# e2e cells would otherwise fail worker-side instead of skipping host-side).
+RUN pip install --no-cache-dir "protobuf==6.33.6" "httpx[http2]" "pydantic>=2" "aiokafka" \
+    "langgraph>=1.0,<2" "langchain-core>=1.0,<2"
+
 COPY pyproject.toml README.md /src/
 COPY src /src/src
-# `langgraph`/`langchain-core` mirror the `langgraph` extra: the adapter
-# conformance matrix's Flink leg runs the LangGraph adapter's cells inside
-# this harness, so the framework must be importable here (the LangGraph e2e
-# cells would otherwise fail worker-side instead of skipping host-side).
-RUN pip install --no-cache-dir "protobuf==6.33.6" "httpx[http2]" "pydantic>=2" "aiokafka" \
-    "langgraph>=1.0,<2" "langchain-core>=1.0,<2" \
- && pip install --no-cache-dir --no-deps /src \
+# `--no-deps` for beam_agents itself: apache-beam is already present at exactly
+# the matching version, and letting pip resolve `apache-beam[gcp]>=2.60` would
+# fight the image's own install — its real import-time deps were installed in
+# the cached layer above.
+RUN pip install --no-cache-dir --no-deps /src \
  && python -c "import apache_beam; import beam_agents.core.transform; \
 import beam_agents._protos; import langgraph; print('sdk harness ready', apache_beam.__version__)"
 
