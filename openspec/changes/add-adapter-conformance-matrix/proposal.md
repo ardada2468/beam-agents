@@ -1,0 +1,34 @@
+## Why
+
+The runtime promises adapter-agnostic semantics — "bring-your-own-framework adapters" is a named differentiator, and every correctness invariant (atomic commit, deterministic intents, replay cache, fail-closed timeouts) is stated for *the runtime*, not for one adapter. But today those invariants are only verified through hand-written agents: the semantics gates (`test_retry_determinism.py`, `test_hitl_fail_closed.py`, the effectively-once e2e gate) all drive bespoke module-level agent functions, and the LangGraph adapter has its own one-off e2e test covering a single suspend/resume path. Nothing proves that *each* adapter, driven through the same runtime, exhibits the same lifecycle behavior — and nothing runs adapter behavior on Flink at all except the (heavyweight, adapter-free) effectively-once gate. As ADK and Pydantic AI adapters land, every new adapter would otherwise re-invent its own partial test suite and silently diverge. This change builds a single parameterized conformance matrix — seven lifecycle scenarios × every registered adapter × two runners (DirectRunner, Flink) — so an adapter that breaks suspension, intent determinism, replay-cache reuse, timer fallback, or state-only resume fails the same named scenario everywhere.
+
+## What Changes
+
+- Introduce an **adapter conformance harness** (`tests/conformance/`): a pytest-parameterized suite where each *scenario* is written once against the runtime seam (`RunAgent` + `ActivationContext`/outcomes) and each *adapter* supplies a `ConformanceAdapter` fixture — a factory that builds an equivalent agent (same tools, same scripted FakeLLM conversation, same suspend/approval behavior) for that framework. Initial adapter axis: the reference protocol agent (plain `Agent` async function — the baseline every framework must match) and `LangGraphAgent`. ADK / Pydantic AI adapters plug into the same registry when they land; an installed-but-unregistered adapter package fails collection rather than silently shrinking the matrix.
+- Implement the **seven conformance scenarios**, each derived from existing spec'd runtime behavior:
+  1. **single-shot** — fast path: one activation, model call, `Complete` output; no continuation, no intents.
+  2. **multi-tool inline** — several read-only tools execute inline within one activation; still fast path, tool calls visible in traces, zero intents.
+  3. **suspension resume** — side-effect tool → staged `ToolIntent` (deterministic `intent_id_for`), `Suspend`, re-injected `ToolResult` on the same key resumes to `Complete`.
+  4. **approval timeout fallback** — approval-kind suspension whose HITL deadline elapses: the real-time timer fires the fail-closed fallback path, the fallback output is emitted, and a late decision surfaces as `orphaned_result` on `.errors`.
+  5. **restart mid-suspension** — the runtime is torn down between the suspend commit and the resume delivery; the resume succeeds from committed protobuf state alone (continuation + LLM cache), proving no adapter smuggles resume state through process memory.
+  6. **bundle retry cache assertions** — a chaos-forced commit failure (existing `beam_agents.testing.chaos`) on the resume path: zero additional FakeLLM provider calls (replay cache hit) and byte-identical committed intents across the retry.
+  7. **TTL expiry** — working memory written by an activation is GC'd when the watermark passes the memory TTL; a subsequent activation on the same key observes empty memory.
+- Run the matrix on **two runners**: a DirectRunner leg (`-m "semantics and not integration"` — offline, TestPipeline/TestStream scripted watermark and processing-time advances, required `ci` check) and a **Flink leg** (`-m "semantics and integration"`, docker compose Flink 1.19 mini-cluster via the portable jobserver, reusing the e2e harness's stack provisioning/freshness machinery) running in the `integration` workflow. Scenarios whose mechanics are DirectRunner-only (TestStream clock scripting, chaos monkeypatch, in-process restart simulation) declare that explicitly per-scenario rather than being dropped silently; the Flink leg covers the scenarios expressible over Kafka in/out with real-time timers and a real TaskManager restart for scenario 5.
+- Extend the existing semantics-partition check (`scripts/check_semantics_partition.py`) coverage to the new tests automatically (they carry `semantics`, and the Flink leg additionally `integration`), and add a Makefile target for the Flink conformance leg.
+
+## Capabilities
+
+### New Capabilities
+- `adapter-conformance-matrix`: The conformance contract every adapter must satisfy — the `ConformanceAdapter` fixture seam, the seven named lifecycle scenarios with their observable assertions (outputs, intents, traces, errors, state), the adapter registry that fails collection on unregistered installed adapters, and the two-runner execution matrix with its marker/CI wiring.
+
+### Modified Capabilities
+<!-- The runtime, adapter, HITL, replay-cache, and chaos contracts are consumed unchanged; this change verifies them across adapters rather than altering any of them. -->
+(none — `stateful-agent-runtime`, the LangGraph adapter, HITL fail-closed, `llm-replay-cache`, `fake-llm`, and `retry-determinism-gate` behavior are consumed and verified as-is)
+
+## Impact
+
+- **Depends on:** the stateful `_AgentDoFn` runtime (suspend/resume, HITL + TTL timers, atomic commit), the LangGraph adapter (`LangGraphAgent`, `BeamToolNode`), `beam_agents.testing.chaos`, `FakeLLM`, and — for the Flink leg — the docker compose stack and the e2e harness's Flink provisioning helpers (`tests/semantics/_e2e/stack.py`), which get a light refactor so conformance runs can reuse stack freshness/health-checking without importing the effectively-once gate's ledger/effector machinery.
+- **New code:** `tests/conformance/` (scenario suite, `ConformanceAdapter` protocol + registry, per-adapter fixtures, Flink-leg pipeline builder). Test-infrastructure only: no changes to `src/` production modules are expected; if a scenario is inexpressible without a runtime hook, that is a finding to raise, not a thing to patch around silently.
+- **CI/build:** DirectRunner leg rides the existing required offline semantics selection in `ci.yml`; Flink leg joins `integration.yml` via a new `make test-conformance-flink` target. `project.md` testing-tier notes record the matrix.
+- **Dependencies:** no new third-party dependencies. LangGraph cells skip cleanly (`pytest.importorskip`) in the unit lane where the extra isn't installed, mirroring the existing adapter-test pattern; the integration lane installs it and runs the full matrix.
+- **Verification surface:** the matrix is itself the verification; a small meta-test asserts the registry × scenario × runner parameterization produces the expected cell count so a wiring regression can't silently skip cells.

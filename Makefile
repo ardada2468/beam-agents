@@ -4,7 +4,7 @@ COMPOSE := docker compose -f docker/compose.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-18s %s\n", $$1, $$2}'
@@ -42,8 +42,17 @@ test-integration: ## Run integration-marked tests except semantics gates (requir
 # hide in the overlap. scripts/check_semantics_partition.py enforces that the
 # two selections exactly partition the tier. No exit-5 tolerance: an empty
 # selection is a deselected gate, not a pending one.
+# Scoped to tests/semantics: the adapter conformance matrix's Flink leg
+# carries the same markers but runs as its own integration.yml step
+# (test-conformance-flink, below) so an e2e-gate timeout and a conformance
+# failure stay distinguishable in CI.
 test-semantics: ## Run docker-backed semantics gates (requires compose-up)
-	uv run pytest -m "semantics and integration"
+	uv run pytest -m "semantics and integration" tests/semantics
+
+# Same no-exit-5 stance: an empty conformance selection means the matrix was
+# deselected, not that it is pending.
+test-conformance-flink: ## Run the adapter conformance matrix's Flink leg (requires compose-up)
+	uv run pytest -m "semantics and integration" tests/conformance
 
 # No exit-5 tolerance: this selection is required to be non-empty. An empty
 # collection here means the gate was accidentally deselected, not that it's

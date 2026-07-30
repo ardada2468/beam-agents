@@ -43,6 +43,11 @@ jobs:
       - name: Semantics tests (docker-backed)
         run: make test-semantics
 
+      # Kept separate from test-semantics so an e2e-gate timeout and an
+      # adapter-conformance failure are distinguishable in CI.
+      - name: Adapter conformance matrix (Flink leg)
+        run: make test-conformance-flink
+
       - name: Stop local stack
         if: always()
         run: make compose-down

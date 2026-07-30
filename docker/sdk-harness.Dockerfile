@@ -29,10 +29,15 @@ FROM apache/beam_python3.11_sdk:2.72.0@sha256:9f42fcb45dd6831662830c36f107be4e60
 # outbox DoFn, which publishes intents to Kafka from inside this container.
 COPY pyproject.toml README.md /src/
 COPY src /src/src
+# `langgraph`/`langchain-core` mirror the `langgraph` extra: the adapter
+# conformance matrix's Flink leg runs the LangGraph adapter's cells inside
+# this harness, so the framework must be importable here (the LangGraph e2e
+# cells would otherwise fail worker-side instead of skipping host-side).
 RUN pip install --no-cache-dir "protobuf==6.33.6" "httpx[http2]" "pydantic>=2" "aiokafka" \
+    "langgraph>=1.0,<2" "langchain-core>=1.0,<2" \
  && pip install --no-cache-dir --no-deps /src \
  && python -c "import apache_beam; import beam_agents.core.transform; \
-import beam_agents._protos; print('sdk harness ready', apache_beam.__version__)"
+import beam_agents._protos; import langgraph; print('sdk harness ready', apache_beam.__version__)"
 
 # The e2e gate's pipeline-side DoFns (spool source, outbox producer, test
 # agent) live under tests/semantics/_e2e — deliberately NOT in the beam_agents
