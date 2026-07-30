@@ -214,6 +214,16 @@ ignore = [
 # harness imports aiokafka lazily like the e2e harness, and the leg
 # orchestration is one scenario told in phases.
 "tests/conformance/*" = ["PLC0415", "PLR0915"]
+# The Slack approval example's real gateway imports slack-sdk inside its
+# constructor, on purpose: slack-sdk is a dev-surface dependency and the
+# example must import (and its offline tests must run) without it installed.
+# Same PLC0415-is-the-point rationale as the effector's adapters above.
+"examples/slack_approval/slack.py" = ["PLC0415"]
+
+[tool.ruff.lint.isort]
+# `examples/` is repo-root sample code outside the wheel; without this ruff
+# would sort its imports with the third-party block.
+known-first-party = ["examples"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -222,6 +232,8 @@ indent-style = "space"
 [tool.mypy]
 strict = true
 python_version = "3.11"
+# `examples` is held to the same strict bar as `src` (see the slack-approval
+# change, tasks 8.1) even though it ships outside the wheel.
 files = ["src", "tests", "examples"]
 enable_error_code = ["ignore-without-code"]
 warn_unreachable = true
@@ -239,6 +251,13 @@ ignore_missing_imports = true
 # where mypy runs. Their lazy imports must not read as missing-module errors.
 [[tool.mypy.overrides]]
 module = ["aiokafka.*", "redis.*"]
+ignore_missing_imports = true
+
+# slack-sdk is a dev-surface dependency of the Slack approval example only,
+# absent from the `ci` lane's environment; `SocketModeGateway` imports it
+# lazily, same pattern (and same relaxation) as the effector's clients above.
+[[tool.mypy.overrides]]
+module = "slack_sdk.*"
 ignore_missing_imports = true
 
 # Generated protobuf stubs use bare `Mapping` in a few __init__ signatures,
@@ -292,14 +311,21 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 # TestPipeline/assert_that) — the same per-module relaxation every
 # pipeline-driving test module carries. Everything non-Beam in these modules
 # stays strictly typed; tests.examples.test_docs_snippets and
-# test_failure_streak_alarm keep their own (stricter/other) settings.
+# test_failure_streak_alarm keep their own (stricter/other) settings. The
+# Slack example is listed by its pipeline-wiring module only (agent.py) so its
+# service modules — surface/blocks/config/slack — stay fully strict.
 [[tool.mypy.overrides]]
 module = [
-    "examples.*",
+    "examples.hello_world",
+    "examples.fraud_triage",
+    "examples.iot_reaction",
+    "examples.slack_approval.agent",
     "tests.examples.test_hello_world",
     "tests.examples.test_fraud_triage",
     "tests.examples.test_iot_reaction",
     "tests.examples.test_continuous_eval",
+    "tests.examples.test_slack_approval",
+    "tests.examples.test_slack_approval_kafka",
 ]
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
