@@ -1,7 +1,8 @@
 # CI workflow map
 
-Four workflows under `.github/workflows/`, one per testing tier in
-[`openspec/project.md`](../openspec/project.md):
+Five workflows under `.github/workflows/` — one per testing tier in
+[`openspec/project.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/project.md),
+plus the docs build:
 
 | Workflow / job      | Trigger                          | Tier                          | Required for merge |
 |---------------------|-----------------------------------|--------------------------------|---------------------|
@@ -10,6 +11,7 @@ Four workflows under `.github/workflows/`, one per testing tier in
 | `integration.yml` → `flink-minicluster` job | push to `main`, pull request | docker-backed semantics gates on the Flink mini-cluster (`make test-semantics` + `make test-conformance-flink`, full compose stack) | yes (add to required contexts at merge) |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
 | `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation unconditionally; dataflow and provider smoke tests when credentials exist | no |
+| `docs.yml`          | push to `main`, pull request      | docs (strict `mkdocs` build; Pages deploy from `main`) | no (see the docs-workflow note) |
 
 The two `integration.yml` jobs run in parallel and re-run independently: a
 red conformance leg never blocks or re-runs the Kafka/Redis integration
@@ -19,8 +21,23 @@ third-party dependency layer) and starts compose against that
 just-built image (`COMPOSE_UP_FLAGS=--wait`).
 
 Every workflow step maps 1:1 to a `Makefile` target — see the
-[`Makefile`](../Makefile) for the exact commands `ci-lint`, `ci-unit`, etc.
-run locally.
+[`Makefile`](https://github.com/ardada2468/beam-agents/blob/main/Makefile)
+for the exact commands `ci-lint`, `ci-unit`, etc. run locally.
+
+## The docs workflow
+
+`docs.yml` runs `make docs` (`mkdocs build --strict`) on every pull request
+and push to `main`: a broken internal link or an unresolvable example-snippet
+inclusion fails the build. On pushes to `main` only, it additionally publishes
+the built site to GitHub Pages via the official Pages actions
+(`upload-pages-artifact` + `deploy-pages`) with a permissions-scoped
+`GITHUB_TOKEN` — no `gh-pages` branch and no long-lived credential, the same
+no-key posture as `nightly`.
+
+First deployment requires a one-time repository setting outside version
+control: **Settings → Pages → Source = GitHub Actions**. The check is
+deliberately not merge-required initially; revisit alongside the branch
+protection rules below once it has run quietly for a while.
 
 ## Triggering `nightly` manually
 

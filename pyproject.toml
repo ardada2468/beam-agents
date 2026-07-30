@@ -98,7 +98,14 @@ integration = [
 bench = [
   "pyperf",
 ]
-docs = []
+# The docs site toolchain (mkdocs-material bundles mkdocs and
+# pymdown-extensions, whose `snippets` extension renders the example modules
+# verbatim). Never a runtime dependency, never imported by src/, and absent
+# from the ci unit lane's lint/typecheck/test sync — the docs build is pure
+# text processing and must not need apache-beam.
+docs = [
+  "mkdocs-material>=9,<10",
+]
 # pre-commit itself, plus grpcio-tools for the protobuf-drift hook (gen_proto.sh
 # invokes grpc_tools.protoc).
 precommit = [
@@ -119,7 +126,7 @@ packages = ["src/beam_agents"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests"]
+src = ["src", "tests", "examples"]
 # Generated protobuf bindings are committed but never hand-edited or linted.
 extend-exclude = ["src/beam_agents/_protos/*_pb2.py", "src/beam_agents/_protos/*_pb2.pyi"]
 
@@ -194,7 +201,7 @@ indent-style = "space"
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["src", "tests"]
+files = ["src", "tests", "examples"]
 enable_error_code = ["ignore-without-code"]
 warn_unreachable = true
 
@@ -257,6 +264,20 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 # over the published errors format, so every call is a Beam one.
 [[tool.mypy.overrides]]
 module = "tests.examples.test_failure_streak_alarm"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# The runnable docs examples and their tests drive Beam's untyped pipeline API
+# (Create/TestStream/WithKeys/Map/Filter, TestPipeline/assert_that) — the same
+# per-module relaxation every pipeline-driving test module carries. Everything
+# non-Beam in these modules stays strictly typed; tests.examples.test_docs_snippets
+# and test_failure_streak_alarm keep their own (stricter/other) settings.
+[[tool.mypy.overrides]]
+module = [
+    "examples.*",
+    "tests.examples.test_hello_world",
+    "tests.examples.test_fraud_triage",
+    "tests.examples.test_iot_reaction",
+]
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # Beam types `Coder.from_type_hint` as `-> CoderT` (a cls-bound TypeVar), so our
