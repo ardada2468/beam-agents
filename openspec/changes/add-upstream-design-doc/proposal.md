@@ -1,0 +1,37 @@
+## Why
+
+beam-agents was built from day one to be upstreamable: the purpose statement makes agents "first-class citizens of Apache Beam streaming pipelines," the wire and state schemas are language-neutral protobuf precisely "to preserve cross-language future," and the whole runtime is expressed in Beam-native primitives (stateful DoFn, timers, multi-output transforms) rather than a private engine. The natural home for that runtime is the Beam repository itself — an `apache_beam.ml.agents` package alongside `apache_beam.ml`'s existing inference and transform machinery — where it gains Beam's release cadence, runner test infrastructure, and community reach, and where it directly answers Apache Flink's competing Flink Agents effort from inside the Beam project.
+
+Upstreaming into an ASF project does not start with a pull request. The Beam community works from shared design documents announced and discussed on the dev@beam.apache.org mailing list; a contribution of this size additionally raises governance questions (code donation mechanics, IP clearance, maintainership) that must be addressed honestly up front or the thread stalls. Today none of that material exists: the constitution (`openspec/project.md`) is written for contributors to *this* repo, not for Beam committers evaluating a donation, and the evidence that makes the proposal credible — the benchmark report against Flink Agents, the adapter conformance matrix as a compatibility story, design-partner usage — is being assembled by the 0.3 release effort (`add-0-3-0-release`). This change produces the two artifacts that convert that raw material into an upstream proposal: a Beam-community-style design document and a concrete plan for the dev@ thread. It deliberately does NOT move any code.
+
+## What Changes
+
+- **Author a Beam-community design document** proposing an `apache_beam.ml.agents` package, as markdown in this repo (target `docs/design/apache-beam-ml-agents.md`; venue/format mechanics are design D1). The doc is a distillation of `openspec/project.md` re-aimed at a Beam-committer audience:
+  - the runtime-not-framework governing principle and why it fits Beam (Beam owns execution semantics, frameworks own authoring — the same division of labor as `RunInference` vs. model frameworks);
+  - the seven correctness invariants (atomic commit, deterministic intent IDs, replay cache, per-key serialization, side effects only via intents, fail-closed timeouts, protobuf-only state) stated as the contract the package would bring to Beam, consistent with `project.md` rather than paraphrased into something weaker;
+  - the two execution paths (fast path / re-injection path) and why iterative loops cycle through the message bus, never the DAG;
+  - the keyed-state and timer layout (`MEMORY`/`CONTINUATION`/`LLM_CACHE`/`PENDING`/`SEQ`; `TTL_TIMER`/`HITL_TIMER`/`FLUSH_TIMER`) expressed against Beam Python SDK realities (no MapState, no async DoFn, KV-input requirement);
+  - the intents/effector effectively-once model, including its honest boundary (duplicates bounded to the crash window; true exactly-once requires tools idempotent on `intent_id`);
+  - the adapter conformance matrix (`tests/conformance/`: seven lifecycle scenarios × registered adapters × DirectRunner/Flink legs) as the compatibility story for "bring your own framework";
+  - an evidence section populated from 0.3 artifacts: the benchmark report vs. Flink Agents, conformance-matrix results, and design-partner usage — with no invented numbers; every figure traces to a 0.3 artifact.
+- **Write a decision record of what would and would not move** into `apache_beam.ml.agents`, module by module (design D2): the core runtime, model seam, tools/actions/memory/hitl, and observability are candidates to move; the reference effector is proposed to stay an external service (it is a deployable, not a transform); adapters and provider-specific pieces get an explicit per-module disposition with rationale. This record is a section of the design doc, not a separate artifact.
+- **Plan the dev@beam.apache.org thread** (target `docs/design/apache-beam-ml-agents-thread-plan.md`): the announcement email draft, and an objections register — each anticipated question or objection paired with a prepared answer or an honest "open, to be resolved on the thread." At minimum: why stateful DoFn rather than SDF; why this is not `RunInference` with extra steps; the dependency policy (Beam core cannot grow provider SDK dependencies — and does not need to, since the model clients are httpx-based; `httpx`/`pydantic` map to a Beam optional extra); relationship to Flink Agents; cross-language/Java parity expectations; maintainership commitment; and governance/donation mechanics including IP clearance for a code donation, honestly listed rather than glossed.
+- **Route ASF-process uncertainty into open questions, not invented detail.** Where the exact mechanics (IP-clearance applicability for this donation shape, PMC sponsorship, whether the package lands incubating-style behind an experimental annotation) are not verifiable from public ASF/Beam policy, the doc and thread plan say so and carry the item as a question for the thread.
+
+## Capabilities
+
+### New Capabilities
+
+- `upstream-design-doc`: the content contract for the upstreaming artifacts — what the design document must state (principles, invariants, execution model, state layout, effectively-once boundary, compatibility story, evidence), what the decision record must disposition, and what the thread plan must contain (announcement draft, objections register with answers, honest ASF-process treatment).
+
+### Modified Capabilities
+
+None. This change writes planning/communication documents; no runtime, test, packaging, or CI behavior changes, so no existing capability's requirements are touched.
+
+## Impact
+
+- **Depends on:** `add-0-3-0-release` (C35, pending sibling proposal). The evidence section is populated from 0.3 deliverables — the benchmark report vs. Flink Agents, the full conformance-matrix run, and design-partner usage summaries. Drafting of the distillation sections can begin earlier, but the doc cannot be declared thread-ready (and the dev@ announcement cannot be sent) before 0.3 ships those artifacts; the tasks are sequenced accordingly. Also builds on the archived/pending changes it describes: the stateful DoFn runtime, `add-adapter-conformance-matrix`, the reference effector, and the LangGraph adapter.
+- **New code:** none — new documents only: `docs/design/apache-beam-ml-agents.md` (design doc, including the move/stay decision record) and `docs/design/apache-beam-ml-agents-thread-plan.md` (announcement draft + objections register), plus a small docs-consistency test (`tests/docs/test_upstream_design_doc.py`) keeping the doc's invariant list and internal links honest.
+- **Modified code:** none under `src/`. `docs/` gains the new `design/` directory; existing docs are unchanged. No proto, dependency, or public-API changes.
+- **CI/build:** no new workflows or Makefile targets. The docs-consistency test rides the existing offline unit lane (`make test-unit`); `make lint` / pre-commit already cover the repo's formatting hooks for the new files.
+- **Gates:** `make lint`, `uv run pre-commit run --all-files`, `openspec validate add-upstream-design-doc --strict`, and the docs-consistency test green in `make test-unit`. Sending the actual dev@ email is a follow-on action gated on 0.3 evidence being in hand — explicitly out of scope for this change's completion.
