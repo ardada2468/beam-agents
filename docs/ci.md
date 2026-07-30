@@ -3,12 +3,20 @@
 Four workflows under `.github/workflows/`, one per testing tier in
 [`openspec/project.md`](../openspec/project.md):
 
-| Workflow           | Trigger                          | Tier                          | Required for merge |
+| Workflow / job      | Trigger                          | Tier                          | Required for merge |
 |---------------------|-----------------------------------|--------------------------------|---------------------|
 | `ci.yml`            | push to `main`, pull request      | lint, type, unit (3.11–3.12 × ubuntu) | yes |
-| `integration.yml`   | push to `main`, pull request      | integration + semantics (docker compose) | yes |
+| `integration.yml` → `integration` job | push to `main`, pull request | integration minus semantics gates (core services only: Redpanda, Redis, GCP emulators via `make compose-up-core`) | yes |
+| `integration.yml` → `flink-minicluster` job | push to `main`, pull request | docker-backed semantics gates on the Flink mini-cluster (`make test-semantics` + `make test-conformance-flink`, full compose stack) | yes (add to required contexts at merge) |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
 | `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation unconditionally; dataflow and provider smoke tests when credentials exist | no |
+
+The two `integration.yml` jobs run in parallel and re-run independently: a
+red conformance leg never blocks or re-runs the Kafka/Redis integration
+tests, and vice versa. The `flink-minicluster` job pre-builds the SDK-harness
+image through a buildx GHA layer cache (a `src/`-only change reuses the
+third-party dependency layer) and starts compose against that
+just-built image (`COMPOSE_UP_FLAGS=--wait`).
 
 Every workflow step maps 1:1 to a `Makefile` target — see the
 [`Makefile`](../Makefile) for the exact commands `ci-lint`, `ci-unit`, etc.
@@ -24,10 +32,13 @@ ever used.
 
 ## Making checks required
 
-Once this repository has a GitHub remote, mark `ci`, `integration`, and
-`quality` as required status checks on `main` under
+Once this repository has a GitHub remote, mark `ci`, `integration`,
+`flink-minicluster`, and `quality` as required status checks on `main` under
 **Settings → Branches → Branch protection rules**. `nightly` is intentionally
-not required.
+not required. Note the asymmetry inherited from the job split: the base job
+deliberately kept the `integration` context name (renaming a required context
+strands branch protection), while `flink-minicluster` is a new context that
+must be *added* — until it is, the Flink gates run but are not merge-blocking.
 
 ## Mutation-tested surface
 
@@ -51,12 +62,29 @@ the repository: 10,000 events through real Kafka (Redpanda), `RunAgent` on the
 Flink mini-cluster via the Beam job server, real `beam-agents-effector`
 processes with Redis dedup, SIGKILLed effector workers, a killed TaskManager,
 and a full cancel-and-resubmit replay from the ingest spool. It runs in the
-`integration` workflow via `make test-semantics` — the only selection that
-runs it (`make test-integration` excludes semantics gates so the gate is
-not paid for twice per job; removing the `test-semantics` step would
-therefore silently drop the release gate) — and is budgeted ≤ 15 minutes.
-`BEAM_AGENTS_E2E_EVENTS` tunes the volume down for local iteration; CI never
-sets it.
+`integration` workflow's `flink-minicluster` job via `make test-semantics` —
+the only selection that runs it (`make test-integration` excludes semantics
+gates so the gate is not paid for twice; removing the `test-semantics` step
+would therefore silently drop the release gate) — and is budgeted
+≤ 15 minutes. `BEAM_AGENTS_E2E_EVENTS` tunes the volume down for local
+iteration; CI never sets it.
+
+### Debugging a red `flink-minicluster` run
+
+When any test step of a docker-backed job fails, the job runs
+`make compose-logs` *before* teardown and uploads the result as a workflow
+artifact (`flink-minicluster-diagnostics-attempt-<n>`, or
+`integration-diagnostics-attempt-<n>` for the base job; 14-day retention),
+downloadable from the run's summary page. It contains per-service
+`docker compose logs` files, any TaskManager thread dumps the harness wrote
+(`*-tm-threads.txt` — spool segment files are excluded), and best-effort
+snapshots of the Flink REST `/jobs/overview` and `/taskmanagers` endpoints.
+Green runs upload nothing. The local equivalent after a red
+`make test-semantics`, while the stack is still up:
+
+```sh
+make compose-logs LOGS_DIR=compose-diagnostics
+```
 
 ### Replaying a failure from its seed
 
