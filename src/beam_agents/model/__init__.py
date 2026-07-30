@@ -59,6 +59,11 @@ from beam_agents.model.replay_cache import (
     ReplayEntry,
     compute_cache_key,
 )
+from beam_agents.model.vllm import (
+    VllmEndpointProvider,
+    VllmSidecarProvider,
+    vllm_sidecar_factory,
+)
 
 __all__ = [
     "BLOB_CAP_BYTES",
@@ -88,6 +93,8 @@ __all__ = [
     "StagingSink",
     "TokenUsage",
     "UnmatchedRequestError",
+    "VllmEndpointProvider",
+    "VllmSidecarProvider",
     "anthropic_decode",
     "compute_cache_key",
     "fail_then_succeed",
@@ -97,4 +104,5 @@ __all__ = [
     "openai_compat_decode",
     "raise_error",
     "respond_with",
+    "vllm_sidecar_factory",
 ]

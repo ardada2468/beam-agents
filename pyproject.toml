@@ -40,6 +40,17 @@ langgraph = [
 otlp = [
   "opentelemetry-proto>=1.20",
 ]
+# The vLLM GPU-worker sidecar (`beam_agents.model.vllm.VllmSidecarProvider`).
+# Endpoint mode and `import beam_agents.model` never need it: `vllm` is imported
+# lazily inside the sidecar's real engine constructor only, and constructing the
+# sidecar without this extra raises an actionable error naming it. The tree is
+# heavy (torch/CUDA) and GPU-oriented, so no CI lane installs it — the offline
+# tier drives the engine seam with a fake engine, and only the hardware-gated
+# nightly smoke test (tests/smoke/test_vllm_sidecar.py) needs the real thing.
+# Version floor: the AsyncLLMEngine surface the seam adapter drives.
+vllm = [
+  "vllm>=0.6",
+]
 
 # The effector is a service, so it gets a console entry point. It is the only
 # executable this package ships; the runtime itself is a library embedded in a
@@ -321,6 +332,14 @@ disable_error_code = ["type-arg", "no-untyped-call", "no-any-return"]
 # calls `inc`/`update` on Beam's delegating handles.
 [[tool.mypy.overrides]]
 module = "beam_agents.observability.metrics"
+disable_error_code = ["no-untyped-call"]
+
+# Beam's `apache_beam.utils.shared.Shared` ships without annotations, so
+# constructing the sidecar's per-process engine handle reads as an untyped call
+# under strict mode — the same Beam-untyped-API relaxation the other
+# Beam-driving modules get, for the vLLM provider module and its tests.
+[[tool.mypy.overrides]]
+module = ["beam_agents.model.vllm", "tests.model.test_vllm"]
 disable_error_code = ["no-untyped-call"]
 
 # The stateful DoFn and its transform are the densest Beam surface in the repo:
