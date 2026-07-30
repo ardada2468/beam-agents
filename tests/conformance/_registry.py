@@ -21,6 +21,10 @@ from typing import TYPE_CHECKING
 
 from beam_agents.model.fake import FakeLLM
 from tests.conformance._adapters.langgraph import build_langgraph_agent, build_langgraph_provider
+from tests.conformance._adapters.pydantic_ai import (
+    build_pydantic_ai_agent,
+    build_pydantic_ai_provider,
+)
 from tests.conformance._adapters.reference import build_reference_agent, build_reference_provider
 from tests.conformance._spec import SCENARIOS_BY_NAME, ScenarioSpec, registry_for
 
@@ -69,6 +73,13 @@ ADAPTERS: tuple[ConformanceAdapter, ...] = (
         adapters_subpackage="langgraph",
         build_agent=build_langgraph_agent,
         build_provider=build_langgraph_provider,
+    ),
+    ConformanceAdapter(
+        name="pydantic_ai",
+        requires="pydantic_ai",
+        adapters_subpackage="pydantic_ai",
+        build_agent=build_pydantic_ai_agent,
+        build_provider=build_pydantic_ai_provider,
     ),
 )
 
@@ -172,11 +183,16 @@ def unregistered_adapters(package: ModuleType, registered: Collection[str]) -> l
     A subpackage whose import fails with ``ImportError`` is *not* reported:
     its optional framework is absent from this environment, so its cells
     could not run here anyway (they skip via ``requires`` where registered).
+
+    Underscore-prefixed names are *not* adapters: the project's convention
+    marks internal modules that way, and ``adapters/_transport.py`` (the
+    framework-neutral replay-transport core the adapters share) is one. Only
+    public adapter modules carry a conformance obligation.
     """
     missing: list[str] = []
     for module_info in pkgutil.iter_modules(package.__path__):
         name = module_info.name
-        if name in registered:
+        if name.startswith("_") or name in registered:
             continue
         try:
             importlib.import_module(f"{package.__name__}.{name}")

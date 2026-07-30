@@ -80,6 +80,36 @@ Recognized httpx-backed chat models are served through the runtime's
 with a one-time warning and a `transport_fallback` metric. See the module
 docstrings under `src/beam_agents/adapters/langgraph/` for the details.
 
+## Running a Pydantic AI agent
+
+An existing Pydantic AI agent adopts the same guarantees with two changes — no
+restructuring of instructions, output types, or control flow:
+
+1. Re-declare side-effectful tools with the runtime decorator:
+   `@tool(side_effect=True)`; name any read-only tool you want gated on a human
+   in `approval_required`.
+2. Wrap the agent: `RunAgent(PydanticAIAgent(agent, tools=tools))`.
+
+```sh
+uv pip install 'beam-agents[pydantic-ai]'
+```
+
+The conversation's message history persists latest-only in working memory
+under a reserved `__pydantic_ai__/` namespace and commits atomically with the
+Beam bundle (the 1 MiB cap applies — trim or summarize with a Pydantic AI
+history processor). A model call on a `side_effect=True` tool never executes
+in-pipeline: the tool is declared *external*, the run ends cleanly at the call,
+the adapter stages one `ToolIntent` per pending call, and the activation
+suspends; the re-injected result resumes it as a fresh run seeded with the
+committed history plus the deferred results. Approval-gated tools take the same
+shape through the approval channel. Read-only tools run inline through the
+runtime tool path, so they get validated arguments, side-effect protection, and
+`TOOL_CALL` trace events. Recognized httpx-backed models (the Anthropic/OpenAI
+model classes, whose SDK client is httpx-based) are served through the
+runtime's `LLMClient` replay-cache path; unrecognized ones fall back to direct
+calls with a one-time warning and a `transport_fallback` metric. See the module
+docstrings under `src/beam_agents/adapters/pydantic_ai/` for the details.
+
 ## Running the effector
 
 Side effects execute outside the pipeline, in the reference effector service:

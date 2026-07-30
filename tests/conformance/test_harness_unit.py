@@ -105,29 +105,31 @@ def test_equivalence_check_names_a_deadline_divergence() -> None:
         validate_bundle(doctored, SUSPENSION_RESUME)
 
 
-def test_langgraph_cells_skip_cleanly_when_the_framework_is_absent() -> None:
-    # Scenario: A missing optional framework skips its cells cleanly. The test
-    # environment installs LangGraph (the adapter cells need it), so absence
-    # is simulated in a subprocess with the same meta-path blocker the
-    # import-isolation tests use: the reference cell must still run and pass,
-    # the LangGraph cell must report as a skip, and collection must not error.
+def _run_single_shot_without(blocked: tuple[str, ...]) -> str:
+    """Collect and run the single_shot cells in a subprocess where `blocked`
+    distributions are unimportable, returning pytest's output.
+
+    The test environment installs every adapter framework (the cells need
+    them), so absence is simulated with the same meta-path blocker the
+    import-isolation tests use.
+    """
     import subprocess
 
     script = textwrap.dedent(
-        """
+        f"""
         import sys
 
-        class _BlockLangGraph:
-            _blocked = ("langgraph", "langchain", "langchain_core")
+        class _Blocker:
+            _blocked = {blocked!r}
 
             def find_spec(self, fullname, path=None, target=None):
                 if fullname.partition(".")[0] in self._blocked:
                     raise ModuleNotFoundError(
-                        f"import of {fullname!r} blocked for test", name=fullname
+                        f"import of {{fullname!r}} blocked for test", name=fullname
                     )
                 return None
 
-        sys.meta_path.insert(0, _BlockLangGraph())
+        sys.meta_path.insert(0, _Blocker())
 
         import pytest
 
@@ -143,9 +145,32 @@ def test_langgraph_cells_skip_cleanly_when_the_framework_is_absent() -> None:
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=180, check=False
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 passed" in result.stdout, result.stdout
-    assert "1 skipped" in result.stdout, result.stdout
-    assert "optional framework 'langgraph' is not installed" in result.stdout, result.stdout
+    return result.stdout
+
+
+def _passing_cells() -> int:
+    """Cells that still run when exactly one adapter's framework is absent."""
+    return len(ADAPTERS) - 1
+
+
+def test_langgraph_cells_skip_cleanly_when_the_framework_is_absent() -> None:
+    # Scenario: A missing optional framework skips its cells cleanly — the
+    # other adapters' cells still run and pass, the LangGraph cell reports as a
+    # skip naming the missing package, and collection does not error.
+    stdout = _run_single_shot_without(("langgraph", "langchain", "langchain_core"))
+    assert f"{_passing_cells()} passed" in stdout, stdout
+    assert "1 skipped" in stdout, stdout
+    assert "optional framework 'langgraph' is not installed" in stdout, stdout
+
+
+def test_pydantic_ai_cells_skip_cleanly_when_the_framework_is_absent() -> None:
+    # Scenario: Missing extra skips cells without shrinking the matrix silently
+    # (pydantic-ai-adapter) — the same clean-skip contract for the Pydantic AI
+    # axis entry.
+    stdout = _run_single_shot_without(("pydantic_ai", "pydantic_graph"))
+    assert f"{_passing_cells()} passed" in stdout, stdout
+    assert "1 skipped" in stdout, stdout
+    assert "optional framework 'pydantic_ai' is not installed" in stdout, stdout
 
 
 def test_every_scenario_declares_every_leg() -> None:
