@@ -452,6 +452,10 @@ async def test_a_failure_before_the_start_event_reports_an_empty_last_event(
             self.step_index = 0
             self.staged_intents: list[object] = []
             self.staged_traces: list[TraceEvent] = []
+            # No long-term store is configured, so the commit-tail flush is a
+            # no-op: nothing staged, nothing to flush.
+            self.staged_upserts: tuple[object, ...] = ()
+            self.longterm_store: object | None = None
 
         @property
         def trace(self) -> ActivationTrace:
@@ -523,6 +527,10 @@ async def test_loop_forwards_every_activation_context_input(
             self.trace = ActivationTrace(entity_key=b"key", seq=4, now_ms=123)
             self.staged_intents: list[object] = []
             self.staged_traces: list[TraceEvent] = []
+            # No long-term store is configured, so the commit-tail flush is a
+            # no-op: nothing staged, nothing to flush.
+            self.staged_upserts: tuple[object, ...] = ()
+            self.longterm_store: object | None = None
 
         def stage_trace(self, event: TraceEvent) -> None:
             self.staged_traces.append(event)
@@ -588,6 +596,9 @@ async def test_loop_forwards_every_activation_context_input(
         "monotonic_ns": monotonic_ns,
         "tool_registry": tool_registry,
         "tool_runner": tool_runner,
+        # Forwarded like every other injected dependency; `None` here, so the
+        # context builds no long-term handle and the commit tail flushes nothing.
+        "longterm_store": None,
     }
     assert result.memory_blob is memory_blob
     assert result.cache_blob is cache_blob

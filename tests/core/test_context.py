@@ -662,8 +662,18 @@ def test_activation_context_preserves_inputs_and_wires_state_facades(
     memory = object()
     replay_cache = object()
 
-    def fake_memory(blob: object, *, now_ms: int, compactor: object | None = None) -> object:
+    def fake_memory(
+        blob: object,
+        *,
+        now_ms: int,
+        compactor: object | None = None,
+        longterm: object | None = None,
+    ) -> object:
+        # `longterm` is None here: this context is constructed without a
+        # `longterm_store`, so the facade is handed no handle and the tier is
+        # off (the unconfigured default).
         captured["memory"] = (blob, now_ms, compactor)
+        assert longterm is None
         return memory
 
     def fake_replay_cache(blob: object, *, now_ms: int) -> object:

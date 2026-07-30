@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 from apache_beam.metrics.metric import Metrics
 
 from beam_agents._protos import MemoryBlob
+from beam_agents.memory.stores.base import MemoryRecord, MemoryStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +74,79 @@ class _Entry:
     last_access_ms: int
 
 
+class LongtermMemory:
+    """Activation-scoped handle to the long-term `MemoryStore` tier.
+
+    The only object on the authoring surface that reaches a store (design D5):
+    the `Memory` facade's own methods stay free of external I/O, and nothing is
+    hydrated implicitly. Constructed per activation with the activation's
+    frozen ``entity_key``/``seq``/``now_ms`` over the worker-shared store
+    client the DoFn built in ``setup()``.
+
+    ``save`` performs no I/O — it stages a seq/now-stamped upsert the loop
+    driver flushes in the commit tail, after the agent returns and before the
+    DoFn commits, so a failed activation flushes nothing. ``load``/``search``
+    run inline and consult the staged upserts first (read-your-writes
+    overlay), so an agent observes its own writes in program order before any
+    flush. Reads are point-in-time; the normative replay discipline: a
+    long-term write MUST be computed from replay-stable inputs and MUST NOT be
+    conditioned on a same-activation long-term read of the same key.
+    """
+
+    def __init__(self, store: MemoryStore, *, entity_key: bytes, seq: int, now_ms: int) -> None:
+        self._store = store
+        self._entity_key = entity_key
+        self._seq = seq
+        self._now_ms = now_ms
+        # Insertion-ordered; a re-save of one key updates in place, so the
+        # flush writes each key once with its last-staged value.
+        self._staged: dict[str, MemoryRecord] = {}
+
+    def save(self, key: str, value: bytes) -> None:
+        """Stage an upsert of ``value`` under ``key``; no store I/O happens.
+
+        Stamped with the activation's frozen ``seq`` and ``now_ms``, so a
+        replayed activation re-stages byte-identical records and duplicate
+        flushes converge under the store's equal-seq guard.
+        """
+        if not key:
+            raise ValueError("longterm save requires a non-empty key")
+        self._staged[key] = MemoryRecord(
+            entity_key=self._entity_key,
+            key=key,
+            value=value,
+            seq=self._seq,
+            updated_at_ms=self._now_ms,
+        )
+
+    async def load(self, key: str) -> MemoryRecord | None:
+        """The record for ``key`` — this activation's staged save first, else
+        the store's point-in-time row, else ``None``. A store failure raises
+        (and fails the activation closed).
+        """
+        staged = self._staged.get(key)
+        if staged is not None:
+            return staged
+        return await self._store.load(self._entity_key, key)
+
+    async def search(self, prefix: str, limit: int) -> list[MemoryRecord]:
+        """At most ``limit`` of this entity's records with keys starting with
+        ``prefix``, ordered by key, with this activation's staged saves merged
+        over the store's results.
+        """
+        stored = await self._store.search(self._entity_key, prefix, limit)
+        merged = {record.key: record for record in stored}
+        for key, record in self._staged.items():
+            if key.startswith(prefix):
+                merged[key] = record
+        return sorted(merged.values(), key=lambda record: record.key)[:limit]
+
+    @property
+    def staged_upserts(self) -> tuple[MemoryRecord, ...]:
+        """The staged upserts, in first-save order, for the commit-tail flush."""
+        return tuple(self._staged.values())
+
+
 def _encode_scalar(value: bytes) -> bytes:
     return bytes([_KIND_SCALAR]) + value
 
@@ -111,9 +185,11 @@ class Memory:
         *,
         now_ms: int,
         compactor: Compactor | None = None,
+        longterm: LongtermMemory | None = None,
     ) -> None:
         self._now_ms = now_ms
         self._compactor = compactor
+        self._longterm = longterm
         self._entries: dict[str, _Entry] = {}
         self._total = 0
         self._dirty = False
@@ -135,6 +211,30 @@ class Memory:
     @property
     def dirty(self) -> bool:
         return self._dirty
+
+    @property
+    def longterm(self) -> LongtermMemory:
+        """The explicit long-term tier handle. Access is explicit only: no
+        working-tier operation, compaction path, or runtime code path consults
+        the store implicitly.
+        """
+        if self._longterm is None:
+            raise RuntimeError(
+                "no long-term memory store is configured for this pipeline; set "
+                "AgentConfig.longterm_memory to a store URI (memory://, redis://, "
+                "bigtable://<project>/<instance>/<table>, "
+                "firestore://<project>/<collection>, or a SQLAlchemy async URL) "
+                "to enable ctx.memory.longterm"
+            )
+        return self._longterm
+
+    def longterm_staged(self) -> tuple[MemoryRecord, ...]:
+        """Staged long-term upserts; empty when no store is configured.
+
+        Read by the activation surfaces to expose the staged upserts to their
+        owners (`ActivationResult`/`AgentResult`) for the commit-tail flush.
+        """
+        return self._longterm.staged_upserts if self._longterm is not None else ()
 
     # -- scalar access --------------------------------------------------------
 

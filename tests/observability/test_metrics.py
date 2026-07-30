@@ -20,6 +20,7 @@ from beam_agents.observability.metrics import (
     COUNTER_AGENT_ERRORS,
     COUNTER_INTENTS_EMITTED,
     COUNTER_LLM_CALLS,
+    COUNTER_LONGTERM_UPSERTS,
     COUNTER_ORPHANED_RESULTS,
     COUNTER_SUSPENSIONS,
     COUNTER_TOOL_CALLS,
@@ -41,7 +42,7 @@ from beam_agents.observability.metrics import (
 # --- Requirement: the runtime publishes a fixed metric surface ----------------
 
 
-def test_the_declared_names_are_the_seven_counters_and_five_distributions() -> None:
+def test_the_declared_names_are_the_eight_counters_and_six_distributions() -> None:
     # Scenario: Every declared metric is queryable after a pipeline run -- the
     # half of it that does not need a pipeline. Names are the observable
     # contract: a rename silently breaks every dashboard built on them, so the
@@ -55,6 +56,7 @@ def test_the_declared_names_are_the_seven_counters_and_five_distributions() -> N
         "agent_errors",
         "suspensions",
         "orphaned_results",
+        "longterm_upserts",
     )
     assert DISTRIBUTIONS == (
         "activation_ms",
@@ -72,6 +74,7 @@ def test_the_declared_names_are_the_seven_counters_and_five_distributions() -> N
         COUNTER_AGENT_ERRORS,
         COUNTER_SUSPENSIONS,
         COUNTER_ORPHANED_RESULTS,
+        COUNTER_LONGTERM_UPSERTS,
     ) == COUNTERS
     assert (
         DISTRIBUTION_ACTIVATION_MS,

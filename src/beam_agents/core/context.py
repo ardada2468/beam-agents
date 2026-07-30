@@ -42,7 +42,8 @@ from beam_agents._protos import (
 )
 from beam_agents.core.agent import intent_id_for
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
-from beam_agents.memory.facade import Compactor, Memory
+from beam_agents.memory.facade import Compactor, LongtermMemory, Memory
+from beam_agents.memory.stores import MemoryRecord, MemoryStore
 from beam_agents.model.client import LLMClient, LlmRequest, LlmResponse
 from beam_agents.model.facade import (
     CircuitBreaker,
@@ -93,6 +94,10 @@ class AgentResult:
     #: Worker-local metric tally (never persisted). Defaulted so the historical
     #: construction sites keep working.
     tally: ActivationTally = field(default_factory=ActivationTally)
+    #: Long-term upserts staged via `ctx.memory.longterm.save`, flushed by the
+    #: activation's owner only after a successful return. Empty when no store
+    #: is configured; defaulted so historical construction sites keep working.
+    upserts: tuple[MemoryRecord, ...] = ()
 
 
 class AgentContext:
@@ -364,6 +369,7 @@ class AgentContext:
             memory_blob=memory_blob,
             cache_blob=cache_blob,
             tally=self._tally,
+            upserts=self.memory.longterm_staged(),
         )
 
 
@@ -397,6 +403,7 @@ class ActivationContext:
         monotonic_ns: MonotonicNs = time.monotonic_ns,
         tool_registry: ToolRegistry | None = None,
         tool_runner: ToolRunner | None = None,
+        longterm_store: MemoryStore | None = None,
     ) -> None:
         self.entity_key = entity_key
         self.seq = seq
@@ -407,7 +414,18 @@ class ActivationContext:
         self.resume_approval = resume_approval
 
         self._provider = provider
-        self._memory = Memory(memory_blob, now_ms=now_ms, compactor=compactor)
+        # The long-term tier is opt-in: with no store configured the facade
+        # holds no handle and `ctx.memory.longterm` raises actionably, so an
+        # unconfigured pipeline behaves exactly as before (design D5/D6).
+        self._longterm_store = longterm_store
+        self._longterm = (
+            LongtermMemory(longterm_store, entity_key=entity_key, seq=seq, now_ms=now_ms)
+            if longterm_store is not None
+            else None
+        )
+        self._memory = Memory(
+            memory_blob, now_ms=now_ms, compactor=compactor, longterm=self._longterm
+        )
         self._replay_cache = ReplayCache(cache_blob, now_ms=now_ms)
         self._intent_ttl_ms = intent_ttl_ms
         self._approval_channel = approval_channel
@@ -654,6 +672,20 @@ class ActivationContext:
     @property
     def staged_traces(self) -> list[TraceEvent]:
         return self._traces
+
+    @property
+    def staged_upserts(self) -> tuple[MemoryRecord, ...]:
+        """Long-term upserts staged this activation, for the commit-tail flush.
+
+        Empty when no store is configured. Like every other staged effect,
+        these are applied only after the agent returns successfully.
+        """
+        return self._memory.longterm_staged()
+
+    @property
+    def longterm_store(self) -> MemoryStore | None:
+        """The worker-shared store the driver flushes staged upserts through."""
+        return self._longterm_store
 
     @property
     def step_index(self) -> int:

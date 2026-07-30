@@ -56,6 +56,10 @@ COUNTER_AGENT_ERRORS = "agent_errors"
 COUNTER_SUSPENSIONS = "suspensions"
 # One dead letter on `.errors` with reason `orphaned_result`.
 COUNTER_ORPHANED_RESULTS = "orphaned_results"
+# One long-term memory row flushed through the `MemoryStore` in an activation's
+# commit tail. Counted per row, on committed activations only: a failed
+# activation flushes nothing and a failed flush fails the activation.
+COUNTER_LONGTERM_UPSERTS = "longterm_upserts"
 
 # -- distributions (Beam distributions are integer-only) ----------------------
 # Wall time of running the agent for one element, on every exit including
@@ -86,6 +90,7 @@ COUNTERS = (
     COUNTER_AGENT_ERRORS,
     COUNTER_SUSPENSIONS,
     COUNTER_ORPHANED_RESULTS,
+    COUNTER_LONGTERM_UPSERTS,
 )
 DISTRIBUTIONS = (
     DISTRIBUTION_ACTIVATION_MS,

@@ -48,6 +48,7 @@ from beam_agents.observability.traces import (
 if TYPE_CHECKING:
     from beam_agents.core.agent import Agent
     from beam_agents.memory.facade import Compactor
+    from beam_agents.memory.stores import MemoryRecord, MemoryStore
     from beam_agents.model.client import LLMClient
     from beam_agents.model.facade import Decode
     from beam_agents.tools.registry import ToolRegistry
@@ -60,8 +61,24 @@ __all__ = [
     "ActivationFailed",
     "ActivationResult",
     "FailureContext",
+    "LongtermFlushFailed",
     "run_activation",
 ]
+
+
+class LongtermFlushFailed(Exception):
+    """The commit-tail long-term flush raised; the activation fails closed.
+
+    Raised ``from`` the store's own error and immediately re-wrapped as
+    :class:`ActivationFailed`, so the DoFn routes the element to ``.errors``
+    having committed nothing. Safe to fail here: the next attempt re-stages
+    byte-identical upserts and the store's seq guard absorbs whatever a
+    partially-applied flush already wrote.
+    """
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"long-term flush failed for key {key!r}")
+        self.key = key
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +161,11 @@ class ActivationResult:
     #: thread, where a metric update actually lands. Defaulted so historical
     #: construction sites keep building.
     tally: ActivationTally = field(default_factory=ActivationTally)
+    #: Long-term upserts this activation staged, already flushed through the
+    #: store by the time the DoFn sees the result (the commit-tail flush runs
+    #: inside `run_activation`). Reported so the DoFn can count them and tests
+    #: can assert byte-identity across a replay. Empty without a store.
+    upserts: list[MemoryRecord] = field(default_factory=list)
 
 
 async def run_activation(
@@ -168,6 +190,7 @@ async def run_activation(
     monotonic_ns: MonotonicNs = time.monotonic_ns,
     tool_registry: ToolRegistry | None = None,
     tool_runner: ToolRunner | None = None,
+    longterm_store: MemoryStore | None = None,
 ) -> ActivationResult:
     """Run one activation to a terminal :class:`ActivationResult`.
 
@@ -196,6 +219,7 @@ async def run_activation(
         monotonic_ns=monotonic_ns,
         tool_registry=tool_registry,
         tool_runner=tool_runner,
+        longterm_store=longterm_store,
     )
 
     # Everything after context construction runs inside the failure wrap:
@@ -245,6 +269,7 @@ async def run_activation(
                 )
             )
             ctx.stage_trace(trace.activation_end(status="suspended", step_index=ctx.step_index))
+            upserts = await _flush_longterm(ctx)
             return ActivationResult(
                 status="suspended",
                 seq=seq,
@@ -256,6 +281,7 @@ async def run_activation(
                 continuation=continuation,
                 hitl_deadline_ms=deadline_ms,
                 tally=ctx.tally(),
+                upserts=upserts,
             )
 
         if not isinstance(outcome, Complete):  # pragma: no cover - defensive
@@ -263,6 +289,7 @@ async def run_activation(
 
         ctx.stage_trace(trace.activation_end(status="completed", step_index=ctx.step_index))
         outputs = [outcome.output] if outcome.output else []
+        upserts = await _flush_longterm(ctx)
         return ActivationResult(
             status="completed",
             seq=seq,
@@ -274,8 +301,12 @@ async def run_activation(
             continuation=None,
             hitl_deadline_ms=None,
             tally=ctx.tally(),
+            upserts=upserts,
         )
     except Exception as exc:
+        # Reached by an agent raise AND by a flush failure: both are activation
+        # failures, both leave the caller committing nothing. A failed agent
+        # never got as far as the flush, so a failed activation flushes nothing.
         staged = ctx.staged_traces
         raise ActivationFailed(
             FailureContext(
@@ -285,3 +316,33 @@ async def run_activation(
                 llm_calls=ctx.tally().llm_calls,
             )
         ) from exc
+
+
+async def _flush_longterm(ctx: ActivationContext) -> list[MemoryRecord]:
+    """Flush the activation's staged long-term upserts, in staging order.
+
+    The commit tail: reached only after the agent returned successfully and
+    before the caller commits the bundle-atomic effects, so a failed or
+    timed-out activation flushes nothing (correctness invariant 1's reading of
+    the sanctioned invariant-5 exception). Still on the bridge loop, inside
+    ``activation_timeout``.
+
+    The flush is outside the Beam transaction, so the case to reason about is
+    "flush succeeded, commit failed, bundle retries": the retry re-runs
+    deterministically, re-stages byte-identical upserts, and the store's
+    ``seq >= stored_seq`` guard turns the re-flush into an identical overwrite
+    — the rows converge however many times the bundle retries. A flush failure
+    fails the activation closed for the same reason: the next attempt re-stages
+    identical upserts and the guard absorbs whatever already landed.
+    """
+    upserts = list(ctx.staged_upserts)
+    if not upserts:
+        return []
+    store = ctx.longterm_store
+    assert store is not None, "staged upserts without a configured store"
+    for record in upserts:
+        try:
+            await store.save(record)
+        except Exception as exc:
+            raise LongtermFlushFailed(record.key) from exc
+    return upserts
