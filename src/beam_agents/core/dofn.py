@@ -7,6 +7,14 @@ free by construction. The DoFn:
 - declares five state specs (``MEMORY``, ``CONTINUATION``, ``LLM_CACHE``,
   ``PENDING``, ``SEQ``) and two timers (``TTL_TIMER`` watermark, ``HITL_TIMER``
   real-time), all protobuf-coded, never pickle;
+- passes every ``MEMORY``/``CONTINUATION``/``LLM_CACHE`` read through
+  :func:`~beam_agents.core.migration.migrate_to_current` before interpreting
+  any field — the seven read sites in ``_start``, ``_resume``, ``on_ttl``, and
+  ``on_hitl``. Migration is lazy and writes nothing at read time: the migrated
+  view reaches durable state only through the next successful commit's writes,
+  which stamp ``CURRENT_STATE_SCHEMA_VERSION``. A blob from a *newer* schema
+  version raises out of the bundle uncaught (never dead-letters), wedging the
+  key with zero mutation until the binary is rolled forward;
 - routes each element by payload variant (event → start; tool_result/approval →
   resume; unmatched → ``orphaned_result`` on ``.errors``);
 - runs the activation on the async bridge bounded by ``activation_timeout``,
@@ -59,6 +67,7 @@ from beam_agents.core.loop import (
     FailureContext,
     run_activation,
 )
+from beam_agents.core.migration import migrate_to_current
 from beam_agents.hitl import (
     HITL_TIMEOUT_OUTPUT,
     REASON_HITL_TIMEOUT,
@@ -326,8 +335,12 @@ class _AgentDoFn(beam.DoFn):
         hitl_timer: _Timer,
     ) -> Iterator[object]:
         current_seq = seq.read()
-        memory_blob = memory.read()
-        cache_blob = llm_cache.read()
+        # Lazy schema migration on first read (state-migration): before any
+        # field is interpreted, never writing — the migrated view reaches
+        # state only through `_commit`. A future-version blob raises here,
+        # uncaught, failing the bundle with nothing mutated or emitted.
+        memory_blob = migrate_to_current(memory.read())
+        cache_blob = migrate_to_current(llm_cache.read())
 
         try:
             result, activation_ms = self._activate(
@@ -384,7 +397,10 @@ class _AgentDoFn(beam.DoFn):
         ttl_timer: _Timer,
         hitl_timer: _Timer,
     ) -> Iterator[object]:
-        cont = continuation.read()
+        # Migrated before the admission check: a resume must be admitted (or
+        # refused) against the current schema's reading of `deadline_ms` and
+        # `pending_intent_ids`, never an old layout's.
+        cont = migrate_to_current(continuation.read())
         pending_intents = [] if cont is None else list(pending.read())
         detail = _admission_failure(cont, pending_intents, intent_id, now_ms)
         if detail is not None:
@@ -407,8 +423,8 @@ class _AgentDoFn(beam.DoFn):
         # `_admission_failure` returns DETAIL_NO_CONTINUATION for a missing one.
         assert cont is not None
 
-        memory_blob = memory.read()
-        cache_blob = llm_cache.read()
+        memory_blob = migrate_to_current(memory.read())
+        cache_blob = migrate_to_current(llm_cache.read())
         try:
             result, activation_ms = self._activate(
                 key=key,
@@ -638,7 +654,11 @@ class _AgentDoFn(beam.DoFn):
         # short of the deadline. The suspension cannot be rescued (the memory it
         # would resume against is genuinely event-time garbage); dead-letter it
         # so it is not lost in silence.
-        cont = continuation.read()
+        #
+        # Migrated before `seq`/`deadline_ms` are read — and a future-version
+        # continuation raises *before the wipe*: GC must not destroy state a
+        # newer binary wrote and this one cannot read.
+        cont = migrate_to_current(continuation.read())
         if cont is not None:
             yield self._dead_letter(
                 key,
@@ -673,7 +693,10 @@ class _AgentDoFn(beam.DoFn):
         hitl_timer: _Timer = beam.DoFn.TimerParam(HITL_TIMER),
         ttl_timer: _Timer = beam.DoFn.TimerParam(TTL_TIMER),
     ) -> Iterator[object]:
-        cont = continuation.read()
+        # Migrated before the stale-handle comparison: a fail-closed mechanism
+        # that misreads an old layout's `deadline_ms` is not fail-closed, and a
+        # future-version continuation must raise rather than be routed on.
+        cont = migrate_to_current(continuation.read())
         fired_at_ms = timestamp.micros // 1000
         if cont is None or fired_at_ms < cont.deadline_ms:
             # Stale handle: either the suspension was already resolved, or this

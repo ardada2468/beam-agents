@@ -1,18 +1,25 @@
-"""Manual-run generator for the golden-blob compat fixtures.
+"""Manual-run generator for the per-version golden corpus.
 
-Run once, by hand, to (re)produce the committed ``*.bin`` fixtures:
+Run once, by hand, to (re)produce the current version's committed fixtures:
 
     uv run python tests/core/golden/generate.py
 
 NEVER invoked by CI (the file is not a ``test_*`` module, so pytest does not
-collect it). The committed blobs are the v1 baseline that every future schema
-change must still decode; regenerating them is only appropriate when
-intentionally establishing a new baseline.
+collect it). Fixtures live one directory per ``state_schema_version``
+(``v1/``, ``v2/``, ...); ``main()`` only ever writes
+``v<CURRENT_STATE_SCHEMA_VERSION>/``, so regenerating a historical version is
+impossible by construction — the committed historical bytes ARE the artifact,
+and a new baseline is a new directory.
 
-``GOLDEN`` is the single source of truth for both the committed bytes (written
-here) and the expected field values (imported by ``test_schema_compat``). Each
-message is fully populated with fixed, documented values so field-level
-equality is meaningful.
+``CORPUS`` maps each version to that version's builders and is the single
+source of truth for both the committed bytes (written here) and the expected
+field values (imported by ``test_schema_compat``). A version's builders are
+**frozen** the moment a newer version exists: on a
+``CURRENT_STATE_SCHEMA_VERSION`` bump, leave the outgoing version's builder map
+untouched, add a new map for the incoming version, and run this generator to
+write the new directory (see ``docs/state-migration.md`` for the full bump
+checklist). Each message is fully populated with fixed, documented values so
+field-level equality is meaningful.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ from beam_agents._protos import (
     ToolResult,
     TraceEvent,
 )
+from beam_agents.core.migration import CURRENT_STATE_SCHEMA_VERSION
 
 GOLDEN_DIR = Path(__file__).parent
 
@@ -210,11 +218,16 @@ def _continuation_escalated() -> Continuation:
     )
 
 
-# name -> fully-populated message. Filenames are `<name>.bin`. Every message
-# type has at least one fixture; a type gains a second one when a field is
-# added after the v1 baseline, so the original blob keeps proving that
-# pre-field bytes still decode while the new one pins the new field.
-GOLDEN: dict[str, Message] = {
+# name -> fully-populated message, for the v1 fixture set. Filenames are
+# `<name>.bin` under `v1/`. Every message type has at least one fixture; a type
+# gains a second one when a field is added (additively) within the version, so
+# the original blob keeps proving that pre-field bytes still decode while the
+# new one pins the new field.
+#
+# FROZEN once version 2 exists: these builders pair with the committed `v1/`
+# bytes and may never change after a bump — the migration chain, not a
+# regenerated baseline, is what carries v1 state forward.
+GOLDEN_V1: dict[str, Message] = {
     "memory_blob": _memory_blob(),
     "tool_intent": _tool_intent(),
     "tool_intent_approval": _tool_intent_approval(),
@@ -227,11 +240,32 @@ GOLDEN: dict[str, Message] = {
     "llm_cache_blob": _llm_cache_blob(),
 }
 
+# version -> that version's fixture builders. One entry per schema version up
+# to CURRENT_STATE_SCHEMA_VERSION; the completeness meta-tests in
+# `test_schema_compat` fail the build when a bump lands without its entry.
+CORPUS: dict[int, dict[str, Message]] = {
+    1: GOLDEN_V1,
+}
+
+
+def write_current(golden_dir: Path) -> list[Path]:
+    """Write the current version's fixtures under ``v<CURRENT>/``, nothing else.
+
+    Historical directories are never touched: only
+    ``CORPUS[CURRENT_STATE_SCHEMA_VERSION]`` is serialized.
+    """
+    version_dir = golden_dir / f"v{CURRENT_STATE_SCHEMA_VERSION}"
+    version_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for name, message in CORPUS[CURRENT_STATE_SCHEMA_VERSION].items():
+        path = version_dir / f"{name}.bin"
+        path.write_bytes(message.SerializeToString(deterministic=True))
+        written.append(path)
+    return written
+
 
 def main() -> None:
-    for name, message in GOLDEN.items():
-        path = GOLDEN_DIR / f"{name}.bin"
-        path.write_bytes(message.SerializeToString(deterministic=True))
+    for path in write_current(GOLDEN_DIR):
         print(f"wrote {path} ({path.stat().st_size} bytes)")
 
 

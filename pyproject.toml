@@ -140,6 +140,13 @@ ignore = [
 # argument defaults (`state=beam.DoFn.StateParam(SPEC)`); B008 (no calls in
 # defaults) is a false positive for this idiom.
 "src/beam_agents/core/dofn.py" = ["B008"]
+# Memory.to_blob / ReplayCache.to_blob read the state_schema_version stamp
+# from core/migration.py at call time, on purpose: a top-level import would
+# recreate the memory/model -> core -> context -> memory/model import cycle,
+# and the call-time read is what lets one constant edit move every writer.
+# Same PLC0415-is-the-point rationale as core/transform.py below.
+"src/beam_agents/memory/facade.py" = ["PLC0415"]
+"src/beam_agents/model/replay_cache.py" = ["PLC0415"]
 # DefaultSinkResolver.resolve() imports each IO client (Kafka/Pub/Sub/BigQuery)
 # lazily, on purpose: AgentConfig.__post_init__ only calls validate(), which
 # must stay import-free so sink-URI validation runs offline. PLC0415 (imports

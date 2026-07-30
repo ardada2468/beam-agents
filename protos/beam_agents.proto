@@ -9,8 +9,20 @@ package beam_agents.v1;
 // milliseconds (`*_ms` suffix) to match Beam's event-time representation and
 // avoid well-known-type imports (D4). All enums carry an `_UNSPECIFIED = 0`
 // zero value; the hottest fields occupy tag numbers 1-15 for single-byte tags.
-// Schema evolution is additive only: new fields take new numbers, removals use
-// `reserved`, and any breaking change requires a state_schema_version bump.
+//
+// Schema evolution (the state-migration gate; see docs/state-migration.md):
+// additive by default — new fields take new numbers, removals use `reserved`.
+// A breaking change is permitted ONLY for the three versioned keyed-state
+// messages (MemoryBlob, Continuation, LlmCacheBlob) and ONLY through the
+// enforced path: bump CURRENT_STATE_SCHEMA_VERSION in
+// src/beam_agents/core/migration.py, register a migration step for every
+// versioned message, and freeze a golden corpus entry for the outgoing version
+// (tests/core/golden/v<N>/) — CI's completeness tests are red until all three
+// exist. An existing field number is never retyped or reused, at any version:
+// migration runs after decode, so old bytes must always parse. The unversioned
+// wire messages (ToolIntent, ToolResult, TraceEvent, AgentEnvelope,
+// ActivationErrorRecord) cross service boundaries and stay additive-only with
+// no bump escape hatch.
 
 // Per-key working memory: bounded string->bytes entries with LRU metadata.
 //

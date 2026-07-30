@@ -191,7 +191,14 @@ class Memory:
     # -- serialization --------------------------------------------------------
 
     def to_blob(self) -> MemoryBlob:
-        blob = MemoryBlob(state_schema_version=1)
+        # Imported lazily: `beam_agents.core`'s package init imports the
+        # context, which imports this package — a top-level import here would
+        # make `import beam_agents.memory` order-dependent. The call-time read
+        # also means a version bump in core/migration.py moves this stamp with
+        # no edit here.
+        from beam_agents.core import migration
+
+        blob = MemoryBlob(state_schema_version=migration.CURRENT_STATE_SCHEMA_VERSION)
         for key, entry in self._entries.items():
             blob.entries.add(key=key, value=entry.value, last_access_ms=entry.last_access_ms)
         blob.total_value_bytes = self._total

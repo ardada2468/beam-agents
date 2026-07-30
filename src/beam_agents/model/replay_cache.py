@@ -200,7 +200,14 @@ class ReplayCache:
     # -- serialization --------------------------------------------------------
 
     def to_blob(self) -> LlmCacheBlob:
-        blob = LlmCacheBlob(state_schema_version=1)
+        # Imported lazily: `beam_agents.core`'s package init imports the
+        # context, which imports this package — a top-level import here would
+        # make `import beam_agents.model` order-dependent. The call-time read
+        # also means a version bump in core/migration.py moves this stamp with
+        # no edit here.
+        from beam_agents.core import migration
+
+        blob = LlmCacheBlob(state_schema_version=migration.CURRENT_STATE_SCHEMA_VERSION)
         for cache_key, entry in self._entries.items():
             blob.entries.add(
                 cache_key=cache_key,
@@ -279,11 +286,12 @@ def _entry_wire_size(cache_key: str, entry: _Entry) -> int:
 def _blob_header_size(total_response_bytes: int) -> int:
     """Serialized size of the blob's non-repeated fields.
 
-    ``state_schema_version`` is always set to 1 (tag + one varint byte).
+    ``state_schema_version`` is always set to ``CURRENT_STATE_SCHEMA_VERSION``
+    (tag + one varint byte while the version stays below 128).
     ``total_response_bytes`` (field 3, int64) is omitted by proto3 when zero,
     else a tag byte plus its varint.
     """
-    size = 2  # state_schema_version = 1
+    size = 2  # state_schema_version: tag + single-byte varint
     if total_response_bytes != 0:
         size += 1 + _varint_len(total_response_bytes)
     return size
