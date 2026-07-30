@@ -171,6 +171,9 @@ ignore = [
 # is the same Beam-requires-it-as-a-default idiom as core/dofn.py, and the doc
 # must show the working form rather than a lint-shaped variant of it.
 "tests/examples/test_failure_streak_alarm.py" = ["B008"]
+# The docs/continuous_eval.md example, copied verbatim: same state/timer
+# handle-as-default idiom as above.
+"tests/examples/test_continuous_eval.py" = ["B008"]
 # The gate module itself: same lazy-aiokafka constraint (it is *collected* in
 # the offline lane, where aiokafka is absent — deselection happens after
 # import), and the single long test function is one scenario told in phases,
@@ -257,6 +260,13 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 # over the published errors format, so every call is a Beam one.
 [[tool.mypy.overrides]]
 module = "tests.examples.test_failure_streak_alarm"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation, for the docs/continuous_eval.md example: a
+# plain downstream Beam pipeline (TestStream/ParDo/WindowInto/CombinePerKey)
+# over the published traces format, so every call is a Beam one.
+[[tool.mypy.overrides]]
+module = "tests.examples.test_continuous_eval"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # Beam types `Coder.from_type_hint` as `-> CoderT` (a cls-bound TypeVar), so our

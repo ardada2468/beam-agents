@@ -22,6 +22,18 @@ Trace events carry deterministic identity (`trace_id`/`span_id` are pure
 functions of activation scope), so at-least-once duplicates from bundle retries
 collapse exactly under downstream dedup on `(trace_id, span_id, event_type)`.
 
+## Consuming `.traces` downstream
+
+A `kafka://`/`pubsub://` traces topic carries deterministic `TraceEvent` bytes,
+so an ordinary Beam pipeline can consume it with nothing but the published
+proto bindings — no runtime imports, no adapter.
+[continuous_eval.md](continuous_eval.md) is a worked example: it joins exported
+traces with lagging business outcomes in a deadline-bounded stateful DoFn,
+scores each joined record with an LLM-as-judge through the `LLMClient` seam,
+and emits per-scenario quality metrics. Its code is held verbatim by
+`tests/examples/test_continuous_eval.py`, which runs it offline against bytes
+from this page's own encoder.
+
 ## The OTLP exporter (`otlp://`)
 
 Sends spans to any OTLP/HTTP collector (an OTel Collector, Jaeger, Tempo,
