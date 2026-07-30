@@ -4,7 +4,7 @@ COMPOSE := docker compose -f docker/compose.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto docs docs-serve
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-18s %s\n", $$1, $$2}'
@@ -83,3 +83,12 @@ compose-down: ## Tear down the local stack
 
 proto: ## Regenerate protobuf Python bindings from protos/*.proto
 	scripts/gen_proto.sh
+
+# Strict: a broken internal link or an unresolvable example snippet fails the
+# build instead of publishing a dead reference. Run from the repo root — the
+# snippet base_path resolves examples/*.py inclusions against the cwd.
+docs: ## Build the docs site strictly (broken links/snippets fail)
+	uv run mkdocs build --strict
+
+docs-serve: ## Serve the docs site locally with live reload
+	uv run mkdocs serve

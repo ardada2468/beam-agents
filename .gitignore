@@ -10,6 +10,9 @@ dist/
 .venv/
 venv/
 
+# mkdocs build output (`make docs`); deployed by the docs workflow, never committed
+site/
+
 # Tooling caches
 .mypy_cache/
 .ruff_cache/

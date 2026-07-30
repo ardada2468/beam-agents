@@ -6,6 +6,11 @@ RunAgent(my_agent)`), not an agent-authoring framework. See
 [`openspec/project.md`](openspec/project.md) for the full architecture and
 governing principles.
 
+**Documentation:** <https://ardada2468.github.io/beam-agents/> — the rendered
+[`docs/`](docs/) tree plus three runnable, offline, FakeLLM-driven examples
+([`examples/`](examples/)), built strictly by the `docs` workflow. Build it
+locally with `make docs` or browse it live with `make docs-serve`.
+
 ## Bootstrap
 
 ```sh
