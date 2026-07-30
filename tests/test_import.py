@@ -24,6 +24,7 @@ def test_public_surface_is_run_agent_config_outputs_and_hitl_policy() -> None:
         "FallbackContext",
         "HitlPolicy",
         "LangGraphAgent",
+        "PydanticAIAgent",
         "RunAgent",
         "RunAgentOutputs",
     }

@@ -29,6 +29,7 @@ __all__ = [
     "FallbackContext",
     "HitlPolicy",
     "LangGraphAgent",
+    "PydanticAIAgent",
     "RunAgent",
     "RunAgentOutputs",
 ]
@@ -37,6 +38,7 @@ __all__ = [
 # extras: resolve them lazily so `import beam_agents` never imports a framework,
 # and absence surfaces as an ImportError naming the extra to install.
 _LANGGRAPH_DISTRIBUTIONS = ("langgraph", "langchain", "langchain_core")
+_PYDANTIC_AI_DISTRIBUTIONS = ("pydantic_ai", "pydantic_graph")
 
 
 def __getattr__(name: str) -> object:
@@ -51,4 +53,15 @@ def __getattr__(name: str) -> object:
                 ) from exc
             raise
         return LangGraphAgent
+    if name == "PydanticAIAgent":
+        try:
+            from beam_agents.adapters.pydantic_ai import PydanticAIAgent
+        except ModuleNotFoundError as exc:
+            if exc.name and exc.name.partition(".")[0] in _PYDANTIC_AI_DISTRIBUTIONS:
+                raise ImportError(
+                    "beam_agents.PydanticAIAgent requires the Pydantic AI adapter extra; "
+                    "install it with `pip install 'beam-agents[pydantic-ai]'`"
+                ) from exc
+            raise
+        return PydanticAIAgent
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
