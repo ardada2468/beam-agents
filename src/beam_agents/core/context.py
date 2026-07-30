@@ -40,6 +40,12 @@ from beam_agents._protos import (
     ToolResult,
     TraceEvent,
 )
+
+# The module, not the constant: the version stamp is read at call time so a
+# `CURRENT_STATE_SCHEMA_VERSION` bump (one edit in core/migration.py) moves
+# this writer with it, and tests can pin the coupling by patching the one
+# authoritative module attribute.
+from beam_agents.core import migration
 from beam_agents.core.agent import intent_id_for
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
 from beam_agents.memory.facade import Compactor, Memory
@@ -688,7 +694,7 @@ class ActivationContext:
     ) -> Continuation:
         """Assemble the ``Continuation`` persisted when the activation suspends."""
         return Continuation(
-            state_schema_version=1,
+            state_schema_version=migration.CURRENT_STATE_SCHEMA_VERSION,
             seq=self.seq,
             step_index=self._step_index,
             pending_intent_ids=[intent.intent_id for intent in self._intents],

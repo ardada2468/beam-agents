@@ -34,4 +34,8 @@
 # number was measured against its own tree and the rate is a ratio over the
 # whole project, so the combined tree is re-measured rather than having one
 # side picked. Measured on the combined tree: 0.9484.
-branch_rate = 0.9484
+#
+# add-state-schema-migration: 0.9497 (core/migration.py lands fully branch-
+# covered by the registry suite, and routing the seven keyed-state reads
+# through the hook added no uncovered branches).
+branch_rate = 0.9497

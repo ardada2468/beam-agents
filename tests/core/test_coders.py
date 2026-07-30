@@ -30,6 +30,7 @@ from beam_agents._protos import (
     ToolResult,
     TraceEvent,
 )
+from beam_agents.core import migration
 from beam_agents.core.coders import (
     MESSAGE_TYPES,
     DeterministicProtoCoder,
@@ -415,3 +416,45 @@ def test_message_works_as_group_by_key_key(clean_registry: None) -> None:
             | beam.MapTuple(lambda key, values: (key.intent_id, sum(values)))
         )
         assert_that(totals, equal_to([("k", 3)]))
+
+
+# --- Requirement: Coders are migration-invariant and version-agnostic ---------
+
+
+def test_decoding_an_old_version_blob_does_not_migrate_it() -> None:
+    # Scenario: Decoding an old-version blob does not migrate it. The stamped
+    # version is deliberately ABOVE the binary's current one: if the coder
+    # consulted the migration layer at all, decode would raise the
+    # from-the-future error — instead the bytes round-trip untouched, version
+    # stamp included, because migration lives above the codec (design D3).
+    coder = DeterministicProtoCoder(MemoryBlob)
+    blob = MemoryBlob(state_schema_version=7, total_value_bytes=2)
+    blob.entries.add(key="alpha", value=b"aa", last_access_ms=1_000)
+
+    decoded = coder.decode(coder.encode(blob))
+
+    assert isinstance(decoded, MemoryBlob)
+    assert decoded.state_schema_version == 7
+    assert decoded == blob
+
+
+def test_wire_compatibility_holds_across_a_version_bump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Scenario: Wire compatibility holds across a version bump. Bytes written
+    # under version 1 decode through the SAME coder under a binary whose
+    # current version is 2 — all version-1 fields intact, ready for the
+    # read-path hook; no coder configuration or state spec change required.
+    coder = DeterministicProtoCoder(Continuation)
+    encoded = coder.encode(
+        Continuation(state_schema_version=1, seq=7, snapshot=b"waiting", deadline_ms=9_000)
+    )
+
+    monkeypatch.setattr(migration, "CURRENT_STATE_SCHEMA_VERSION", 2)
+    decoded = coder.decode(encoded)
+
+    assert isinstance(decoded, Continuation)
+    assert decoded.state_schema_version == 1
+    assert decoded.seq == 7
+    assert decoded.snapshot == b"waiting"
+    assert decoded.deadline_ms == 9_000
