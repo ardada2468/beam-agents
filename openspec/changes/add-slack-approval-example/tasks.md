@@ -61,3 +61,18 @@ Recorded during implementation; no spec requirement or scenario changed.
 **R3 — the `examples` dependency group (task 2.2) was not added.** Adding it to `[dependency-groups]` requires regenerating `uv.lock`, which this change may not touch. Nothing depends on it: `slack-sdk` is imported lazily inside `SocketModeGateway.__init__`, so the example imports and its entire offline suite runs without the package, and the doc page tells a real-workspace user to `uv pip install slack-sdk`. The task stays open for whoever next updates the lockfile; it is packaging convenience, not a spec requirement (the capability requires that `slack-sdk` be confined to a dev dependency group — it is confined to *no* dependency group today, which is strictly stronger for the offline lanes).
 
 **R4 — the injectable clock lives on `ApprovalSurface`, not on `SurfaceConfig` or the fake gateway.** Tasks 2.4 and 5.1 sketched it on both. A callable is not configuration: `SurfaceConfig` is a frozen, env-derived, eagerly-validated value mirroring `EffectorConfig`, and putting a function on it would make it unserializable and unvalidatable. One clock (`time_fn` on the surface) is also the correct number: expiry is decided in exactly one place, and the fake gateway takes each scripted click's `decided_at_ms` explicitly, which is what a real interaction payload carries anyway. The spec's "against an injectable clock … never by sleeping" is satisfied.
+
+## 10. Revision: generalize the example-page docs contract for package-shaped examples (integration)
+
+- [x] 10.1 `tests/examples/test_docs_snippets.py` (owned by `add-docs-site`, C24) assumed one flat
+  module per example page: its `--8<--` regex matched only `examples/<module>.py`, and both
+  direction checks compared bare file names. This example is the first package-shaped one
+  (`examples/slack_approval/`), so the two changes were mutually unsatisfiable as written —
+  C24's unit lane failed on this page. Generalized rather than exempted: the directive regex now
+  also accepts `examples/<package>/<module>.py`; the page↔example agreement check compares the
+  *example owner* (flat stem, or package directory name) instead of the file name; and the page
+  now renders `examples/slack_approval/surface.py` verbatim, so this example is held to the same
+  "the code the site shows is the code CI runs" contract as the other three. The
+  imports-nothing-from-tests scan was widened from `glob` to `rglob` so package modules are
+  covered too (strengthening, not relaxing). No spec requirement or scenario changed in either
+  change. Verified: `pytest tests/examples` 43 passed, 1 skipped; `make lint`, `make type` clean.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
 from apache_beam.testing.util import assert_that, equal_to
+
 from examples.hello_world import GREETING, build
 
 # --- Requirement: the hello-world example demonstrates the minimal fast path ---

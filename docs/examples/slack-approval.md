@@ -171,6 +171,17 @@ uv pip install slack-sdk
 The offline tests never need it: `SocketModeGateway` imports it lazily in its
 constructor, exactly like the effector's transport adapters.
 
+## The surface, in full
+
+`ApprovalSurface` is the whole out-of-pipeline loop: consume an approval
+intent, post it, take the verdict, publish the envelope back. This is the
+module itself, rendered from source — the code below is the code the tests
+below execute.
+
+```python
+--8<-- "examples/slack_approval/surface.py"
+```
+
 ## What the tests hold this page to
 
 `tests/examples/test_slack_approval.py` imports the same modules this page

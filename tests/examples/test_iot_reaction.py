@@ -18,10 +18,10 @@ import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
 from apache_beam.testing.util import assert_that, equal_to
-from examples.iot_reaction import DEVICE_HOT, DEVICE_QUIET, QUIET_READINGS, build
 
 from beam_agents.model.fake import FakeLLM
 from examples import iot_reaction
+from examples.iot_reaction import DEVICE_HOT, DEVICE_QUIET, QUIET_READINGS, build
 
 _PROVIDERS: list[FakeLLM] = []
 

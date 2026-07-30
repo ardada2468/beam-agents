@@ -17,8 +17,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS_EXAMPLES_DIR = REPO_ROOT / "docs" / "examples"
 EXAMPLES_DIR = REPO_ROOT / "examples"
 
-# The inclusion directive the pages must carry: --8<-- "examples/<module>.py"
-_SNIPPET_DIRECTIVE = re.compile(r'--8<--\s+"(?P<path>examples/[a-z0-9_]+\.py)"')
+# The inclusion directive the pages must carry, for either example shape:
+#   --8<-- "examples/<module>.py"            a single-module example
+#   --8<-- "examples/<package>/<module>.py"  a package-shaped example
+_SNIPPET_DIRECTIVE = re.compile(r'--8<--\s+"(?P<path>examples/[a-z0-9_]+(?:/[a-z0-9_]+)?\.py)"')
 
 
 # --- Requirement: example pages render the runnable source by inclusion --------
@@ -35,25 +37,38 @@ def test_every_example_page_includes_its_module_by_path() -> None:
         )
         included = REPO_ROOT / match["path"]
         assert included.is_file(), f"{page.name} includes {match['path']!r}, which does not exist"
-        # The page's name and its module's name must agree (hello-world.md ->
-        # hello_world.py), so a page cannot silently render the wrong example.
-        expected_module = page.stem.replace("-", "_") + ".py"
-        assert Path(match["path"]).name == expected_module, (
-            f"{page.name} includes {match['path']!r}; expected examples/{expected_module}"
+        # The page's name and its example's name must agree, so a page cannot
+        # silently render the wrong example: hello-world.md -> hello_world.py
+        # for a single-module example, slack-approval.md -> any module under
+        # examples/slack_approval/ for a package-shaped one.
+        expected_stem = page.stem.replace("-", "_")
+        included_relative = Path(match["path"]).relative_to("examples")
+        owner = (
+            included_relative.parts[0]
+            if len(included_relative.parts) > 1
+            else included_relative.stem
+        )
+        assert owner == expected_stem, (
+            f"{page.name} includes {match['path']!r}; expected an examples/{expected_stem} module"
         )
 
 
 def test_every_example_module_is_rendered_by_a_page() -> None:
     # The inverse direction: an example module nothing renders is dead docs
     # weight, and a deleted page would silently unpublish a tested example.
-    modules = {path.name for path in EXAMPLES_DIR.glob("*.py") if path.name != "__init__.py"}
+    # The unit of publication is the example, not the file: a single-module
+    # example is its stem, a package-shaped one is its directory name (one page
+    # renders one of its modules and describes the rest).
+    modules = {path.stem for path in EXAMPLES_DIR.glob("*.py") if path.name != "__init__.py"}
+    modules |= {path.name for path in EXAMPLES_DIR.iterdir() if (path / "__init__.py").is_file()}
     rendered = set()
     for page in DOCS_EXAMPLES_DIR.glob("*.md"):
         match = _SNIPPET_DIRECTIVE.search(page.read_text(encoding="utf-8"))
         if match is not None:
-            rendered.add(Path(match["path"]).name)
+            relative = Path(match["path"]).relative_to("examples")
+            rendered.add(relative.parts[0] if len(relative.parts) > 1 else relative.stem)
     assert modules == rendered, (
-        f"example modules and rendered pages disagree: modules={sorted(modules)} "
+        f"examples and rendered pages disagree: examples={sorted(modules)} "
         f"rendered={sorted(rendered)}"
     )
 
@@ -65,7 +80,7 @@ def test_no_example_imports_anything_under_tests() -> None:
     # Scenario: An example importing test helpers fails the unit lane — a user
     # copying the example out of the repository could not run it.
     offenders: list[str] = []
-    for module in sorted(EXAMPLES_DIR.glob("*.py")):
+    for module in sorted(EXAMPLES_DIR.rglob("*.py")):
         tree = ast.parse(module.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

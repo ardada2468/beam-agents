@@ -13,10 +13,10 @@ import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
 from apache_beam.testing.util import assert_that, equal_to
-from examples.fraud_triage import ACCOUNT_A, ACCOUNT_B, APPROVAL_INTENT_ID, build
 
 from beam_agents._protos import ToolIntent
 from beam_agents.hitl import HITL_TIMEOUT_OUTPUT
+from examples.fraud_triage import ACCOUNT_A, ACCOUNT_B, APPROVAL_INTENT_ID, build
 
 
 def _streaming_pipeline() -> BeamTestPipeline:
