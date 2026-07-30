@@ -34,12 +34,12 @@ For every registered adapter, an activation whose scripted conversation requires
 - **THEN** `.output` carries the expected terminal output for that key, `.intents` and `.errors` are empty, and the committed state holds no continuation
 
 ### Requirement: Multi-tool inline conformance
-For every registered adapter, an activation whose scripted conversation invokes multiple read-only tools SHALL execute all of them inline within the same activation (fast path): the tool invocations SHALL be observable in `.traces`, the activation SHALL still produce exactly one terminal output with zero `.intents`, and the number of provider calls SHALL match the scripted conversation's turn count exactly.
+For every registered adapter, an activation whose scripted conversation invokes multiple read-only tools SHALL execute all of them inline within the same activation (fast path): every tool's result SHALL be observable in the terminal output (proving execution and ordering uniformly across adapters), the activation SHALL still produce exactly one terminal output with zero `.intents`, and the number of provider calls SHALL match the scripted conversation's turn count exactly (observable as `.traces` `LLM_CALL` events). Tool executions are additionally traced as `TOOL_CALL` events only where the adapter routes inline tools through the runtime's `ctx.run_tool` path — a surfaced finding, not a conformance requirement: `BeamToolNode` executes read-only tools directly and stages no `TOOL_CALL` trace (see design.md, Findings).
 
 #### Scenario: Two read-only tools execute inline in one activation
 
 - **WHEN** the scripted conversation requests two distinct read-only tools before answering
-- **THEN** both tool executions and all scripted model turns appear in `.traces` for one activation, `.output` carries the terminal output, and `.intents` is empty
+- **THEN** the terminal output on `.output` embeds both tool results in invocation order, all scripted model turns appear in `.traces` for one activation, and `.intents` is empty
 
 ### Requirement: Suspension/resume conformance with deterministic intents
 For every registered adapter, an activation whose scripted conversation invokes a side-effect tool SHALL stage exactly one `ToolIntent` whose `intent_id` equals the deterministic formula value for the activation's known `(entity_key, seq, step_index)`, suspend with a persisted continuation, and — when the matching `ToolResult` re-enters on the same key — resume to a terminal output that reflects the injected result. The side-effect tool's body SHALL NOT execute inside the pipeline for any adapter.

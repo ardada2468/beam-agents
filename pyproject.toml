@@ -176,6 +176,16 @@ ignore = [
 # import), and the single long test function is one scenario told in phases,
 # not an abstraction failure.
 "tests/semantics/test_effectively_once_e2e.py" = ["PLC0415", "PLR0912", "PLR0915"]
+# The shared Flink-stack module: the same lazy-aiokafka constraint as the e2e
+# harness it was extracted from (imported host-side in the offline lane, where
+# aiokafka is absent).
+"tests/semantics/_flink_stack.py" = ["PLC0415"]
+# The conformance suite: lazy imports are the design — the LangGraph factory
+# imports its optional framework only inside build functions (the module must
+# import cleanly where the extra is absent, for clean skips), the Flink
+# harness imports aiokafka lazily like the e2e harness, and the leg
+# orchestration is one scenario told in phases.
+"tests/conformance/*" = ["PLC0415", "PLR0915"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -278,6 +288,13 @@ disable_error_code = ["no-untyped-call"]
 [[tool.mypy.overrides]]
 module = "tests.adapters.*"
 disable_error_code = ["type-arg", "no-untyped-call"]
+
+# The conformance matrix drives the same two untyped surfaces at once: Beam's
+# TestPipeline/TestStream/assert_that API and LangGraph's unparameterized
+# generics. Everything else in these modules stays strictly typed.
+[[tool.mypy.overrides]]
+module = "tests.conformance.*"
+disable_error_code = ["type-arg", "no-untyped-call", "no-any-return"]
 
 # Same Beam-untyped-metrics relaxation for the runtime metric recorder, which
 # calls `inc`/`update` on Beam's delegating handles.
@@ -382,6 +399,7 @@ markers = [
   "dataflow: nightly-only tests against real Dataflow",
   "smoke: nightly-only real-provider smoke tests against live endpoints",
   "slow: tests that take longer than 5 seconds",
+  "conformance_cell(adapter, scenario, leg): one adapter-conformance matrix cell (counted by the meta-test)",
 ]
 
 [tool.coverage.run]
