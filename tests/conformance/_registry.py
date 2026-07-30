@@ -20,6 +20,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING
 
 from beam_agents.model.fake import FakeLLM
+from tests.conformance._adapters.adk import build_adk_agent, build_adk_provider
 from tests.conformance._adapters.langgraph import build_langgraph_agent, build_langgraph_provider
 from tests.conformance._adapters.reference import build_reference_agent, build_reference_provider
 from tests.conformance._spec import SCENARIOS_BY_NAME, ScenarioSpec, registry_for
@@ -69,6 +70,13 @@ ADAPTERS: tuple[ConformanceAdapter, ...] = (
         adapters_subpackage="langgraph",
         build_agent=build_langgraph_agent,
         build_provider=build_langgraph_provider,
+    ),
+    ConformanceAdapter(
+        name="adk",
+        requires="google.adk",
+        adapters_subpackage="adk",
+        build_agent=build_adk_agent,
+        build_provider=build_adk_provider,
     ),
 )
 

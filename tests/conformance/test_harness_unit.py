@@ -143,7 +143,10 @@ def test_langgraph_cells_skip_cleanly_when_the_framework_is_absent() -> None:
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=180, check=False
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 passed" in result.stdout, result.stdout
+    # Every other registered adapter's cell still runs and passes; only the
+    # blocked one skips. Counted off the registry so adding an adapter does not
+    # silently invalidate this assertion.
+    assert f"{len(ADAPTERS) - 1} passed" in result.stdout, result.stdout
     assert "1 skipped" in result.stdout, result.stdout
     assert "optional framework 'langgraph' is not installed" in result.stdout, result.stdout
 

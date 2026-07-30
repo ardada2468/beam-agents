@@ -9,7 +9,10 @@ runtime `Agent`: an activation SHALL construct an ADK `Runner` over the adapter'
 session service, drive its event stream to completion on the bridge event loop under a
 per-key session (`session_id` and `user_id` derived from the entity key), and return
 `Complete` with the run's final output when no long-running tool calls are pending. The
-user's agent object SHALL NOT be mutated. The core package SHALL NOT import ADK:
+adapter SHALL NOT restructure the user's agent: no sub-agent, tool, or model
+substitution, and no adapter state stored on the agent (ADK's own `Runner` performs one
+idempotent normalization — setting an unset root `mode` to `"chat"` — which the adapter
+neither performs nor suppresses). The core package SHALL NOT import ADK:
 `import beam_agents` MUST succeed without the `adk` extra installed, and accessing
 `beam_agents.AdkAgent` without the extra MUST raise an `ImportError` naming
 `beam-agents[adk]`.
@@ -185,18 +188,23 @@ every conformance `ScenarioSpec` into an ADK agent using the shim, the session s
 and the transport-routed model seam. All seven conformance scenarios (`single_shot`,
 `multi_tool_inline`, `suspension_resume`, `approval_timeout_fallback`,
 `restart_mid_suspension`, `bundle_retry_cache`, `ttl_expiry`) SHALL pass for the ADK
-adapter on both legs — DirectRunner and Flink — subject only to the matrix's existing
-scenario-level per-leg skip declarations, which the meta-test counts as cells. In
-environments without the `adk` extra, the ADK cells SHALL report as clean skips naming
-the missing package.
+adapter on both legs — DirectRunner and Flink — subject only to the matrix's declared
+skips, which the meta-test counts as cells: the existing scenario-level per-leg
+declarations, plus per-adapter declarations for scenarios whose *construction* is not
+expressible in a framework's semantics. Exactly one such per-adapter declaration exists
+for ADK: `bundle_retry_cache`, whose premise is a resume issuing no novel model request,
+which ADK's resume semantics (a function response always drives one summarization turn)
+make unreachable. In environments without the `adk` extra, the ADK cells SHALL report as
+clean skips naming the missing package.
 
 #### Scenario: All seven scenarios pass on both legs
 
 - **WHEN** the conformance matrix runs with the ADK adapter registered and the extra
   installed
 - **THEN** every ADK cell across the seven scenarios passes on the DirectRunner leg and
-  on the Flink leg (declared scenario-level Flink skips reporting as skips, not
-  failures), and the meta-test's expected cell count includes the ADK adapter's cells
+  on the Flink leg (declared per-leg and per-adapter skips reporting as skips carrying
+  their reason, not failures), and the meta-test's expected cell count includes the ADK
+  adapter's cells
 
 #### Scenario: Unregistered ADK package fails collection
 

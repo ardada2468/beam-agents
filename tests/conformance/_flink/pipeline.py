@@ -27,6 +27,7 @@ from beam_agents._protos import AgentEnvelope
 from beam_agents.core.transform import AgentConfig, RunAgent
 from beam_agents.model.fake import FakeLLM
 from beam_agents.tools import ToolRegistry
+from tests.conformance._adapters.adk import adk_rules
 from tests.conformance._adapters.langgraph import langgraph_rules
 from tests.conformance._adapters.reference import reference_rules
 from tests.conformance._spec import (
@@ -49,7 +50,11 @@ CHECKPOINT_INTERVAL_MS = 5_000
 
 # Rule builders by adapter name: kept as a plain mapping (not registry entries)
 # so this module never imports pytest-side machinery into the container.
-_RULE_BUILDERS = {"reference": reference_rules, "langgraph": langgraph_rules}
+_RULE_BUILDERS = {
+    "reference": reference_rules,
+    "langgraph": langgraph_rules,
+    "adk": adk_rules,
+}
 
 
 def scenario_key(scenario_name: str, run_id: str) -> bytes:
