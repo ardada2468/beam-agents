@@ -28,6 +28,8 @@ Consuming `.errors` directly gives you `ActivationError` dataclasses:
 | `orphaned_result` | A tool result or approval arrived with no live continuation to admit it. `detail` is `<why>:<intent_id>` — one of `no_continuation`, `unknown_intent`, `deadline_passed`, `intent_expired`. |
 | `hitl_timeout` | An approval never arrived and the policy's timeout route dropped it. |
 | `ttl_wiped_suspension` | Working-memory GC reached a key still awaiting an answer; the suspension is unrecoverable. |
+| `ttl_wiped_batch` | Working-memory GC reached a key with un-flushed buffered events (`docs/batching.md`). One record per wiped envelope; `detail` is `buffered=<n>,index=<i>`. |
+| `batch_buffer_overflow` | An event arrived at a key whose batching buffer already held `max_buffered_events`. `detail` is `buffered=<n>,cap=<n>`. |
 | `intent_dead_letter` | An intent could not be serialized for the outbox. `detail` is JSON: `{reason, intent_id, seq, tool_name}`. |
 
 Two identities hold by construction and are worth alerting on if they break

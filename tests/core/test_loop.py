@@ -15,6 +15,7 @@ import pytest
 import beam_agents.core.loop as loop_module
 from beam_agents._protos import AgentEnvelope, LlmCacheBlob, MemoryBlob, ToolResult, TraceEvent
 from beam_agents.core.agent import Complete, Suspend
+from beam_agents.core.batching import TRACE_BATCH_SIZE, TRACE_BATCH_TRIGGER, TRIGGER_SIZE
 from beam_agents.core.context import ActivationContext
 from beam_agents.core.loop import (
     DEFAULT_HITL_TIMEOUT_MS,
@@ -33,6 +34,7 @@ from beam_agents.observability.metrics import ActivationTally
 from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import (
     append_agent,
+    batch_join_agent,
     make_pong_provider,
     model_agent,
     raising_agent,
@@ -524,6 +526,9 @@ async def test_loop_forwards_every_activation_context_input(
     class FakeContext:
         def __init__(self) -> None:
             self.step_index = 0
+            # Not a batch entry: this scenario forwards the per-event inputs,
+            # so the driver must stamp no batch attributes on the trace.
+            self.is_batch = False
             self.trace = ActivationTrace(entity_key=b"key", seq=4, now_ms=123)
             self.staged_intents: list[object] = []
             self.staged_traces: list[TraceEvent] = []
@@ -585,6 +590,7 @@ async def test_loop_forwards_every_activation_context_input(
         "memory_blob": memory_blob,
         "cache_blob": cache_blob,
         "event": b"event",
+        "events": None,
         "resume_result": resume_result,
         "resume_approval": resume_approval,
         "snapshot": b"snapshot",
@@ -831,3 +837,65 @@ async def test_non_outcome_error_includes_the_returned_value() -> None:
     cause = excinfo.value.__cause__
     assert isinstance(cause, TypeError)
     assert str(cause) == "agent returned a non-Outcome value: 'invalid'"
+
+
+# --- Requirement: Batch activations are batch-visible with ctx.event as a list
+
+
+async def test_a_batch_entry_reaches_the_agent_as_a_list_in_arrival_order() -> None:
+    # Scenario: The agent receives the batch as a list in arrival order. The
+    # driver is the seam the DoFn's flush path enters through, so the batch has
+    # to survive it unchanged and in order.
+    result = await run_activation(
+        batch_join_agent,
+        entity_key=b"k",
+        seq=2,
+        now_ms=3000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        events=[b"a", b"b", b"c"],
+    )
+
+    assert result.status == "completed"
+    assert result.outputs == [b"a|b|c#2"]
+
+
+async def test_a_batch_activation_stamps_its_size_and_trigger_on_the_trace() -> None:
+    # Scenario: One activation per flush ... the flush activation's trace SHALL
+    # carry `beam_agents.batch.size` and `beam_agents.batch.trigger`, so a trace
+    # consumer can tell a batch decision from a per-event one.
+    result = await run_activation(
+        batch_join_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=3000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        events=[b"a", b"b"],
+        batch_trigger=TRIGGER_SIZE,
+    )
+
+    start = result.traces[0]
+    assert start.event_type == TraceEvent.ACTIVATION_START
+    assert start.attributes[TRACE_BATCH_SIZE] == "2"
+    assert start.attributes[TRACE_BATCH_TRIGGER] == TRIGGER_SIZE
+
+
+async def test_a_per_event_activation_carries_no_batch_attributes() -> None:
+    # Under `NONE` nothing about batching appears anywhere: no attribute, no
+    # empty string, nothing for a trace consumer to have to ignore.
+    result = await run_activation(
+        seq_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    start = result.traces[0]
+    assert TRACE_BATCH_SIZE not in start.attributes
+    assert TRACE_BATCH_TRIGGER not in start.attributes

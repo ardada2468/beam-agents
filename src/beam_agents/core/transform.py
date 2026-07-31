@@ -40,6 +40,7 @@ from beam_agents.actions.write_intents import (
     WriteIntentsResult,
     is_kv_shaped,
 )
+from beam_agents.core.batching import BatchPolicy, BatchSettings, resolve_batch_settings
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.core.error_records import (
@@ -444,6 +445,31 @@ class AgentConfig:
     # tier -- checked below so the misconfiguration surfaces at the config's
     # construction site rather than at the first expiry in production.
     on_expire: ExpireHook | None = field(default=None, kw_only=True)
+    # Adaptive batching, opt-in and off by default: under `BatchPolicy.NONE`
+    # the runtime is byte-for-byte what it was before the capability existed
+    # (one activation per event, `ctx.event` as bytes, `BATCH`/`FLUSH_TIMER`
+    # untouched). The three bounds are meaningful only under `ADAPTIVE` and
+    # default to `None` so "unset" is distinguishable from "set to the default"
+    # -- setting one under `NONE` is a misconfiguration, not a no-op, and
+    # `__post_init__` says so.
+    batch_policy: BatchPolicy = field(default=BatchPolicy.NONE, kw_only=True)
+    max_batch_size: int | None = field(default=None, kw_only=True)
+    max_wait_ms: int | None = field(default=None, kw_only=True)
+    max_buffered_events: int | None = field(default=None, kw_only=True)
+
+    def batch_settings(self) -> BatchSettings | None:
+        """The resolved batching bounds, or ``None`` under `BatchPolicy.NONE`.
+
+        Recomputed rather than cached: the dataclass is frozen with slots, and
+        the resolution is three comparisons over integers on a path that runs
+        at pipeline construction, not per element.
+        """
+        return resolve_batch_settings(
+            self.batch_policy,
+            max_batch_size=self.max_batch_size,
+            max_wait_ms=self.max_wait_ms,
+            max_buffered_events=self.max_buffered_events,
+        )
 
     def __post_init__(self) -> None:
         _require_positive("activation_timeout_s", self.activation_timeout_s)
@@ -467,6 +493,11 @@ class AgentConfig:
                 "AgentConfig.on_expire flushes expiring working memory to the long-term "
                 "tier, so it requires AgentConfig.longterm_memory to name a store URI"
             )
+
+        # Raises for a non-positive bound, a cap below the flush threshold, or a
+        # batch knob set without opting in -- at the construction site, like
+        # every other knob here.
+        self.batch_settings()
 
 
 @dataclass(frozen=True, slots=True)
@@ -527,6 +558,7 @@ class RunAgent(beam.PTransform):
             compactor=self._config.compactor,
             summarizer=self._config.summarizer,
             on_expire=self._config.on_expire,
+            batch=self._config.batch_settings(),
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"

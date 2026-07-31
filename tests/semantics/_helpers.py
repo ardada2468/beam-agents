@@ -32,3 +32,30 @@ async def suspend_then_recall_agent(ctx: ActivationContext) -> Complete | Suspen
         ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
         return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=_TTL_MS)
     return Complete(output=b"resumed:" + resp.response)
+
+
+async def batch_act_agent(ctx: ActivationContext) -> Complete:
+    """Stage one intent and complete with the joined batch.
+
+    The batch's composition rides the output and the intent's ID rides
+    ``(entity_key, seq, step_index)``, so a chaos-retried flush bundle that
+    re-read a different buffer -- or minted from a different scope -- is
+    visible in both.
+    """
+    ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+    return Complete(output=b"|".join(ctx.events))
+
+
+async def batch_suspend_then_recall_agent(ctx: ActivationContext) -> Complete | Suspend:
+    """The batch-flush form of :func:`suspend_then_recall_agent`.
+
+    The suspending activation is a flush over a buffered batch; the resume
+    repeats the identical model request under the same ``(entity_key, seq)``
+    scope, so it must read the ``LLM_CACHE`` committed at suspend time rather
+    than reach the provider again -- across a chaos-forced retry included.
+    """
+    resp = await ctx.call_model(repeated_request())
+    if not ctx.is_resume:
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+        return Suspend(snapshot=b"|".join(ctx.events), adapter="test", timeout_ms=_TTL_MS)
+    return Complete(output=b"resumed:" + resp.response)

@@ -109,7 +109,7 @@ class LangGraphAgent:
                 return self._suspend_with(snapshot)
             result = await self._run(compiled, ctx, Command(resume=self._resume_map(snapshot)))
         else:
-            result = await self._run(compiled, ctx, self._decode_event(ctx.event))
+            result = await self._run(compiled, ctx, self._decode_event(ctx.single_event))
 
         if isinstance(result, dict) and "__interrupt__" in result:
             return self._stage_and_suspend(ctx, result["__interrupt__"])

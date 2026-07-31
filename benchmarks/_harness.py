@@ -195,7 +195,7 @@ async def noop_agent(ctx: ActivationContext) -> Complete:
 
 async def single_call_agent(ctx: ActivationContext) -> Complete:
     """One model call built from the event payload; the overhead-tier agent."""
-    response = await ctx.call_model(bench_request(ctx.event))
+    response = await ctx.call_model(bench_request(ctx.single_event))
     return Complete(output=response.response)
 
 
@@ -211,7 +211,7 @@ async def memory_write_agent(ctx: ActivationContext) -> Complete:
     """Write the event payload into working memory, so the committed blob size
     is the envelope's payload size (plus small framing).
     """
-    ctx.memory.set("payload", ctx.event)
+    ctx.memory.set("payload", ctx.single_event)
     return Complete(output=b"ok")
 
 

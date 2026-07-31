@@ -398,6 +398,7 @@ class ActivationContext:
         memory_blob: MemoryBlob | None,
         cache_blob: LlmCacheBlob | None,
         event: bytes = b"",
+        events: list[bytes] | None = None,
         resume_result: ToolResult | None = None,
         resume_approval: AgentEnvelope.Approval | None = None,
         snapshot: bytes = b"",
@@ -414,7 +415,20 @@ class ActivationContext:
         self.entity_key = entity_key
         self.seq = seq
         self.now_ms = now_ms
-        self.event = event
+        # `events` is the adaptive-batching entry: a flush hands the whole
+        # buffer over at once and the agent sees a `list[bytes]`, while the
+        # per-event path (and every resume, under either policy) keeps the
+        # historical `bytes`. The shape is a function of the configured policy,
+        # not of runtime batch size -- a flush of one is still a list -- so an
+        # ADAPTIVE agent is written against exactly one shape (design D4).
+        if events is not None and not events:
+            raise ValueError(
+                "ActivationContext(events=[]) is not a valid activation: a flush "
+                "only ever runs over a non-empty buffer, and an empty batch has "
+                "no activation clock to derive"
+            )
+        self._is_batch = events is not None
+        self.event: bytes | list[bytes] = list(events) if events is not None else event
         self.snapshot = snapshot
         self.resume_result = resume_result
         self.resume_approval = resume_approval
@@ -489,6 +503,58 @@ class ActivationContext:
     def is_resume(self) -> bool:
         """True when this activation resumes a suspended one (result/approval in)."""
         return self.resume_result is not None or self.resume_approval is not None
+
+    @property
+    def is_batch(self) -> bool:
+        """True exactly on an ``ADAPTIVE`` flush activation.
+
+        The explicit form of "is ``ctx.event`` a list?", so an agent or adapter
+        detects batch mode without an ``isinstance`` check on a union type. A
+        resume is never a batch activation, even under ``ADAPTIVE``: it answers
+        a suspension, and the events that opened it live in the snapshot, not
+        in the runtime (design D5).
+        """
+        return self._is_batch
+
+    @property
+    def events(self) -> tuple[bytes, ...]:
+        """This activation's events, in arrival order — one uniform shape.
+
+        The batch under ``ADAPTIVE``, a one-element tuple under ``NONE``, and
+        empty on a resume under either policy. An agent written against this
+        accessor runs unchanged when a pipeline switches policy; ``ctx.event``
+        remains the policy-shaped view for agents that want it.
+        """
+        if self._is_batch:
+            # Narrowed by construction: `_is_batch` is set exactly when the
+            # constructor stored a list.
+            assert isinstance(self.event, list)
+            return tuple(self.event)
+        if self.is_resume:
+            return ()
+        assert isinstance(self.event, bytes)
+        return (self.event,)
+
+    @property
+    def single_event(self) -> bytes:
+        """The one event payload of a per-event activation, as ``bytes``.
+
+        The narrowing accessor for consumers that are written against exactly
+        one event — the framework adapters, whose authoring surfaces take a
+        single message, and the examples. Under `BatchPolicy.ADAPTIVE` it
+        raises rather than picking an element: which event of a batch "the"
+        event is, is the consumer's decision to make (via `events`), not this
+        surface's to guess, and an actionable error here beats a ``TypeError``
+        raised from inside somebody else's framework.
+        """
+        if self._is_batch:
+            raise TypeError(
+                "ctx.single_event is undefined for a batch activation "
+                f"({len(self.events)} events under BatchPolicy.ADAPTIVE); read "
+                "ctx.events for the whole batch, or ctx.is_batch to branch"
+            )
+        assert isinstance(self.event, bytes)
+        return self.event
 
     async def call_model(self, request: LlmRequest) -> LlmResponse:
         """Cache-first model call: a live cache hit returns with zero provider

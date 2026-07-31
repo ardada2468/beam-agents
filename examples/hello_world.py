@@ -46,7 +46,7 @@ async def greeter(ctx: ActivationContext) -> Complete:
     response = await ctx.call_model(
         LlmRequest(
             model_id="fake-model",
-            messages=[ctx.event.decode()],
+            messages=[ctx.single_event.decode()],
             tools_schema=None,
             sampling_params=None,
         )

@@ -134,7 +134,7 @@ class AdkAgent:
                 return self._suspend_with(snapshot)
             message = self._function_response_message(snapshot)
         else:
-            message = self._decode_event(ctx.event)
+            message = self._decode_event(ctx.single_event)
 
         collector = CallCollector()
         final_text, ordered_ids = await self._run(runner, ctx, message, collector)

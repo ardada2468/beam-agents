@@ -31,6 +31,7 @@ from beam_agents._protos import (
     TraceEvent,
 )
 from beam_agents.core.agent import Complete, Suspend
+from beam_agents.core.batching import TRACE_BATCH_SIZE, TRACE_BATCH_TRIGGER
 from beam_agents.core.context import ActivationContext, MonotonicNs
 from beam_agents.hitl import (
     DEFAULT_APPROVAL_CHANNEL,
@@ -179,6 +180,8 @@ async def run_activation(
     memory_blob: MemoryBlob | None,
     cache_blob: LlmCacheBlob | None,
     event: bytes = b"",
+    events: list[bytes] | None = None,
+    batch_trigger: str = "",
     resume_result: ToolResult | None = None,
     resume_approval: AgentEnvelope.Approval | None = None,
     snapshot: bytes = b"",
@@ -201,6 +204,13 @@ async def run_activation(
     where the activation was; the caller commits nothing on failure, preserving
     the atomic-commit invariant. Only ``Exception`` is wrapped — cancellation
     and other ``BaseException``s propagate untouched.
+
+    ``events`` is the adaptive-batching entry point: a flush passes the whole
+    buffer's payloads and the agent sees them as ``ctx.event: list[bytes]``.
+    Everything downstream of that is unchanged — one activation, one ``seq``,
+    the same staged effects, the same commit — because a flush *is* one
+    activation (design D4). ``batch_trigger`` names which trigger produced it
+    and rides only the trace.
     """
     ctx = ActivationContext(
         entity_key=entity_key,
@@ -210,6 +220,7 @@ async def run_activation(
         memory_blob=memory_blob,
         cache_blob=cache_blob,
         event=event,
+        events=events,
         resume_result=resume_result,
         resume_approval=resume_approval,
         snapshot=snapshot,
@@ -238,7 +249,15 @@ async def run_activation(
         # so it recomputes the same trace ID and hangs its own span under the
         # initial attempt's (design D2).
         trace = ctx.trace
-        ctx.stage_trace(trace.activation_start())
+        start_event = trace.activation_start()
+        if ctx.is_batch:
+            # Stamped here rather than plumbed through `ActivationTrace`: the
+            # batch is this driver's own entry shape, and the attributes are two
+            # scalars derived from it. A per-event activation carries neither
+            # key at all, so nothing downstream has to ignore an empty one.
+            start_event.attributes[TRACE_BATCH_SIZE] = str(len(ctx.events))
+            start_event.attributes[TRACE_BATCH_TRIGGER] = batch_trigger
+        ctx.stage_trace(start_event)
 
         outcome = await agent(ctx)
 

@@ -735,6 +735,81 @@ def test_activation_context_defaults_event_snapshot_and_resume_state() -> None:
     assert ctx.is_resume is False
 
 
+# --- Requirement: Batch activations are batch-visible with ctx.event as a list
+
+
+def _batch_context(events: list[bytes] | None, **kwargs: object) -> ActivationContext:
+    return ActivationContext(
+        entity_key=b"key",
+        seq=0,
+        now_ms=1_000,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+        events=events,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def test_the_agent_receives_the_batch_as_a_list_in_arrival_order() -> None:
+    # Scenario: The agent receives the batch as a list in arrival order.
+    ctx = _batch_context([b"a", b"b", b"c"])
+
+    assert ctx.event == [b"a", b"b", b"c"]
+    assert ctx.is_batch is True
+    assert ctx.events == (b"a", b"b", b"c")
+
+
+def test_a_single_event_flush_is_still_a_list() -> None:
+    # Scenario: A single-event flush is still a list. The shape is fixed by the
+    # configured policy, not by runtime batch size, so an ADAPTIVE agent is
+    # written against exactly one shape.
+    ctx = _batch_context([b"only"])
+
+    assert ctx.event == [b"only"]
+    assert ctx.is_batch is True
+    assert ctx.events == (b"only",)
+
+
+def test_under_the_none_policy_the_event_stays_bytes_and_events_is_a_singleton() -> None:
+    ctx = _batch_context(None, event=b"solo")
+
+    assert ctx.event == b"solo"
+    assert ctx.is_batch is False
+    assert ctx.events == (b"solo",)
+
+
+def test_events_is_empty_on_a_resume() -> None:
+    # A resume answers a suspension; the events that opened it are the
+    # snapshot's business, not the runtime's (design D5).
+    ctx = _batch_context(None, resume_result=ToolResult(intent_id="i", status=ToolResult.OK))
+
+    assert ctx.is_resume is True
+    assert ctx.is_batch is False
+    assert ctx.events == ()
+
+
+def test_a_single_event_consumer_refuses_a_batch_rather_than_guessing() -> None:
+    # Scenario: A single-event consumer refuses a batch rather than guessing.
+    # `single_event` is what keeps every agent, adapter, and example written
+    # against one event statically typed against the widened `ctx.event`; under
+    # ADAPTIVE, which event "the" event is belongs to the consumer, not to this
+    # surface.
+    assert _batch_context(None, event=b"solo").single_event == b"solo"
+
+    batched = _batch_context([b"a", b"b"])
+    with pytest.raises(TypeError, match=r"ctx\.events"):
+        _ = batched.single_event
+
+
+def test_an_empty_batch_is_refused_rather_than_presented() -> None:
+    # A flush only ever runs over a non-empty buffer; an empty list would give
+    # the agent an activation with nothing to act on and a batch clock with no
+    # source, so it is a construction error, not a runtime shape.
+    with pytest.raises(ValueError, match="events"):
+        _batch_context([])
+
+
 def test_activation_context_stages_complete_intents_and_continuations() -> None:
     ctx = ActivationContext(
         entity_key=b"key",

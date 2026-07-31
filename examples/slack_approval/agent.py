@@ -55,7 +55,7 @@ def demo_args_json(order: str) -> str:
 async def refund_agent(ctx: ActivationContext) -> Complete | Suspend:
     """Request approval for a refund; act only on an explicit approval."""
     if not ctx.is_resume:
-        ctx.request_approval(demo_args_json(ctx.event.decode()), ttl_ms=DEMO_TTL_MS)
+        ctx.request_approval(demo_args_json(ctx.single_event.decode()), ttl_ms=DEMO_TTL_MS)
         return Suspend(
             snapshot=b"awaiting-approval", adapter="slack-approval-demo", timeout_ms=DEMO_TIMEOUT_MS
         )

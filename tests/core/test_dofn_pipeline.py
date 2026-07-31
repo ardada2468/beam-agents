@@ -5,6 +5,13 @@ protobuf-coded and pickle-free, a fresh key seeds seq 0, an event starts an
 activation, and an unmatched resume routes to ``.errors``. Ordered multi-element
 scenarios (resume, seq progression, timeouts, timers, interleaving) live in
 test_dofn_streaming.
+
+Adaptive batching's runner-level behavior lives here too, in its own section:
+the ``FLUSH_TIMER`` scenarios need scripted ``TestStream`` processing-time
+advances (never ``sleep()``), and whether a REAL_TIME timer set from the
+runtime's injected wall clock actually fires is exactly what no fake handle can
+show. The buffering/flush *logic* is asserted runner-free in
+test_dofn_batching.py.
 """
 
 from __future__ import annotations
@@ -17,12 +24,18 @@ import pytest
 from apache_beam.coders.coders import VarIntCoder
 from apache_beam.coders.typecoders import registry as coder_registry
 from apache_beam.metrics.metric import MetricResults, MetricsFilter
+from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Aliased: a bare "TestPipeline" name would be mis-collected by pytest.
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
+from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that, equal_to
+from apache_beam.transforms.timeutil import TimeDomain
+from apache_beam.transforms.window import TimestampedValue
 
 from beam_agents._protos import AgentEnvelope, ToolResult
+from beam_agents.core.agent import intent_id_for
+from beam_agents.core.batching import BatchPolicy, BatchSettings
 from beam_agents.core.coders import DeterministicProtoCoder, register_coders
 from beam_agents.core.dofn import (
     DETAIL_NO_CONTINUATION,
@@ -31,9 +44,14 @@ from beam_agents.core.dofn import (
     _AgentDoFn,
 )
 from beam_agents.core.transform import AgentConfig, RunAgent
+from beam_agents.hitl import HITL_TIMEOUT_OUTPUT
 from beam_agents.observability.metrics import NAMESPACE
 from tests.core._dofn_helpers import (
+    FixedClock,
+    SteppingClock,
     append_agent,
+    batch_join_agent,
+    batch_suspend_agent,
     inline_tool_agent,
     keyed,
     make_pong_provider,
@@ -42,6 +60,10 @@ from tests.core._dofn_helpers import (
     seq_agent,
     suspend_then_complete_agent,
 )
+
+# Large enough that working-memory GC never fires mid-stream in the batching
+# scenarios below (their watermark advances are seconds; this is ~11 days).
+_BIG_TTL_MS = 1_000_000_000
 
 
 def _event(key: bytes, payload: bytes, t_ms: int = 1000) -> AgentEnvelope:
@@ -288,6 +310,262 @@ def test_model_calls_made_on_the_bridge_thread_are_counted() -> None:
     # Scenario: An activation with no decoded usage contributes no sample. The
     # runtime's `call_model` never decodes the opaque response bytes.
     assert "tokens" not in distributions
+
+
+# --- Requirement: adaptive batching, end to end -------------------------------
+
+
+def _streaming_pipeline() -> BeamTestPipeline:
+    options = PipelineOptions()
+    options.view_as(StandardOptions).streaming = True
+    return BeamTestPipeline(options=options)
+
+
+def _timed(key: bytes, payload: bytes, t_ms: int) -> TimestampedValue[AgentEnvelope]:
+    return TimestampedValue(_event(key, payload, t_ms), t_ms / 1000)
+
+
+def _timed_result(key: bytes, intent_id: str, t_ms: int) -> TimestampedValue[AgentEnvelope]:
+    env = AgentEnvelope(entity_key=key, event_time_ms=t_ms)
+    env.tool_result.intent_id = intent_id
+    env.tool_result.entity_key = key
+    env.tool_result.payload = b"done"
+    env.tool_result.status = ToolResult.OK
+    return TimestampedValue(env, t_ms / 1000)
+
+
+def _adaptive(
+    agent: Any,
+    *,
+    settings: BatchSettings,
+    time_fn: Any,
+) -> beam.ParDo:
+    """An `ADAPTIVE` `_AgentDoFn` as a raw `ParDo`, so the wall clock is injectable.
+
+    `RunAgent`/`AgentConfig` deliberately expose no clock knob — a wall clock is
+    a test seam, like `metrics` and `monotonic_ns`, not user configuration — so
+    the scenarios that must arm `FLUSH_TIMER` on the `TestStream` clock's
+    timeline construct the DoFn directly. `RunAgent`'s own forwarding of the
+    batch knobs is covered by the bounded size-flush test below.
+    """
+    register_coders()
+    dofn = _AgentDoFn(
+        agent,
+        provider_factory=make_pong_provider,
+        ttl_ms=_BIG_TTL_MS,
+        batch=settings,
+        time_fn=time_fn,
+    )
+    pardo: beam.ParDo = beam.ParDo(dofn).with_outputs("intents", "traces", "errors", main="output")
+    return pardo
+
+
+def test_none_policy_preserves_existing_semantics() -> None:
+    # Scenario: NONE policy preserves existing semantics; Scenario: The batch
+    # topology is inert under NONE. The sixth spec and third timer are declared
+    # unconditionally -- protobuf-coded and REAL_TIME like the rest of the
+    # topology -- and the default-configured pipeline still activates once per
+    # event, with `ctx.event` as bytes. (The whole pre-existing suite is the
+    # rest of this scenario's assertion.)
+    assert isinstance(_AgentDoFn.BATCH.coder, DeterministicProtoCoder)
+    assert _AgentDoFn.FLUSH_TIMER.time_domain == TimeDomain.REAL_TIME
+
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_timed(b"k", b"a", 1000)])
+        .add_elements([_timed(b"k", b"b", 2000)])
+        .add_elements([_timed(b"k", b"c", 3000)])
+        .advance_processing_time(10)  # nothing armed: no flush timer exists here
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | RunAgent(
+            append_agent,
+            config=AgentConfig(provider_factory=make_pong_provider, ttl_ms=_BIG_TTL_MS),
+        )
+        # One activation per event, each seeing the previous one's committed
+        # memory: byte-for-byte what this pipeline produced before the change.
+        assert_that(out.output, equal_to([b"a#0", b"a,b#1", b"a,b,c#2"]), label="per-event")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+
+def test_an_undersized_buffer_flushes_when_max_wait_elapses() -> None:
+    # Scenario: An undersized buffer flushes when max_wait elapses. The
+    # roadmap-mandated verification: `max_wait` is honored by a processing-time
+    # timer, driven by scripted `advance_processing_time` and never a `sleep()`.
+    # The buffer never reaches `max_batch_size`, so the timer is the only thing
+    # that can produce this output at all.
+    settings = BatchSettings(max_batch_size=10, max_wait_ms=500, max_buffered_events=40)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_timed(b"k", b"a", 1000)])  # arms FLUSH_TIMER at 0.5s
+        .add_elements([_timed(b"k", b"b", 2000)])  # buffered; no re-arm
+        .advance_processing_time(1)  # 1.0s > 0.5s -> the timer fires
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | _adaptive(
+            batch_join_agent, settings=settings, time_fn=FixedClock(0.0)
+        )
+        assert_that(out.output, equal_to([b"a|b#0"]), label="timer-flush")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+
+def test_the_wait_is_measured_from_the_first_buffered_event() -> None:
+    # Scenario: The wait is measured from the first buffered event. Under a
+    # clock that steps 400ms per reading, the mark armed by "a" (0.5s) is
+    # reached by the 0.6s advance while a per-element re-arm (0.9s) would not
+    # be -- so a flush containing exactly the first two events is only
+    # reachable if the second element left the mark alone. The
+    # instance-independent form of the same claim (one `set`, not two) is
+    # asserted with fake handles in test_dofn_batching.py.
+    settings = BatchSettings(max_batch_size=10, max_wait_ms=500, max_buffered_events=40)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_timed(b"k", b"a", 1000)])
+        .add_elements([_timed(b"k", b"b", 2000)])
+        .advance_processing_time(0.6)  # fires the mark armed from "a"
+        .add_elements([_timed(b"k", b"c", 3000)])  # starts a fresh buffer
+        .advance_processing_time(1)
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | _adaptive(
+            batch_join_agent, settings=settings, time_fn=SteppingClock(0.0, 0.4)
+        )
+        assert_that(out.output, equal_to([b"a|b#0", b"c#1"]), label="two-flushes")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+
+def _one_flush_of_five(actual: object) -> None:
+    items = list(actual)  # type: ignore[call-overload]
+    assert len(items) == 1, f"expected exactly one flush output, got {items!r}"
+    payloads, _, seq = items[0].rpartition(b"#")
+    # Order within a bounded `Create` bundle is the runner's business; that the
+    # five events reached ONE activation at seq 0 is this scenario's claim.
+    assert sorted(payloads.split(b"|")) == [b"a", b"b", b"c", b"d", b"e"]
+    assert seq == b"0"
+
+
+def test_a_batch_of_n_events_consumes_one_seq() -> None:
+    # Scenario: A batch of N events consumes one seq; Scenario: A batch flush is
+    # one activation. Driven through `RunAgent`, so this is also the proof that
+    # `AgentConfig`'s batch knobs are forwarded into the DoFn.
+    elements = [_event(b"k", payload) for payload in (b"a", b"b", b"c", b"d", b"e")]
+
+    with BeamTestPipeline() as p:
+        out = keyed(p | beam.Create(elements)) | RunAgent(
+            batch_join_agent,
+            config=AgentConfig(
+                provider_factory=make_pong_provider,
+                batch_policy=BatchPolicy.ADAPTIVE,
+                max_batch_size=5,
+                max_wait_ms=500,
+            ),
+        )
+        assert_that(out.output, _one_flush_of_five, label="one-flush")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+    counters, distributions = _runtime_metrics(p.result)
+
+    # `activations` increases by one -- not five -- matching the single SEQ
+    # increment, and the flush contributes one `batch_size` sample of 5.
+    assert counters["activations"] == 1
+    assert counters["events_buffered"] == 5
+    assert counters["batch_flushes_size"] == 1
+    assert distributions["batch_size"].count == 1
+    assert distributions["batch_size"].sum == 5
+
+
+# --- Requirement: a suspending batch activation suspends and resumes as a whole
+
+
+def test_a_batch_suspension_persists_one_continuation_and_resumes_together() -> None:
+    # Scenarios: A batch suspension persists one continuation for the whole
+    # batch; The batch resumes together. Two events flush as one activation at
+    # seq 0, which stages exactly one intent and suspends; the single matching
+    # result resumes it once, at that same seq, from its snapshot.
+    settings = BatchSettings(max_batch_size=2, max_wait_ms=500, max_buffered_events=8)
+    intent_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_timed(b"k", b"a", 0)])
+        .add_elements([_timed(b"k", b"b", 0)])  # size flush -> suspends
+        .add_elements([_timed_result(b"k", intent_id, 500)])  # inside the deadline
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | _adaptive(
+            batch_suspend_agent, settings=settings, time_fn=FixedClock(0.0)
+        )
+        # One resume, at the batch's seq, carrying the whole batch's snapshot.
+        assert_that(out.output, equal_to([b"resumed:a|b#0"]), label="whole-batch-resume")
+        ids = out.intents | "ids" >> beam.Map(lambda i: (i.intent_id, i.seq))
+        assert_that(ids, equal_to([(intent_id, 0)]), label="one-intent")
+        assert_that(out.errors, equal_to([]), label="no-errors")
+
+
+def test_hitl_timeout_fails_the_whole_batch_closed() -> None:
+    # Scenario: HITL timeout fails the whole batch closed. One fallback output
+    # for the batch -- not one per batched event -- and the late result for the
+    # batch's intent is orphaned.
+    settings = BatchSettings(max_batch_size=2, max_wait_ms=500, max_buffered_events=8)
+    intent_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_timed(b"k", b"a", 0)])
+        .add_elements([_timed(b"k", b"b", 0)])  # flush suspends; HITL at 1000ms
+        .advance_processing_time(5)  # -> fires the real-time HITL timer
+        .add_elements([_timed_result(b"k", intent_id, 100)])  # continuation gone
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | _adaptive(
+            batch_suspend_agent, settings=settings, time_fn=FixedClock(0.0)
+        )
+        assert_that(out.output, equal_to([HITL_TIMEOUT_OUTPUT]), label="one-fallback")
+        reasons = out.errors | "reasons" >> beam.Map(lambda e: e.reason)
+        assert_that(reasons, equal_to([REASON_ORPHANED]), label="orphaned")
+
+
+def test_resolution_flushes_the_deferred_buffer_promptly() -> None:
+    # Scenario: Resolution flushes the deferred buffer promptly. While the
+    # batch at seq 0 is suspended, two more events buffer past
+    # `max_batch_size` without flushing; the resume commit re-arms FLUSH_TIMER
+    # at the resolution's wall clock, and the deferred batch flushes in its own
+    # callback with its own SEQ increment.
+    settings = BatchSettings(max_batch_size=2, max_wait_ms=500, max_buffered_events=8)
+    intent_id = intent_id_for(b"k", 0, 0)
+    stream = (
+        TestStream()
+        .advance_watermark_to(0)
+        .add_elements([_timed(b"k", b"a", 0)])
+        .add_elements([_timed(b"k", b"b", 0)])  # size flush -> suspends at seq 0
+        .add_elements([_timed(b"k", b"c", 100)])  # deferred
+        .add_elements([_timed(b"k", b"d", 100)])  # at the threshold, still deferred
+        .add_elements([_timed_result(b"k", intent_id, 500)])  # resume commits
+        .advance_processing_time(1)  # -> the re-armed FLUSH_TIMER fires
+        .advance_watermark_to_infinity()
+    )
+    with _streaming_pipeline() as p:
+        out = keyed(p | stream) | _adaptive(
+            batch_suspend_agent, settings=settings, time_fn=FixedClock(0.0)
+        )
+        # The deferred flush runs at seq 2: the suspending flush and the resume
+        # are each one committed activation, so each consumed one SEQ, and the
+        # deferred batch gets its own -- a third activation, not a fragment of
+        # either.
+        assert_that(
+            out.output,
+            equal_to([b"resumed:a|b#0", b"c|d#2"]),
+            label="resume-then-deferred-flush",
+        )
+        assert_that(out.errors, equal_to([]), label="no-errors")
 
 
 if __name__ == "__main__":  # pragma: no cover
