@@ -90,10 +90,10 @@ async def test_unrecognized_model_warns_once_and_falls_back(
 async def test_transport_installation_is_idempotent() -> None:
     # Installing twice must not stack transports (the hook runs once per agent
     # instance, but a model shared between adapters must stay sane).
-    from beam_agents.adapters.pydantic_ai.transport import install_transport  # noqa: PLC0415
+    from beam_agents.adapters.pydantic_ai.transport import _install_transport  # noqa: PLC0415
 
     model = RecognizedModel("m-idem", tripwire())
-    assert install_transport(model) is True
+    assert _install_transport(model) is True
     first = model.client._client._transport
-    assert install_transport(model) is True
+    assert _install_transport(model) is True
     assert model.client._client._transport is first

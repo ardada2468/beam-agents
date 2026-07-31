@@ -14,12 +14,12 @@ import types
 import pytest
 
 from beam_agents.effector.__main__ import (
+    _build_service,
+    _load_registry,
+    _serve,
     build_parser,
-    build_service,
     config_from_args,
-    load_registry,
     main,
-    serve,
 )
 from beam_agents.effector.dedup import Claimed, InMemoryDedupStore
 from beam_agents.effector.runner import EffectorToolRunner
@@ -58,18 +58,18 @@ def _args(**overrides: str) -> object:
 
 
 def test_a_registry_is_loaded_from_its_import_path() -> None:
-    assert load_registry("tests.effector.test_main:TOOLS") is TOOLS
+    assert _load_registry("tests.effector.test_main:TOOLS") is TOOLS
 
 
 @pytest.mark.parametrize("path", ["tests.effector.test_main", "TOOLS", ""])
 def test_a_malformed_registry_path_is_rejected(path: str) -> None:
     with pytest.raises(ValueError, match="module:attribute"):
-        load_registry(path)
+        _load_registry(path)
 
 
 def test_an_unknown_registry_attribute_is_rejected() -> None:
     with pytest.raises(ValueError, match="no attribute"):
-        load_registry("tests.effector.test_main:NOPE")
+        _load_registry("tests.effector.test_main:NOPE")
 
 
 def test_config_is_built_from_parsed_arguments() -> None:
@@ -118,7 +118,7 @@ async def test_serve_shuts_down_cleanly_when_cancelled() -> None:
     # collaborators instead of leaving claims and connections dangling.
     harness = build_harness(registry=TOOLS, intents=[an_intent()], clock=lambda: NOW_MS)
 
-    await serve(harness.service)
+    await _serve(harness.service)
 
     assert harness.source.closed
     assert harness.results.closed
@@ -158,7 +158,7 @@ async def test_serve_releases_unexecuted_claims_on_shutdown() -> None:
         runner=_StallingRunner(tool_timeout_ms=1_000),
     )
 
-    serving = asyncio.create_task(serve(harness.service))
+    serving = asyncio.create_task(_serve(harness.service))
     for _ in range(50):
         await asyncio.sleep(0)
         if "claim" in dedup.calls:
@@ -176,7 +176,7 @@ async def test_serve_releases_unexecuted_claims_on_shutdown() -> None:
 def test_the_service_builder_wires_every_adapter_from_the_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # `build_service` is the only place the URIs become live clients; a wrong
+    # `_build_service` is the only place the URIs become live clients; a wrong
     # dispatch here would surface as a connection error in production, not a
     # test failure.
     module = types.ModuleType("aiokafka")
@@ -187,7 +187,7 @@ def test_the_service_builder_wires_every_adapter_from_the_config(
     monkeypatch.setitem(sys.modules, "aiokafka", module)
 
     config = config_from_args(_args())  # type: ignore[arg-type]
-    service = build_service(config, TOOLS)
+    service = _build_service(config, TOOLS)
 
     assert isinstance(service, EffectorService)
     assert isinstance(service._source, KafkaIntentSource)
@@ -203,9 +203,9 @@ def test_main_runs_the_service_to_completion(monkeypatch: pytest.MonkeyPatch) ->
         served.append(service)
 
     monkeypatch.setattr(
-        "beam_agents.effector.__main__.build_service", lambda config, registry: "svc"
+        "beam_agents.effector.__main__._build_service", lambda config, registry: "svc"
     )
-    monkeypatch.setattr("beam_agents.effector.__main__.serve", _fake_serve)
+    monkeypatch.setattr("beam_agents.effector.__main__._serve", _fake_serve)
 
     code = main(
         [
@@ -229,7 +229,7 @@ def test_main_constructs_the_service_inside_the_event_loop(
 ) -> None:
     # Regression (found by the effectively-once e2e gate): the Kafka adapters
     # construct aiokafka clients in __init__, and aiokafka requires a running
-    # loop at construction — so `main` must call `build_service` from inside
+    # loop at construction — so `main` must call `_build_service` from inside
     # the loop it starts. Built outside, the CLI crashes at startup for every
     # real (non-memory://) transport, which no memory://-based test can see.
     built_inside_loop: list[bool] = []
@@ -242,8 +242,8 @@ def test_main_constructs_the_service_inside_the_event_loop(
     async def _fake_serve(service: object) -> None:
         assert service == "svc"
 
-    monkeypatch.setattr("beam_agents.effector.__main__.build_service", _probing_build)
-    monkeypatch.setattr("beam_agents.effector.__main__.serve", _fake_serve)
+    monkeypatch.setattr("beam_agents.effector.__main__._build_service", _probing_build)
+    monkeypatch.setattr("beam_agents.effector.__main__._serve", _fake_serve)
 
     code = main(
         [

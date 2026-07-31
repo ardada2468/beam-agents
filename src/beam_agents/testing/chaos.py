@@ -28,6 +28,14 @@ from beam_agents.core import dofn as _dofn_module
 from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.core.loop import ActivationResult
 
+__all__ = [
+    "ChaosBundleFailure",
+    "Matcher",
+    "fail_first_hitl_fire",
+    "fail_first_matching_commit",
+    "match_any",
+]
+
 Matcher = Callable[[ActivationResult], bool]
 
 # ``_commit``'s state/timer parameters are Beam's dynamic StateParam/TimerParam

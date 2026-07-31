@@ -45,6 +45,10 @@ if TYPE_CHECKING:
 
     from pydantic_ai._run_context import RunContext
 
+__all__ = [
+    "BeamToolset",
+]
+
 # Args arrive schema-validated by the model-side JSON schema; the real
 # validation happens in the runtime path (`ToolRunner` against the tool's
 # pydantic argument model), so the toolset-level validator is pass-through —
@@ -85,9 +89,11 @@ class BeamToolset(AbstractToolset[Any]):
 
     @property
     def id(self) -> str | None:
+        """The toolset id Pydantic AI uses to namespace these tools."""
         return self._id
 
     async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
+        """Expose every registered beam-agents tool as a Pydantic AI tool."""
         return {
             tool.name: ToolsetTool(
                 toolset=self,
@@ -101,6 +107,12 @@ class BeamToolset(AbstractToolset[Any]):
     async def call_tool(
         self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool: ToolsetTool[Any]
     ) -> Any:
+        """Run one tool call through the current activation.
+
+        Raises ``ToolError`` when called outside an activation — the tool
+        needs the activation to stage intents and record traces. A
+        ``side_effect`` tool is staged rather than executed (invariant 5).
+        """
         activation = _current_activation.get()
         if activation is None:
             raise ToolError(

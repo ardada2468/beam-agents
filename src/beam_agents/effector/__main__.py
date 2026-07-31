@@ -38,10 +38,16 @@ from beam_agents.effector.sources import build_intent_source
 if TYPE_CHECKING:
     from beam_agents.tools.registry import ToolRegistry
 
+__all__ = [
+    "build_parser",
+    "config_from_args",
+    "main",
+]
+
 _LOG = logging.getLogger("beam_agents.effector")
 
 
-def load_registry(path: str) -> ToolRegistry:
+def _load_registry(path: str) -> ToolRegistry:
     """Import a ``module:attribute`` path and return the `ToolRegistry` it names."""
     module_name, _, attribute = path.partition(":")
     if not module_name or not attribute:
@@ -58,6 +64,13 @@ def load_registry(path: str) -> ToolRegistry:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser: the effector's real user-facing contract.
+
+    Every flag maps to one :class:`EffectorConfig` field. The URI flags
+    (``--intents-from``, ``--results-to``, ``--approvals-to``,
+    ``--dedup``) are validated at construction, not at first use, so a
+    typo fails the process rather than the first intent.
+    """
     parser = argparse.ArgumentParser(
         prog="beam-agents-effector",
         description="Consume ToolIntents, dedup, execute, publish ToolResults.",
@@ -84,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> EffectorConfig:
+    """Turn parsed arguments into a validated :class:`EffectorConfig`.
+
+    Raises ``ValueError`` naming every missing required flag at once —
+    a deployment fixes one command line, not four in sequence.
+    """
     missing = [
         name
         for name in ("registry", "intents_from", "results_to", "approvals_to")
@@ -107,7 +125,7 @@ def config_from_args(args: argparse.Namespace) -> EffectorConfig:
     )
 
 
-def build_service(config: EffectorConfig, registry: ToolRegistry) -> EffectorService:
+def _build_service(config: EffectorConfig, registry: ToolRegistry) -> EffectorService:
     """Construct the service and its adapters from a validated config."""
     source_scheme, source_parts = parse_transport_uri("intents_from", config.intents_from)
     results_scheme, results_parts = parse_transport_uri("results_to", config.results_to)
@@ -125,7 +143,7 @@ def build_service(config: EffectorConfig, registry: ToolRegistry) -> EffectorSer
     )
 
 
-async def serve(service: EffectorService) -> None:
+async def _serve(service: EffectorService) -> None:
     """Run until cancelled by a signal, then shut down cleanly."""
     loop = asyncio.get_running_loop()
     runner = asyncio.create_task(service.run())
@@ -141,11 +159,17 @@ async def serve(service: EffectorService) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: build the service from ``argv`` and serve until stopped.
+
+    Returns the process exit status: ``2`` for a configuration or
+    registry-loading error (reported to stderr without a traceback,
+    since it is a user mistake), ``0`` for a clean shutdown.
+    """
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=args.log_level.upper())
     try:
         config = config_from_args(args)
-        registry = load_registry(args.registry)
+        registry = _load_registry(args.registry)
     except ValueError as exc:
         # Misconfiguration is a startup failure with an actionable message, not
         # a crash on the first message hours later.
@@ -160,11 +184,11 @@ async def _build_and_serve(config: EffectorConfig, registry: ToolRegistry) -> No
 
     Order matters: the Kafka adapters construct aiokafka clients in their
     initializers, and aiokafka requires a running event loop at construction.
-    Building as an argument to ``asyncio.run(serve(build_service(...)))``
+    Building as an argument to ``asyncio.run(_serve(_build_service(...)))``
     evaluates the builder before any loop exists and crashes at startup for
     every real (non-``memory://``) transport.
     """
-    await serve(build_service(config, registry))
+    await _serve(_build_service(config, registry))
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from beam_agents.memory.stores.base import encode_envelope
+from beam_agents.memory.stores.base import _encode_envelope
 from tests.memory.stores._conformance import ENTITY_A, MemoryStoreConformance, a_record
 
 if TYPE_CHECKING:
@@ -98,6 +98,6 @@ async def test_rows_store_the_envelope_byte_identically() -> None:
                 )
             ).scalar_one()
 
-        assert row == encode_envelope(record)
+        assert row == _encode_envelope(record)
     finally:
         await store.close()

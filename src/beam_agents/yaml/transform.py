@@ -61,6 +61,14 @@ if TYPE_CHECKING:
     from beam_agents._protos import TraceEvent
     from beam_agents.core.agent import Agent
 
+__all__ = [
+    "MALFORMED_TAG",
+    "OUTPUT_NAMES",
+    "REASON_MALFORMED_ROW",
+    "RunAgentFromYaml",
+    "run_agent",
+]
+
 #: The named outputs, matching ``RunAgentOutputs``' attribute names so docs,
 #: traces, and both surfaces agree on vocabulary. ``output`` is the main stream.
 OUTPUT_NAMES: tuple[str, ...] = ("output", "intents", "traces", "errors")
@@ -291,6 +299,12 @@ class RunAgentFromYaml(beam.PTransform):
         return self._config
 
     def expand(self, pcoll: beam.pvalue.PCollection) -> dict[str, beam.pvalue.PCollection]:
+        """Map Beam YAML rows onto ``RunAgent`` and expose its outputs by name.
+
+        Rows that cannot be mapped to an envelope are routed to the
+        :data:`MALFORMED_TAG` output with :data:`REASON_MALFORMED_ROW`
+        rather than failing the bundle.
+        """
         rows = pcoll | "RowsToEnvelopes" >> _RowsToEnvelopes(
             key_field=self._key_field,
             payload_field=self._payload_field,

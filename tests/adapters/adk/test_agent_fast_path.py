@@ -13,7 +13,7 @@ pytest.importorskip("google.adk")
 
 from google.adk.agents import LlmAgent
 
-from beam_agents.adapters.adk.session import RESERVED_NAMESPACE
+from beam_agents.adapters.adk.session import _RESERVED_NAMESPACE
 from beam_agents.core.agent import Complete
 from tests.adapters._helpers import make_ctx
 from tests.adapters.adk._helpers import call_turn, scripted_adk_agent, text_turn
@@ -41,8 +41,8 @@ async def test_fast_path_run_completes_in_one_activation() -> None:
     assert not ctx.staged_intents, "the fast path must stage no intents"
 
     entries = {entry.key for entry in ctx.memory_blob().entries}
-    session_keys = [key for key in entries if key.startswith(RESERVED_NAMESPACE)]
-    assert session_keys == [RESERVED_NAMESPACE + "session"], entries
+    session_keys = [key for key in entries if key.startswith(_RESERVED_NAMESPACE)]
+    assert session_keys == [_RESERVED_NAMESPACE + "session"], entries
 
 
 async def test_the_adapter_does_not_restructure_the_user_agent() -> None:
@@ -84,7 +84,7 @@ async def test_read_only_tool_executes_inline_with_its_value_reaching_the_model(
     # The second model turn was selected by the presence of a function
     # response, which only exists because the tool executed inline.
     assert model.calls == [0, 1]
-    session = json.loads(ctx.memory.get(RESERVED_NAMESPACE + "session") or b"{}")
+    session = json.loads(ctx.memory.get(_RESERVED_NAMESPACE + "session") or b"{}")
     responses = [
         part["function_response"]
         for event in session["events"]

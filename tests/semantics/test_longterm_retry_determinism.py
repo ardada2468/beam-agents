@@ -28,7 +28,7 @@ from beam_agents.core.context import ActivationContext
 from beam_agents.core.loop import ActivationResult
 from beam_agents.core.transform import AgentConfig, RunAgent
 from beam_agents.memory.stores import InMemoryMemoryStore, MemoryRecord, MemoryStore
-from beam_agents.memory.stores.base import encode_envelope
+from beam_agents.memory.stores.base import _encode_envelope
 from beam_agents.testing.chaos import fail_first_matching_commit
 from tests.core._dofn_helpers import keyed, make_pong_provider
 from tests.semantics._helpers import repeated_request
@@ -52,7 +52,7 @@ class _RecordingStore(InMemoryMemoryStore):
         self.rows: dict[str, bytes] = {}
 
     async def _save(self, record: MemoryRecord) -> bool:
-        envelope = encode_envelope(record)
+        envelope = _encode_envelope(record)
         self.flushed.append((record.key, envelope))
         applied = await super()._save(record)
         if applied:

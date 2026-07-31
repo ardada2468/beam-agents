@@ -24,14 +24,18 @@ from typing import TYPE_CHECKING
 from beam_agents.memory.stores.base import (
     MemoryRecord,
     MemoryStore,
-    decode_envelope,
-    encode_envelope,
-    encode_seq,
-    missing_client_error,
+    _decode_envelope,
+    _encode_envelope,
+    _encode_seq,
+    _missing_client_error,
 )
 
 if TYPE_CHECKING:
     from google.cloud.bigtable.data.row_filters import RowFilter
+
+__all__ = [
+    "BigtableMemoryStore",
+]
 
 
 def _prefix_successor(prefix: bytes) -> bytes | None:
@@ -56,7 +60,9 @@ class BigtableMemoryStore(MemoryStore):
         try:
             from google.cloud.bigtable.data import BigtableDataClientAsync
         except ImportError as exc:
-            raise missing_client_error("BigtableMemoryStore", "google-cloud-bigtable", exc) from exc
+            raise _missing_client_error(
+                "BigtableMemoryStore", "google-cloud-bigtable", exc
+            ) from exc
 
         self._client = BigtableDataClientAsync(project=project)
         self._table = self._client.get_table(instance, table)
@@ -81,7 +87,7 @@ class BigtableMemoryStore(MemoryStore):
                 row_filters.ColumnQualifierRegexFilter(self.SEQ_COLUMN),
                 row_filters.CellsColumnLimitFilter(1),
                 row_filters.ValueRangeFilter(
-                    start_value=encode_seq(incoming_seq), inclusive_start=False
+                    start_value=_encode_seq(incoming_seq), inclusive_start=False
                 ),
             ]
         )
@@ -106,7 +112,7 @@ class BigtableMemoryStore(MemoryStore):
         for row in await self._table.read_rows(query):
             envelope = self._record_cell(row)
             if envelope is not None:
-                return decode_envelope(entity_key, envelope)
+                return _decode_envelope(entity_key, envelope)
         return None
 
     def _record_cell(self, row: object) -> bytes | None:
@@ -127,8 +133,8 @@ class BigtableMemoryStore(MemoryStore):
             self._stored_newer_filter(record.seq),
             true_case_mutations=None,
             false_case_mutations=[
-                SetCell(self.COLUMN_FAMILY, self.SEQ_COLUMN, encode_seq(record.seq)),
-                SetCell(self.COLUMN_FAMILY, self.RECORD_COLUMN, encode_envelope(record)),
+                SetCell(self.COLUMN_FAMILY, self.SEQ_COLUMN, _encode_seq(record.seq)),
+                SetCell(self.COLUMN_FAMILY, self.RECORD_COLUMN, _encode_envelope(record)),
             ],
         )
         return not bool(stored_is_newer)
@@ -150,8 +156,9 @@ class BigtableMemoryStore(MemoryStore):
         for row in await self._table.read_rows(query):
             envelope = self._record_cell(row)
             if envelope is not None:
-                records.append(decode_envelope(entity_key, envelope))
+                records.append(_decode_envelope(entity_key, envelope))
         return records
 
     async def close(self) -> None:
+        """Close the Bigtable data client."""
         await self._client.close()

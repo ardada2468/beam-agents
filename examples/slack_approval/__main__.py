@@ -52,6 +52,11 @@ async def _run(config: SurfaceConfig) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: run the approval surface until interrupted.
+
+    Returns the process exit status: non-zero for a configuration
+    error, zero for a clean shutdown.
+    """
     parser = argparse.ArgumentParser(
         prog="python -m examples.slack_approval",
         description="Slack approval surface for beam-agents HITL approvals.",

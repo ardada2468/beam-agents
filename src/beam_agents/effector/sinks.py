@@ -21,23 +21,47 @@ from typing import Protocol, runtime_checkable
 
 from beam_agents._protos import ToolResult
 
+__all__ = [
+    "InMemoryMessageSink",
+    "InMemoryResultSink",
+    "KafkaMessageSink",
+    "MessageSink",
+    "ProtoResultSink",
+    "PubSubMessageSink",
+    "ResultSink",
+    "build_message_sink",
+    "build_result_sink",
+]
+
 
 @runtime_checkable
 class MessageSink(Protocol):
     """Publishes opaque payloads under a partition/ordering key."""
 
-    async def publish(self, key: bytes, payload: bytes) -> None: ...
+    async def publish(self, key: bytes, payload: bytes) -> None:
+        """Publish ``payload`` under ``key``, durably, before returning.
 
-    async def close(self) -> None: ...
+        Ordering and partitioning follow ``key``, which is the entity key:
+        results for one entity stay in order relative to each other.
+        """
+        ...
+
+    async def close(self) -> None:
+        """Release the transport's resources. Idempotent."""
+        ...
 
 
 @runtime_checkable
 class ResultSink(Protocol):
     """Publishes a `ToolResult` under its own ``entity_key``."""
 
-    async def publish(self, result: ToolResult) -> None: ...
+    async def publish(self, result: ToolResult) -> None:
+        """Publish ``result`` under its own ``entity_key``."""
+        ...
 
-    async def close(self) -> None: ...
+    async def close(self) -> None:
+        """Release the transport's resources. Idempotent."""
+        ...
 
 
 @dataclass
@@ -51,16 +75,19 @@ class InMemoryMessageSink:
     _attempts: int = field(default=0, init=False)
 
     async def publish(self, key: bytes, payload: bytes) -> None:
+        """Record the message; invoke ``fail`` first when scripted to fail."""
         self._attempts += 1
         if self.fail is not None:
             self.fail(self._attempts)
         self.published.append((key, payload))
 
     async def close(self) -> None:
+        """Mark the sink closed; nothing to release."""
         self.closed = True
 
     @property
     def attempts(self) -> int:
+        """How many publishes were attempted, including the ones ``fail`` rejected."""
         return self._attempts
 
 
@@ -75,9 +102,11 @@ class ProtoResultSink:
     inner: MessageSink
 
     async def publish(self, result: ToolResult) -> None:
+        """Serialize ``result`` deterministically and publish it under its entity key."""
         await self.inner.publish(result.entity_key, result.SerializeToString(deterministic=True))
 
     async def close(self) -> None:
+        """Close the wrapped message sink."""
         await self.inner.close()
 
 
@@ -91,20 +120,24 @@ class InMemoryResultSink:
     _attempts: int = field(default=0, init=False)
 
     async def publish(self, result: ToolResult) -> None:
+        """Record the result; invoke ``fail`` first when scripted to fail."""
         self._attempts += 1
         if self.fail is not None:
             self.fail(self._attempts)
         self.published.append(result)
 
     async def close(self) -> None:
+        """Mark the sink closed; nothing to release."""
         self.closed = True
 
     @property
     def attempts(self) -> int:
+        """How many publishes were attempted, including the ones ``fail`` rejected."""
         return self._attempts
 
     @property
     def statuses(self) -> list[ToolResult.Status]:
+        """The statuses of the recorded results, in publication order."""
         return [r.status for r in self.published]
 
 
@@ -129,12 +162,18 @@ class KafkaMessageSink:
             self._started = True
 
     async def publish(self, key: bytes, payload: bytes) -> None:
+        """Publish and wait for the broker acknowledgement before returning.
+
+        ``send_and_wait`` rather than ``send``: the result must be durable
+        before its source offset is committed, or a crash loses it.
+        """
         await self._ensure_started()
         # `send_and_wait`, not `send`: the publish must be durable before the
         # offset is committed, otherwise a crash could lose the result.
         await self._producer.send_and_wait(self._topic, value=payload, key=key)
 
     async def close(self) -> None:
+        """Stop the producer, flushing anything still buffered."""
         if self._started:
             await self._producer.stop()
             self._started = False
@@ -163,6 +202,7 @@ class PubSubMessageSink:
         self._topic = self._client.topic_path(project, topic)
 
     async def publish(self, key: bytes, payload: bytes) -> None:
+        """Publish with ``key`` as the Pub/Sub ordering key, awaiting the ack."""
         import asyncio
 
         future = self._client.publish(self._topic, payload, ordering_key=key.hex())
@@ -171,6 +211,7 @@ class PubSubMessageSink:
         await asyncio.to_thread(future.result)
 
     async def close(self) -> None:
+        """Stop the publisher client's background threads."""
         self._client.stop()
 
 

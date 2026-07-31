@@ -89,11 +89,15 @@ class SlackGateway(Protocol):
         """Tell the clicking user something without publishing (best-effort)."""
         ...
 
-    async def close(self) -> None: ...
+    async def close(self) -> None:
+        """Stop delivering decisions and release the gateway's connections."""
+        ...
 
 
 @dataclass(frozen=True)
 class PostedMessage:
+    """One message this fake gateway posted."""
+
     ref: MessageRef
     channel: str
     text: str
@@ -102,6 +106,8 @@ class PostedMessage:
 
 @dataclass(frozen=True)
 class EditedMessage:
+    """One in-place edit this fake gateway applied to a posted message."""
+
     ref: MessageRef
     text: str
     blocks: list[Block]
@@ -127,6 +133,7 @@ class FakeSlackGateway:
     _queue: asyncio.Queue[Decision | None] = field(default_factory=asyncio.Queue, init=False)
 
     async def post(self, channel: str, *, text: str, blocks: list[Block]) -> MessageRef:
+        """Record the post and return a synthetic message ref; raise if scripted to."""
         if self.fail_post is not None:
             raise self.fail_post
         ref = MessageRef(channel=channel, ts=f"1700000000.{len(self.posts):06d}")
@@ -134,9 +141,11 @@ class FakeSlackGateway:
         return ref
 
     async def update(self, ref: MessageRef, *, text: str, blocks: list[Block]) -> None:
+        """Record the edit."""
         self.edits.append(EditedMessage(ref=ref, text=text, blocks=blocks))
 
     async def decisions(self) -> AsyncIterator[Decision]:
+        """Yield scripted decisions until :meth:`close` queues the sentinel."""
         while True:
             item = await self._queue.get()
             if item is None:
@@ -144,9 +153,11 @@ class FakeSlackGateway:
             yield item
 
     async def answer(self, decision: Decision, text: str) -> None:
+        """Record the ephemeral answer instead of sending one."""
         self.answered.append((decision, text))
 
     async def close(self) -> None:
+        """End the decision stream and mark the gateway closed."""
         self.closed = True
         self._queue.put_nowait(None)
 
@@ -210,13 +221,16 @@ class SocketModeGateway:
         self._connected = False
 
     async def post(self, channel: str, *, text: str, blocks: list[Block]) -> MessageRef:
+        """Post the message via ``chat.postMessage`` and return its ref."""
         response = await self._web.chat_postMessage(channel=channel, text=text, blocks=blocks)
         return MessageRef(channel=str(response["channel"]), ts=str(response["ts"]))
 
     async def update(self, ref: MessageRef, *, text: str, blocks: list[Block]) -> None:
+        """Edit the message in place via ``chat.update``."""
         await self._web.chat_update(channel=ref.channel, ts=ref.ts, text=text, blocks=blocks)
 
     async def decisions(self) -> AsyncIterator[Decision]:
+        """Connect the socket if needed, then yield decisions as they arrive."""
         if not self._connected:
             await self._socket.connect()
             self._connected = True
@@ -227,6 +241,11 @@ class SocketModeGateway:
             yield item
 
     async def answer(self, decision: Decision, text: str) -> None:
+        """Answer the clicking user with an ephemeral message.
+
+        Best-effort by design: the message edit is the durable answer, so a
+        failed ephemeral is logged, never raised.
+        """
         # chat.postEphemeral needs a channel and a user; a `block_actions`
         # payload for a channel message carries both (`container.channel_id`,
         # `user.id` — docs.slack.dev/reference/interaction-payloads, 2026-07-30).
@@ -280,6 +299,7 @@ class SocketModeGateway:
             )
 
     async def close(self) -> None:
+        """End the decision stream and close the socket connection."""
         self._queue.put_nowait(None)
         if self._connected:
             await self._socket.close()

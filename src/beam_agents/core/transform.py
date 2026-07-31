@@ -39,7 +39,7 @@ from beam_agents._protos import ToolIntent
 from beam_agents.actions.write_intents import (
     WriteIntents,
     WriteIntentsResult,
-    is_kv_shaped,
+    _is_kv_shaped,
 )
 from beam_agents.core.batching import BatchPolicy, BatchSettings, resolve_batch_settings
 from beam_agents.core.coders import register_coders
@@ -64,6 +64,19 @@ if TYPE_CHECKING:
     from beam_agents.memory.facade import Compactor
     from beam_agents.model.client import LLMClient
     from beam_agents.model.facade import Decode
+
+__all__ = [
+    "ERRORS_TAG",
+    "INTENTS_TAG",
+    "SNAPSHOTS_TAG",
+    "TRACES_TAG",
+    "AgentConfig",
+    "DefaultSinkResolver",
+    "RunAgent",
+    "RunAgentOutputs",
+    "SinkResolver",
+    "UnknownSinkSchemeError",
+]
 
 # Output tags. ``output`` is the main (untagged) output.
 INTENTS_TAG = "intents"
@@ -181,9 +194,17 @@ class SinkResolver(Protocol):
     can special-case a field independently of URI scheme.
     """
 
-    def validate(self, field_name: str, uri: str) -> None: ...
+    def validate(self, field_name: str, uri: str) -> None:
+        """Raise ``UnknownSinkSchemeError`` if ``uri`` cannot serve ``field_name``.
 
-    def resolve(self, field_name: str, uri: str) -> beam.PTransform: ...
+        Called at pipeline-construction time, so a bad URI fails before a
+        worker starts. Must not import IO clients or touch the network.
+        """
+        ...
+
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        """Build the writer transform ``uri`` names for ``field_name``."""
+        ...
 
 
 class _KeyedWriteIntents(beam.PTransform):
@@ -313,6 +334,12 @@ class DefaultSinkResolver:
     _BIGQUERY_URI_SEGMENTS = 2  # <dataset>/<table>
 
     def validate(self, field_name: str, uri: str) -> None:
+        """Validate a sink URI without importing its IO client.
+
+        ``otlp://`` is rejected for anything but ``traces_to``: it is a
+        best-effort exporter that drops on delivery failure, and intents and
+        errors need a lossless sink.
+        """
         scheme, _ = self._parse(field_name, uri)
         if scheme == "otlp" and field_name != "traces_to":
             raise UnknownSinkSchemeError(
@@ -328,6 +355,11 @@ class DefaultSinkResolver:
             )
 
     def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        """Validate, then build the writer, importing its IO client only now.
+
+        ``intents_to`` gets the keyed writer so intents are partitioned by
+        ``entity_key``, preserving per-entity ordering into the outbox.
+        """
         self.validate(field_name, uri)
         scheme, parts = self._parse("<sink>", uri)
         if field_name == "intents_to" and scheme in ("kafka", "pubsub"):
@@ -594,7 +626,7 @@ def _validate_kv_input(pcoll: beam.pvalue.PCollection) -> None:
     An absent/erased element type is allowed to pass (the DoFn's downstream KV
     requirement is the backstop); only a definite non-pair type is rejected.
     """
-    if not is_kv_shaped(pcoll.element_type):
+    if not _is_kv_shaped(pcoll.element_type):
         raise ValueError(
             "RunAgent requires a PCollection[KV[bytes, AgentEnvelope]] input "
             f"(pre-keyed by entity_key); got element type {pcoll.element_type!r}. Key "
@@ -612,6 +644,11 @@ class RunAgent(beam.PTransform):
         self._config = config
 
     def expand(self, pcoll: beam.pvalue.PCollection) -> RunAgentOutputs:
+        """Wire the stateful agent DoFn and its four tagged outputs.
+
+        Raises ``ValueError`` on non-KV input: Beam's stateful DoFn requires
+        a keyed ``PCollection``, and failing here beats failing on a worker.
+        """
         _validate_kv_input(pcoll)
         register_coders()
         dofn = _AgentDoFn(

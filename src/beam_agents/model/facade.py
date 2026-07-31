@@ -42,6 +42,23 @@ from beam_agents.observability import (
     usage_attributes,
 )
 
+__all__ = [
+    "BudgetExceeded",
+    "CircuitBreaker",
+    "CircuitOpenError",
+    "CircuitState",
+    "Decode",
+    "DecodedResponse",
+    "FacadeResult",
+    "LlmFacade",
+    "OutputSchemaError",
+    "RetryPolicy",
+    "Sleep",
+    "StagingSink",
+    "TokenBudget",
+    "TokenUsage",
+]
+
 Sleep = Callable[[int], Awaitable[None]]
 
 # Fixed key under which the output_schema's JSON Schema is folded into the
@@ -162,6 +179,7 @@ class TokenBudget:
 
     @property
     def limit(self) -> int:
+        """The token ceiling this budget enforces."""
         return self._limit
 
     @property
@@ -171,6 +189,7 @@ class TokenBudget:
 
     @property
     def exhausted(self) -> bool:
+        """Whether the budget has tripped; latched, never reset."""
         return self._exhausted
 
     def check(self) -> None:
@@ -220,9 +239,13 @@ class StagingSink(Protocol):
     caller only commits staged effects on success.
     """
 
-    def stage_trace_event(self, event: TraceEvent) -> None: ...
+    def stage_trace_event(self, event: TraceEvent) -> None:
+        """Stage a trace event for emission on commit."""
+        ...
 
-    def accumulate_usage(self, usage: TokenUsage) -> None: ...
+    def accumulate_usage(self, usage: TokenUsage) -> None:
+        """Add one call's usage to the activation tally."""
+        ...
 
 
 class CircuitBreaker:
@@ -244,6 +267,7 @@ class CircuitBreaker:
 
     @property
     def state(self) -> CircuitState:
+        """The breaker's current state."""
         return self._state
 
     def before_call(self, now_ms: int) -> None:
@@ -259,11 +283,17 @@ class CircuitBreaker:
             self._state = CircuitState.HALF_OPEN
 
     def record_success(self) -> None:
+        """Record a successful call: close the breaker and clear the failure run."""
         self._state = CircuitState.CLOSED
         self._consecutive_failures = 0
         self._opened_at_ms = None
 
     def record_failure(self, now_ms: int) -> None:
+        """Record a retryable transport failure, tripping the breaker at threshold.
+
+        A failure while ``HALF_OPEN`` re-opens immediately and restarts the
+        cooldown from ``now_ms``.
+        """
         if self._state is CircuitState.HALF_OPEN:
             self._state = CircuitState.OPEN
             self._opened_at_ms = now_ms
@@ -338,6 +368,17 @@ class LlmFacade:
         step_index: int,
         output_schema: type[BaseModel] | None = None,
     ) -> FacadeResult:
+        """Complete ``request`` cache-first, with retry, breaker, and budget applied.
+
+        The cache key is ``(model_id, messages, tools_schema, sampling
+        params, entity_key, seq, step_index)``, so a retried bundle walking
+        the same path reaches the provider zero additional times
+        (invariant 3). Raises :class:`BudgetExceeded` when the activation's
+        token budget has tripped, :class:`CircuitOpenError` while the
+        endpoint's breaker is open, :class:`OutputSchemaError` when a
+        constrained decode does not validate, and the :class:`ProviderError`
+        subclass that survived the retry policy otherwise.
+        """
         # Entry check first: before the cache lookup and before the breaker. A
         # spent budget must serve nothing, not even a free hit (served context
         # is still consumption), and budget state — like cache state — must not

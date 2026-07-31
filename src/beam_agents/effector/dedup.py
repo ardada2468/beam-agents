@@ -34,6 +34,18 @@ if TYPE_CHECKING:
 
     from google.cloud.bigtable.data.row_filters import RowFilter
 
+__all__ = [
+    "BigtableDedupStore",
+    "ClaimOutcome",
+    "Claimed",
+    "DedupStore",
+    "Done",
+    "InFlight",
+    "InMemoryDedupStore",
+    "RedisDedupStore",
+    "build_dedup_store",
+]
+
 # Value tags framing a Redis/Bigtable record, so claim state and terminal state
 # live in one value and one atomic operation each.
 _TAG_CLAIM = b"C"
@@ -75,15 +87,40 @@ class DedupStore(Protocol):
     mid-flight can never overwrite or free its successor's record.
     """
 
-    async def claim(self, intent_id: str, lease_ms: int) -> ClaimOutcome: ...
+    async def claim(self, intent_id: str, lease_ms: int) -> ClaimOutcome:
+        """Atomically take ownership of ``intent_id`` for ``lease_ms``.
+
+        :class:`Claimed` carries the ownership token ``complete``/``release``
+        must present; :class:`InFlight` means another worker holds a live
+        lease; :class:`Done` carries the terminal record of an execution that
+        already happened — the dedup decision itself, so the caller republishes
+        rather than re-executing.
+        """
+        ...
 
     async def complete(
         self, intent_id: str, token: str, result: ToolResult | None, ttl_ms: int
-    ) -> bool: ...
+    ) -> bool:
+        """Replace the claim with a terminal record retained for ``ttl_ms``.
 
-    async def release(self, intent_id: str, token: str) -> bool: ...
+        Conditional on ``token`` still owning the claim, so a worker whose
+        lease expired mid-flight cannot overwrite its successor's record.
+        Returns whether the write happened. ``result`` is ``None`` for an
+        approval routed rather than executed.
+        """
+        ...
 
-    async def close(self) -> None: ...
+    async def release(self, intent_id: str, token: str) -> bool:
+        """Drop an owned claim without recording a result, so a retry may reclaim.
+
+        Conditional on ``token``, like ``complete``; returns whether the claim
+        was released.
+        """
+        ...
+
+    async def close(self) -> None:
+        """Release the backend client's connections. Idempotent."""
+        ...
 
 
 def _new_token() -> str:
@@ -144,6 +181,11 @@ class InMemoryDedupStore:
         return record
 
     async def claim(self, intent_id: str, lease_ms: int) -> ClaimOutcome:
+        """Claim by inserting a live record; see :class:`DedupStore`.
+
+        Atomic by construction: a single-threaded event loop never
+        interleaves the read and the insert.
+        """
         record = self._live(intent_id)
         if record is not None:
             if record.tag == _TAG_DONE:
@@ -158,6 +200,7 @@ class InMemoryDedupStore:
     async def complete(
         self, intent_id: str, token: str, result: ToolResult | None, ttl_ms: int
     ) -> bool:
+        """Overwrite an owned claim with a terminal record; see :class:`DedupStore`."""
         record = self._live(intent_id)
         if record is None or record.tag != _TAG_CLAIM or record.payload != token.encode():
             return False
@@ -168,6 +211,7 @@ class InMemoryDedupStore:
         return True
 
     async def release(self, intent_id: str, token: str) -> bool:
+        """Delete an owned claim; see :class:`DedupStore`."""
         record = self._live(intent_id)
         if record is None or record.tag != _TAG_CLAIM or record.payload != token.encode():
             return False
@@ -175,6 +219,7 @@ class InMemoryDedupStore:
         return True
 
     async def close(self) -> None:
+        """No connections to release: the records live in this process."""
         return None
 
 
@@ -224,6 +269,12 @@ class RedisDedupStore:
         return f"{self._prefix}{intent_id}"
 
     async def claim(self, intent_id: str, lease_ms: int) -> ClaimOutcome:
+        """Claim with ``SET NX PX``, whose atomicity is the whole guarantee.
+
+        A losing ``SET`` reads the stored value to distinguish a live lease
+        (:class:`InFlight`) from a terminal record (:class:`Done`). See
+        :class:`DedupStore`.
+        """
         key = self._key(intent_id)
         token = _new_token()
         if await self._redis.set(key, _encode_claim(token), nx=True, px=lease_ms):
@@ -243,6 +294,11 @@ class RedisDedupStore:
     async def complete(
         self, intent_id: str, token: str, result: ToolResult | None, ttl_ms: int
     ) -> bool:
+        """Complete via the token-checking Lua script (one atomic round trip).
+
+        The script compares the stored claim to ``token`` and only then
+        writes the terminal record with its TTL. See :class:`DedupStore`.
+        """
         outcome = await self._complete(
             keys=[self._key(intent_id)],
             args=[_encode_claim(token), _encode_done(result), ttl_ms],
@@ -250,10 +306,12 @@ class RedisDedupStore:
         return bool(outcome)
 
     async def release(self, intent_id: str, token: str) -> bool:
+        """Release via the token-checking Lua script. See :class:`DedupStore`."""
         outcome = await self._release(keys=[self._key(intent_id)], args=[_encode_claim(token)])
         return bool(outcome)
 
     async def close(self) -> None:
+        """Close the Redis client's connection pool."""
         await self._redis.aclose()
 
 
@@ -261,15 +319,15 @@ class RedisDedupStore:
 # filters compare bytes lexicographically. Big-endian fixed-width encoding makes
 # lexicographic order agree with numeric order for non-negative values, so
 # "lease not yet expired" becomes a ValueRange lower-bounded at now.
-def encode_lease_expiry(expires_at_ms: int) -> bytes:
+def _encode_lease_expiry(expires_at_ms: int) -> bytes:
     """Encode a lease expiry so byte order matches numeric order."""
     if expires_at_ms < 0:
         raise ValueError(f"lease expiry must be non-negative, got {expires_at_ms}")
     return struct.pack(">Q", expires_at_ms)
 
 
-def decode_lease_expiry(encoded: bytes) -> int:
-    """Inverse of :func:`encode_lease_expiry`.
+def _decode_lease_expiry(encoded: bytes) -> int:
+    """Inverse of :func:`_encode_lease_expiry`.
 
     Reads back the expiry a claim cell carries — used by the property test that
     pins the order-preserving property the Bigtable range filter depends on, and
@@ -354,7 +412,7 @@ class BigtableDedupStore:
                 row_filters.ColumnQualifierRegexFilter(column),
                 row_filters.CellsColumnLimitFilter(1),
                 row_filters.ValueRangeFilter(
-                    start_value=encode_lease_expiry(now_ms), inclusive_start=False
+                    start_value=_encode_lease_expiry(now_ms), inclusive_start=False
                 ),
             ]
         )
@@ -401,7 +459,7 @@ class BigtableDedupStore:
             # A *live* terminal record wins over any claim cell still present.
             # An expired one does not: the row was re-claimable, so the caller
             # is mid-claim against it, not looking at a real result.
-            if stored is not None and expiry is not None and now_ms < decode_lease_expiry(expiry):
+            if stored is not None and expiry is not None and now_ms < _decode_lease_expiry(expiry):
                 return _decode_done(stored)
         # Otherwise the row is live-claimed (the common case), or its claim
         # expired between the conditional mutation and this read. Both are
@@ -410,6 +468,12 @@ class BigtableDedupStore:
         return InFlight()
 
     async def claim(self, intent_id: str, lease_ms: int) -> ClaimOutcome:
+        """Claim with one ``CheckAndMutateRow``: the predicate is the dedup decision.
+
+        The filter matches a row that is live-claimed or terminal; the false
+        branch writes our claim. A predicate hit re-reads the row to report
+        :class:`InFlight` or :class:`Done`. See :class:`DedupStore`.
+        """
         from google.cloud.bigtable.data import SetCell
 
         now_ms = self._clock()
@@ -424,7 +488,7 @@ class BigtableDedupStore:
             true_case_mutations=None,
             false_case_mutations=[
                 SetCell(
-                    self.COLUMN_FAMILY, self.CLAIM_COLUMN, encode_lease_expiry(now_ms + lease_ms)
+                    self.COLUMN_FAMILY, self.CLAIM_COLUMN, _encode_lease_expiry(now_ms + lease_ms)
                 ),
                 SetCell(self.COLUMN_FAMILY, self.OWNER_COLUMN, token.encode()),
             ],
@@ -453,6 +517,12 @@ class BigtableDedupStore:
     async def complete(
         self, intent_id: str, token: str, result: ToolResult | None, ttl_ms: int
     ) -> bool:
+        """Complete with an owner-conditional ``CheckAndMutateRow``.
+
+        The predicate is ``token`` still owning the claim; the true branch
+        deletes the claim column and writes the terminal record. See
+        :class:`DedupStore`.
+        """
         from google.cloud.bigtable.data import DeleteRangeFromColumn, SetCell
 
         stored = _encode_done(result)[len(_TAG_DONE) :]
@@ -466,7 +536,7 @@ class BigtableDedupStore:
                 SetCell(
                     self.COLUMN_FAMILY,
                     self.RESULT_EXPIRY_COLUMN,
-                    encode_lease_expiry(self._clock() + ttl_ms),
+                    _encode_lease_expiry(self._clock() + ttl_ms),
                 ),
                 DeleteRangeFromColumn(self.COLUMN_FAMILY, self.CLAIM_COLUMN),
                 DeleteRangeFromColumn(self.COLUMN_FAMILY, self.OWNER_COLUMN),
@@ -476,6 +546,7 @@ class BigtableDedupStore:
         return bool(owned)
 
     async def release(self, intent_id: str, token: str) -> bool:
+        """Release with an owner-conditional ``CheckAndMutateRow``. See :class:`DedupStore`."""
         from google.cloud.bigtable.data import DeleteRangeFromColumn
 
         owned = await self._table.check_and_mutate_row(
@@ -490,6 +561,7 @@ class BigtableDedupStore:
         return bool(owned)
 
     async def close(self) -> None:
+        """Close the Bigtable data client."""
         await self._client.close()
 
 

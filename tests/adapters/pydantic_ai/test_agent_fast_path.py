@@ -13,7 +13,7 @@ from pydantic_ai import Agent
 
 from beam_agents._protos import TraceEvent
 from beam_agents.adapters.pydantic_ai import PydanticAIAgent
-from beam_agents.adapters.pydantic_ai.history import RESERVED_NAMESPACE
+from beam_agents.adapters.pydantic_ai.history import _RESERVED_NAMESPACE
 from beam_agents.core.agent import Complete
 from beam_agents.tools import ToolRegistry, tool
 from tests.adapters.pydantic_ai._helpers import (
@@ -59,7 +59,7 @@ async def test_fast_path_completes_and_commits_history() -> None:
     assert outcome.output == b"done-fast"
     keys = [entry.key for entry in ctx.memory_blob().entries]
     assert keys, "the activation must persist the message history"
-    assert all(key.startswith(RESERVED_NAMESPACE) for key in keys), keys
+    assert all(key.startswith(_RESERVED_NAMESPACE) for key in keys), keys
 
 
 async def test_read_only_tool_runs_inline_with_a_trace_event() -> None:

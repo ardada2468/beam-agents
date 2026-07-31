@@ -25,15 +25,20 @@ from typing import TYPE_CHECKING, Any
 from beam_agents.memory.stores.base import (
     MemoryRecord,
     MemoryStore,
-    decode_envelope,
-    encode_envelope,
-    missing_client_error,
-    seq_guard_applies,
+    _decode_envelope,
+    _encode_envelope,
+    _missing_client_error,
+    _seq_guard_applies,
 )
 
 if TYPE_CHECKING:
     from sqlalchemy import Table
     from sqlalchemy.ext.asyncio import AsyncEngine
+
+__all__ = [
+    "DDL",
+    "SqlMemoryStore",
+]
 
 _TABLE_NAME = "beam_agents_longterm"
 
@@ -72,7 +77,7 @@ class SqlMemoryStore(MemoryStore):
             import sqlalchemy
             from sqlalchemy.ext.asyncio import create_async_engine
         except ImportError as exc:
-            raise missing_client_error("SqlMemoryStore", "sqlalchemy", exc) from exc
+            raise _missing_client_error("SqlMemoryStore", "sqlalchemy", exc) from exc
 
         self._sa = sqlalchemy
         self._engine: AsyncEngine = create_async_engine(url)
@@ -104,7 +109,7 @@ class SqlMemoryStore(MemoryStore):
             envelope: bytes | None = (await conn.execute(stmt)).scalar_one_or_none()
         if envelope is None:
             return None
-        return decode_envelope(entity_key, envelope)
+        return _decode_envelope(entity_key, envelope)
 
     async def _save(self, record: MemoryRecord) -> bool:
         sa = self._sa
@@ -119,11 +124,11 @@ class SqlMemoryStore(MemoryStore):
                 .with_for_update()
             )
             stored_seq: int | None = (await conn.execute(select)).scalar_one_or_none()
-            if not seq_guard_applies(record.seq, stored_seq):
+            if not _seq_guard_applies(record.seq, stored_seq):
                 return False
             values: dict[str, Any] = {
                 "seq": record.seq,
-                "rec": encode_envelope(record),
+                "rec": _encode_envelope(record),
                 "updated_at_ms": record.updated_at_ms,
             }
             if stored_seq is None:
@@ -155,7 +160,8 @@ class SqlMemoryStore(MemoryStore):
         )
         async with self._engine.connect() as conn:
             envelopes = [row[0] for row in (await conn.execute(stmt)).all()]
-        return [decode_envelope(entity_key, envelope) for envelope in envelopes]
+        return [_decode_envelope(entity_key, envelope) for envelope in envelopes]
 
     async def close(self) -> None:
+        """Dispose the SQLAlchemy engine and its connection pool."""
         await self._engine.dispose()

@@ -19,7 +19,7 @@ from google.adk.sessions.base_session_service import GetSessionConfig
 from google.genai import types
 
 from beam_agents._protos import MemoryBlob, ToolResult
-from beam_agents.adapters.adk.session import RESERVED_NAMESPACE, BeamSessionService
+from beam_agents.adapters.adk.session import _RESERVED_NAMESPACE, BeamSessionService
 from beam_agents.core.agent import Complete, Suspend
 from beam_agents.memory.facade import HARD_CAP_BYTES, Memory, MemoryOverflow
 from tests.adapters._helpers import ENTITY_KEY, NOW_MS, make_ctx
@@ -61,7 +61,7 @@ async def test_session_round_trips_through_the_reserved_namespace() -> None:
 
     # Every stored key lives under the reserved prefix.
     stored = [entry.key for entry in memory.to_blob().entries]
-    assert stored == [RESERVED_NAMESPACE + "session"]
+    assert stored == [_RESERVED_NAMESPACE + "session"]
 
     # A service rebuilt on a fresh facade over the committed blob sees it all.
     reloaded, _ = _service(memory.to_blob())
@@ -152,7 +152,7 @@ async def test_delete_session_clears_the_reserved_key() -> None:
     await service.create_session(app_name=_APP, user_id=_KEY_HEX, session_id=_KEY_HEX)
     await service.delete_session(app_name=_APP, user_id=_KEY_HEX, session_id=_KEY_HEX)
 
-    assert memory.get(RESERVED_NAMESPACE + "session") is None
+    assert memory.get(_RESERVED_NAMESPACE + "session") is None
     assert await service.get_session(app_name=_APP, user_id=_KEY_HEX, session_id=_KEY_HEX) is None
 
 
@@ -224,5 +224,5 @@ async def test_worker_failover_resumes_from_the_committed_session() -> None:
     assert isinstance(resumed, Complete)
     assert resumed.output == b"done-failover"
     # The full history came from the committed session, not from the run.
-    session = json.loads(resume_ctx.memory.get(RESERVED_NAMESPACE + "session") or b"{}")
+    session = json.loads(resume_ctx.memory.get(_RESERVED_NAMESPACE + "session") or b"{}")
     assert len(session["events"]) >= 4

@@ -33,10 +33,10 @@ if TYPE_CHECKING:
     from beam_agents.core.context import ActivationContext
 
 #: The `beam_agents.adapter` attribute value this adapter stamps.
-ADAPTER_NAME = "adk"
+_ADAPTER_NAME = "adk"
 
 
-class TraceTee:
+class _TraceTee:
     """One activation's tee: owns the adapter-side ``tool_index`` counter so
     every inline execution gets a distinct, deterministic tool span."""
 
@@ -52,17 +52,17 @@ class TraceTee:
             tool_index=self._tool_index,
             tool_name=tool_name,
         )
-        event.attributes[ADAPTER] = ADAPTER_NAME
+        event.attributes[ADAPTER] = _ADAPTER_NAME
         self._ctx.stage_trace(event)
         self._tool_index += 1
 
 
 #: The tee of the activation currently driving the ADK run; set by `AdkAgent`
 #: around `run_async` (same contextvar pattern as the transport).
-_current_tee: ContextVar[TraceTee | None] = ContextVar("beam_agents_adk_tee", default=None)
+_current_tee: ContextVar[_TraceTee | None] = ContextVar("beam_agents_adk_tee", default=None)
 
 
-def stage_tool_call(tool_name: str) -> None:
+def _stage_tool_call(tool_name: str) -> None:
     """Stage a ``TOOL_CALL`` event for an inline shim execution.
 
     Outside an activation (a shim tool exercised in a plain ADK runner) there

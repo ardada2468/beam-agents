@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from beam_agents.memory.stores import InMemoryMemoryStore, MemoryRecord, MemoryStore
-from beam_agents.memory.stores.base import seq_guard_applies
+from beam_agents.memory.stores.base import _seq_guard_applies
 
 from ._conformance import ENTITY_A, MemoryStoreConformance, a_record
 
@@ -83,7 +83,7 @@ async def test_close_is_a_no_op() -> None:
 def test_the_seq_guard_rule_has_one_definition() -> None:
     # The base class owns "applies iff incoming >= stored (or nothing stored)";
     # backends encode it into their primitives but tests pin the reference.
-    assert seq_guard_applies(0, None)
-    assert seq_guard_applies(5, 5)
-    assert seq_guard_applies(6, 5)
-    assert not seq_guard_applies(4, 5)
+    assert _seq_guard_applies(0, None)
+    assert _seq_guard_applies(5, 5)
+    assert _seq_guard_applies(6, 5)
+    assert not _seq_guard_applies(4, 5)

@@ -29,8 +29,8 @@ from beam_agents.effector.dedup import (
     InFlight,
     InMemoryDedupStore,
     RedisDedupStore,
+    _encode_lease_expiry,
     build_dedup_store,
-    encode_lease_expiry,
 )
 from beam_agents.effector.service import _wall_clock_ms
 from beam_agents.effector.sinks import (
@@ -709,7 +709,7 @@ async def test_the_bigtable_store_claims_with_one_conditional_mutation(
     assert true_case is None
     assert len(false_case) == 2
     set_calls = [c for c in calls if c[0] == "SetCell"]
-    assert set_calls[0][1] == ("d", b"claim", encode_lease_expiry(NOW_MS + 5_000))
+    assert set_calls[0][1] == ("d", b"claim", _encode_lease_expiry(NOW_MS + 5_000))
     assert set_calls[1][1] == ("d", b"owner", outcome.token.encode())
 
 
@@ -728,7 +728,7 @@ async def test_the_bigtable_lease_predicate_is_an_exclusive_value_range(
     range_calls = [c for c in calls if c[0] == "ValueRangeFilter"]
     assert len(range_calls) == 2
     for range_call in range_calls:
-        assert range_call[2]["start_value"] == encode_lease_expiry(NOW_MS)
+        assert range_call[2]["start_value"] == _encode_lease_expiry(NOW_MS)
         assert range_call[2]["inclusive_start"] is False
 
     # Every value predicate is pinned to the latest cell version; a superseded
@@ -772,7 +772,7 @@ async def test_bigtable_completion_clears_the_claim_and_writes_the_result(
     assert sets[0] == ("d", b"result", result.SerializeToString(deterministic=True))
     # The record stamps its own expiry: `rexp` is what every read gates on, so
     # a lagging GC rule can never serve a result past its TTL.
-    assert sets[1] == ("d", b"rexp", encode_lease_expiry(NOW_MS + 60_000))
+    assert sets[1] == ("d", b"rexp", _encode_lease_expiry(NOW_MS + 60_000))
     deletes = [c[1] for c in calls if c[0] == "DeleteRangeFromColumn"]
     assert deletes == [("d", b"claim"), ("d", b"owner")]
 
@@ -792,7 +792,7 @@ async def test_a_taken_bigtable_row_is_read_back_to_distinguish_done(
                     qualifier=b"result", value=result.SerializeToString(deterministic=True)
                 ),
                 types.SimpleNamespace(
-                    qualifier=b"rexp", value=encode_lease_expiry(NOW_MS + 60_000)
+                    qualifier=b"rexp", value=_encode_lease_expiry(NOW_MS + 60_000)
                 ),
             ]
         )
@@ -821,7 +821,7 @@ async def test_a_bigtable_row_whose_result_expired_is_not_read_back_as_done(
                 types.SimpleNamespace(
                     qualifier=b"result", value=a_result().SerializeToString(deterministic=True)
                 ),
-                types.SimpleNamespace(qualifier=b"rexp", value=encode_lease_expiry(NOW_MS)),
+                types.SimpleNamespace(qualifier=b"rexp", value=_encode_lease_expiry(NOW_MS)),
             ]
         )
     ]
@@ -840,7 +840,7 @@ async def test_a_taken_bigtable_row_with_no_result_reads_as_in_flight(
     table.predicate_result = True
     table.rows = [
         types.SimpleNamespace(
-            cells=[types.SimpleNamespace(qualifier=b"claim", value=encode_lease_expiry(NOW_MS))]
+            cells=[types.SimpleNamespace(qualifier=b"claim", value=_encode_lease_expiry(NOW_MS))]
         )
     ]
 

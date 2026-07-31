@@ -29,9 +29,9 @@ from beam_agents.observability.otlp import (
     COUNTER_SPANS_EXPORTED,
     DEFAULT_SERVICE_NAME,
     WriteTracesToOtlp,
+    _encode_batch,
+    _event_to_span,
     _OtlpExportDoFn,
-    encode_batch,
-    event_to_span,
 )
 
 _TRACE_ID = bytes(range(16))
@@ -66,7 +66,7 @@ def _event(
 
 def test_ids_survive_the_mapping_unchanged() -> None:
     # Scenario: IDs survive the mapping unchanged.
-    span = event_to_span(_event())
+    span = _event_to_span(_event())
 
     assert span is not None
     assert span.trace_id == _TRACE_ID
@@ -75,7 +75,7 @@ def test_ids_survive_the_mapping_unchanged() -> None:
 
 
 def test_timestamps_become_unix_nanos() -> None:
-    span = event_to_span(_event())
+    span = _event_to_span(_event())
 
     assert span is not None
     assert span.start_time_unix_nano == 1_700_000_000_000 * 1_000_000
@@ -83,7 +83,7 @@ def test_timestamps_become_unix_nanos() -> None:
 
 
 def test_attributes_map_to_string_key_values_sorted() -> None:
-    span = event_to_span(_event())
+    span = _event_to_span(_event())
 
     assert span is not None
     got = [(kv.key, kv.value.string_value) for kv in span.attributes]
@@ -92,8 +92,8 @@ def test_attributes_map_to_string_key_values_sorted() -> None:
 
 
 def test_span_name_is_the_lowercase_event_type_name() -> None:
-    llm = event_to_span(_event(TraceEvent.LLM_CALL))
-    tool = event_to_span(_event(TraceEvent.TOOL_CALL))
+    llm = _event_to_span(_event(TraceEvent.LLM_CALL))
+    tool = _event_to_span(_event(TraceEvent.TOOL_CALL))
 
     assert llm is not None and llm.name == "llm_call"
     assert tool is not None and tool.name == "tool_call"
@@ -103,8 +103,8 @@ def test_mapping_is_deterministic() -> None:
     # Scenario: Mapping is deterministic. Two independently constructed events
     # must serialize to identical bytes, or at-least-once export could not
     # dedup on content.
-    one = event_to_span(_event())
-    two = event_to_span(_event())
+    one = _event_to_span(_event())
+    two = _event_to_span(_event())
 
     assert one is not None and two is not None
     assert one.SerializeToString(deterministic=True) == two.SerializeToString(deterministic=True)
@@ -112,7 +112,7 @@ def test_mapping_is_deterministic() -> None:
 
 def test_error_event_maps_to_error_status_span() -> None:
     # Scenario: An ERROR event maps to an error-status span.
-    span = event_to_span(
+    span = _event_to_span(
         _event(TraceEvent.ERROR, attributes={"beam_agents.reason": "activation_timeout"})
     )
 
@@ -124,18 +124,18 @@ def test_error_event_maps_to_error_status_span() -> None:
 
 
 def test_non_error_events_carry_no_error_status() -> None:
-    span = event_to_span(_event(TraceEvent.LLM_CALL))
+    span = _event_to_span(_event(TraceEvent.LLM_CALL))
 
     assert span is not None
     assert span.status.code != Status.STATUS_CODE_ERROR
 
 
 def test_batch_encoding_carries_service_name_resource() -> None:
-    span = event_to_span(_event())
+    span = _event_to_span(_event())
     assert span is not None
 
     request = ExportTraceServiceRequest()
-    request.ParseFromString(encode_batch([span], service_name=DEFAULT_SERVICE_NAME))
+    request.ParseFromString(_encode_batch([span], service_name=DEFAULT_SERVICE_NAME))
 
     assert len(request.resource_spans) == 1
     resource_attrs = {
@@ -146,11 +146,11 @@ def test_batch_encoding_carries_service_name_resource() -> None:
 
 
 def test_batch_encoding_honors_service_name_override() -> None:
-    span = event_to_span(_event())
+    span = _event_to_span(_event())
     assert span is not None
 
     request = ExportTraceServiceRequest()
-    request.ParseFromString(encode_batch([span], service_name="my-pipeline"))
+    request.ParseFromString(_encode_batch([span], service_name="my-pipeline"))
 
     resource_attrs = {
         kv.key: kv.value.string_value for kv in request.resource_spans[0].resource.attributes
@@ -164,11 +164,11 @@ def test_batch_encoding_honors_service_name_override() -> None:
 def test_activation_start_produces_no_span() -> None:
     # Scenario: START is skipped, END is exported. START and END share one span
     # id, and OTLP names a span by (trace_id, span_id).
-    assert event_to_span(_event(TraceEvent.ACTIVATION_START)) is None
+    assert _event_to_span(_event(TraceEvent.ACTIVATION_START)) is None
 
 
 def test_activation_end_is_the_activation_span() -> None:
-    span = event_to_span(
+    span = _event_to_span(
         _event(
             TraceEvent.ACTIVATION_END,
             attributes={
@@ -194,7 +194,7 @@ def test_every_non_start_event_type_exports_one_span() -> None:
         TraceEvent.SUSPENDED,
         TraceEvent.ERROR,
     ):
-        assert event_to_span(_event(event_type)) is not None
+        assert _event_to_span(_event(event_type)) is not None
 
 
 # --- Requirement: Non-blocking batched export ---------------------------------

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 # leg still covers the requirement.
 row_filters = pytest.importorskip("google.cloud.bigtable.data.row_filters")
 
-from beam_agents.memory.stores.base import encode_envelope, encode_seq  # noqa: E402
+from beam_agents.memory.stores.base import _encode_envelope, _encode_seq  # noqa: E402
 from beam_agents.memory.stores.bigtable import BigtableMemoryStore  # noqa: E402
 
 from ._conformance import ENTITY_A, a_record  # noqa: E402
@@ -111,8 +111,8 @@ async def test_a_winning_save_writes_both_cells_in_the_false_branch(
     assert isinstance(mutations, list) and len(mutations) == 2
     by_qualifier = {bytes(m.qualifier): bytes(m.new_value) for m in mutations}
     assert by_qualifier == {
-        BigtableMemoryStore.SEQ_COLUMN: encode_seq(8),
-        BigtableMemoryStore.RECORD_COLUMN: encode_envelope(record),
+        BigtableMemoryStore.SEQ_COLUMN: _encode_seq(8),
+        BigtableMemoryStore.RECORD_COLUMN: _encode_envelope(record),
     }
     assert all(m.family == BigtableMemoryStore.COLUMN_FAMILY for m in mutations)
 
@@ -153,5 +153,5 @@ async def test_the_predicate_is_scoped_to_the_latest_seq_cell(
     # incoming seq, expressible only because the encoding is order-preserving.
     value_range = chain[3]
     assert isinstance(value_range, row_filters.ValueRangeFilter)
-    assert value_range.start_value == encode_seq(7)
+    assert value_range.start_value == _encode_seq(7)
     assert value_range.inclusive_start is False

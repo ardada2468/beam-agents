@@ -46,6 +46,13 @@ if TYPE_CHECKING:
 
     from beam_agents._protos import ToolIntent
 
+__all__ = [
+    "DEAD_LETTER_TAG",
+    "UnknownIntentsSchemeError",
+    "WriteIntents",
+    "WriteIntentsResult",
+]
+
 DEAD_LETTER_TAG = "dead_letter"
 
 _SCHEMES = frozenset({"kafka", "pubsub"})
@@ -195,7 +202,7 @@ class WriteIntentsResult:
     dead_letter: beam.pvalue.PCollection
 
 
-def is_kv_shaped(element_type: object) -> bool:
+def _is_kv_shaped(element_type: object) -> bool:
     """True if ``element_type`` is absent/erased, or is exactly KV (2-tuple) shaped.
 
     Shared by ``WriteIntents`` and ``RunAgent``, whose KV-input validation is
@@ -217,7 +224,7 @@ def _validate_kv_input(pcoll: beam.pvalue.PCollection) -> None:
     An absent/erased element type is allowed to pass; only a definite
     non-pair type is rejected.
     """
-    if not is_kv_shaped(pcoll.element_type):
+    if not _is_kv_shaped(pcoll.element_type):
         raise ValueError(
             "WriteIntents requires a PCollection[KV[bytes, ToolIntent]] input "
             f"(keyed by entity_key); got element type {pcoll.element_type!r}. Key upstream "
@@ -272,6 +279,12 @@ class WriteIntents(beam.PTransform):
         return _WRITERS[self._scheme](*self._parts)
 
     def expand(self, pcoll: beam.pvalue.PCollection) -> WriteIntentsResult:
+        """Serialize the keyed intents and write them to the outbox.
+
+        Raises ``ValueError`` at construction time on non-KV input: the
+        outbox is partitioned by ``entity_key``, so the keying is required
+        rather than inferred.
+        """
         _validate_kv_input(pcoll)
         # Explicit output type on the ParDo itself: the Kafka cross-language
         # expansion service needs a concrete KvCoder<ByteArrayCoder,

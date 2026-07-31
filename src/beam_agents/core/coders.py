@@ -43,6 +43,12 @@ from beam_agents._protos import (
 if TYPE_CHECKING:
     from apache_beam.coders.typecoders import CoderRegistry
 
+__all__ = [
+    "MESSAGE_TYPES",
+    "DeterministicProtoCoder",
+    "register_coders",
+]
+
 # The seven message types this module encodes. Exposed for tests and for
 # `register_coders` to iterate.
 MESSAGE_TYPES: tuple[type[Message], ...] = (
@@ -70,23 +76,28 @@ class DeterministicProtoCoder(beam.coders.Coder):
         self.proto_message_type = proto_message_type
 
     def encode(self, value: Message) -> bytes:
+        """Serialize with ``deterministic=True`` — byte-stability is the point."""
         return value.SerializeToString(deterministic=True)
 
     def decode(self, encoded: bytes) -> Message:
+        """Parse ``encoded`` back into a fresh message of this coder's type."""
         message = self.proto_message_type()
         message.ParseFromString(encoded)
         return message
 
     def is_deterministic(self) -> bool:
+        """Always ``True``: this coder is why proto state may key a Beam grouping."""
         return True
 
     def to_type_hint(self) -> type[Message]:
+        """The proto message class this coder encodes."""
         return self.proto_message_type
 
     @classmethod
     def from_type_hint(
         cls, typehint: type[Message], unused_registry: CoderRegistry
     ) -> DeterministicProtoCoder:
+        """Build a coder for ``typehint``, as Beam's registry requires."""
         # Beam types Coder.from_type_hint as `-> CoderT` (return same type as
         # cls); returning a concrete coder is the pattern Beam's own subclasses
         # use (e.g. MapCoder). The narrowed return trips mypy's LSP `override`

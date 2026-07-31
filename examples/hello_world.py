@@ -69,6 +69,7 @@ def build(pipeline: beam.Pipeline) -> RunAgentOutputs:
 
 
 def main() -> None:
+    """Run the example pipeline, printing each decision to stdout."""
     with beam.Pipeline() as pipeline:
         outputs = build(pipeline)
         outputs.output | "Print" >> beam.Map(print)

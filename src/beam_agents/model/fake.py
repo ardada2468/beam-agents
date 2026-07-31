@@ -19,6 +19,19 @@ from dataclasses import dataclass
 from beam_agents.model.client import LlmRequest, LlmResponse, ProviderError
 from beam_agents.model.replay_cache import compute_cache_key
 
+__all__ = [
+    "Behavior",
+    "FakeLLM",
+    "Matcher",
+    "UnmatchedRequestError",
+    "fail_then_succeed",
+    "match_any",
+    "match_contains",
+    "match_model_id",
+    "raise_error",
+    "respond_with",
+]
+
 Matcher = Callable[[LlmRequest], bool]
 
 
@@ -28,6 +41,7 @@ class Behavior:
     latency_ms: int
 
     def serve(self) -> bytes:
+        """The response bytes this behavior yields, or the error it raises."""
         raise NotImplementedError
 
 
@@ -164,6 +178,11 @@ class FakeLLM:
         return self._counts.get(_request_key(request), 0)
 
     async def complete(self, request: LlmRequest) -> LlmResponse:
+        """Serve ``request`` from the scripted behaviors, recording it first.
+
+        Raises :class:`UnmatchedRequestError` when no matcher applies: a
+        test that reaches an unscripted request has a gap, not a default.
+        """
         self._log.append(request)
         key = _request_key(request)
         self._counts[key] = self._counts.get(key, 0) + 1

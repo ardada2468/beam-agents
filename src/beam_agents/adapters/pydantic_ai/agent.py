@@ -43,9 +43,9 @@ from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolApproved,
 
 from beam_agents._protos import ToolResult
 from beam_agents.adapters._transport import _current_activation
-from beam_agents.adapters.pydantic_ai.history import load_history, save_history
+from beam_agents.adapters.pydantic_ai.history import _load_history, _save_history
 from beam_agents.adapters.pydantic_ai.toolset import BeamToolset
-from beam_agents.adapters.pydantic_ai.transport import install_transport, warn_fallback
+from beam_agents.adapters.pydantic_ai.transport import _install_transport, _warn_fallback
 from beam_agents.core.agent import Complete, Outcome, Suspend
 from beam_agents.model.facade import TokenUsage
 
@@ -56,6 +56,10 @@ if TYPE_CHECKING:
 
     from beam_agents.core.context import ActivationContext
     from beam_agents.tools.registry import Tool
+
+__all__ = [
+    "PydanticAIAgent",
+]
 
 _KIND_APPROVAL = "approval"
 _KIND_TOOL = "tool"
@@ -119,8 +123,17 @@ class PydanticAIAgent:
         self._instrumented = False
 
     async def __call__(self, ctx: ActivationContext) -> Outcome:
+        """Drive one Pydantic AI run as a beam-agents activation.
+
+        Resumes from ``ctx.snapshot`` when ``ctx.is_resume``, replaying the
+        re-injected results into the framework; otherwise starts fresh. Returns
+        ``Suspend`` when the run staged an intent and yielded, ``Complete``
+        otherwise. Model calls made by the framework are served through the
+        activation's cache-first path by the installed transport, so a retried
+        bundle reaches the provider zero additional times (invariant 3).
+        """
         self._instrument_models()
-        history = load_history(ctx.memory)
+        history = _load_history(ctx.memory)
 
         if ctx.is_resume:
             snapshot = json.loads(ctx.snapshot) if ctx.snapshot else {"pending": {}, "results": {}}
@@ -143,7 +156,7 @@ class PydanticAIAgent:
                 deferred_tool_results=None,
             )
 
-        save_history(ctx.memory, result.all_messages())
+        _save_history(ctx.memory, result.all_messages())
         usage = result.usage
         ctx.accumulate_usage(
             TokenUsage(
@@ -190,8 +203,8 @@ class PydanticAIAgent:
             candidates.append(self._agent.model)
         candidates.extend(self._models)
         for model in candidates:
-            if not install_transport(model):
-                warn_fallback(model)
+            if not _install_transport(model):
+                _warn_fallback(model)
 
     def _stage_and_suspend(self, ctx: ActivationContext, requests: DeferredToolRequests) -> Suspend:
         """Stage one intent per pending deferred call and build the snapshot."""

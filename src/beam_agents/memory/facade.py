@@ -19,6 +19,14 @@ from apache_beam.metrics.metric import Metrics
 from beam_agents._protos import MemoryBlob
 from beam_agents.memory.stores.base import MemoryRecord, MemoryStore
 
+__all__ = [
+    "HARD_CAP_BYTES",
+    "Compactor",
+    "LongtermMemory",
+    "Memory",
+    "MemoryOverflow",
+]
+
 _LOGGER = logging.getLogger(__name__)
 
 # Working-memory hard cap per key (project constraint, release-gating).
@@ -63,7 +71,13 @@ class Compactor(Protocol):
     guarded API; cap enforcement is suspended for the duration of the call.
     """
 
-    def compact(self, memory: Memory) -> None: ...
+    def compact(self, memory: Memory) -> None:
+        """Shrink ``memory`` in place, synchronously and without model calls.
+
+        The tier-1 contract: invoked when working memory crosses its
+        trigger, it must leave ``memory`` at or below its target size.
+        """
+        ...
 
 
 @dataclass(slots=True)
@@ -206,10 +220,15 @@ class Memory:
 
     @property
     def size_bytes(self) -> int:
+        """Total encoded size of the stored entries, in bytes."""
         return self._total
 
     @property
     def dirty(self) -> bool:
+        """Whether anything was written since the blob was last serialized.
+
+        A clean memory skips the keyed-state write entirely.
+        """
         return self._dirty
 
     @property
@@ -266,6 +285,12 @@ class Memory:
     # -- scalar access --------------------------------------------------------
 
     def get(self, key: str) -> bytes | None:
+        """The scalar stored at ``key``, or ``None``.
+
+        Raises ``TypeError`` if ``key`` holds a ring — the kind tag is part
+        of the stored value, so a mismatched read fails loudly instead of
+        returning framing bytes.
+        """
         entry = self._entries.get(key)
         if entry is None:
             return None
@@ -276,11 +301,18 @@ class Memory:
         return value
 
     def set(self, key: str, value: bytes) -> None:
+        """Store ``value`` as a scalar at ``key``, replacing whatever was there.
+
+        Staged like every other memory write: it reaches keyed state only
+        when the activation commits. Raises ``MemoryOverflow`` if the write
+        would take working memory past its hard cap.
+        """
         # A scalar value is independent of current state; overwriting a ring is
         # an explicit, permitted replace, so no kind check here.
         self._guarded_write(key, lambda: _encode_scalar(value))
 
     def delete(self, key: str) -> None:
+        """Remove ``key``. Idempotent: deleting an absent key changes nothing."""
         entry = self._entries.pop(key, None)
         if entry is None:
             return  # idempotent on absent keys; no state change, stays clean
@@ -290,6 +322,12 @@ class Memory:
     # -- ring access ----------------------------------------------------------
 
     def append(self, key: str, item: bytes, *, max_items: int = 64) -> None:
+        """Append ``item`` to the ring at ``key``, evicting oldest past ``max_items``.
+
+        Creates the ring if absent; raises ``TypeError`` if ``key`` holds a
+        scalar. Raises ``MemoryOverflow`` if the append would exceed the
+        hard cap even after eviction.
+        """
         existing = self._entries.get(key)
         if existing is not None and existing.value[0] != _KIND_RING:
             raise TypeError(f"key {key!r} holds a scalar; append() requires a ring")
@@ -306,6 +344,10 @@ class Memory:
         self._guarded_write(key, compute)
 
     def ring(self, key: str) -> tuple[bytes, ...]:
+        """The ring at ``key``, oldest first; ``()`` when absent.
+
+        Raises ``TypeError`` if ``key`` holds a scalar.
+        """
         entry = self._entries.get(key)
         if entry is None:
             return ()
@@ -318,6 +360,11 @@ class Memory:
     # -- serialization --------------------------------------------------------
 
     def to_blob(self) -> MemoryBlob:
+        """Serialize working memory into the ``MemoryBlob`` written to keyed state.
+
+        Stamps the current state schema version, read at call time so a
+        version bump in ``core/migration.py`` moves every writer at once.
+        """
         # Imported lazily: `beam_agents.core`'s package init imports the
         # context, which imports this package — a top-level import here would
         # make `import beam_agents.memory` order-dependent. The call-time read

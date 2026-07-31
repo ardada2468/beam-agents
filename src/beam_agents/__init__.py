@@ -12,6 +12,11 @@ what a timed-out suspension does via a pure routing function returning
 :class:`Deny`, :class:`Drop`, or :class:`Escalate` for the
 :class:`FallbackContext` it is handed.
 
+Agent authoring uses two more root names: :func:`tool` is the decorator that
+registers a callable (and its ``side_effect`` flag) into an
+``AgentConfig.tool_registry``, and :class:`StreamAgent` is the protocol an
+adapter or a hand-written agent implements to be accepted by :class:`RunAgent`.
+
 :class:`ShardKeys`, :func:`shard_key` and :func:`unshard_key` are the
 caller-side hot-key escape hatch: one logical entity fanned across ``N``
 physical keys, upstream of :class:`RunAgent`. They are safe for memory-free
@@ -22,10 +27,11 @@ Importing this package has no side effects.
 
 from __future__ import annotations
 
-from beam_agents.core.agent import FallbackContext
+from beam_agents.core.agent import FallbackContext, StreamAgent
 from beam_agents.core.transform import AgentConfig, RunAgent, RunAgentOutputs
 from beam_agents.hitl import Deny, Drop, Escalate, HitlPolicy
 from beam_agents.keys import ShardKeys, shard_key, unshard_key
+from beam_agents.tools.registry import tool
 
 __all__ = [
     "AdkAgent",
@@ -40,7 +46,9 @@ __all__ = [
     "RunAgent",
     "RunAgentOutputs",
     "ShardKeys",
+    "StreamAgent",
     "shard_key",
+    "tool",
     "unshard_key",
 ]
 

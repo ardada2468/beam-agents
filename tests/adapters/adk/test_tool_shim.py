@@ -13,7 +13,7 @@ pytest.importorskip("google.adk")
 from google.adk.tools.tool_context import ToolContext
 
 from beam_agents.adapters.adk.tools import (
-    APPROVAL_TOOL_NAME,
+    _APPROVAL_TOOL_NAME,
     BeamApprovalTool,
     BeamFunctionTool,
     BeamLongRunningTool,
@@ -65,7 +65,7 @@ def test_the_approval_shim_is_a_long_running_declaration() -> None:
     approval = BeamApprovalTool()
 
     assert approval.is_long_running is True
-    assert approval.name == APPROVAL_TOOL_NAME
+    assert approval.name == _APPROVAL_TOOL_NAME
 
 
 async def test_a_shim_tool_outside_an_activation_fails_closed() -> None:

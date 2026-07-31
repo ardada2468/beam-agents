@@ -24,6 +24,16 @@ from typing import Protocol, cast, runtime_checkable
 
 from beam_agents._protos import ToolIntent
 
+__all__ = [
+    "DeliveredIntent",
+    "InMemoryIntentSource",
+    "IntentSource",
+    "KafkaIntentSource",
+    "PubSubIntentSource",
+    "RevocationHandler",
+    "build_intent_source",
+]
+
 # Called with a partition id when the transport takes that partition away (a
 # consumer-group rebalance). The service stops the partition's task and releases
 # any claim it holds but has not executed, so the new owner is not forced to
@@ -44,15 +54,31 @@ class DeliveredIntent:
 class IntentSource(Protocol):
     """An ordered, committable stream of intents grouped into partitions."""
 
-    async def start(self) -> None: ...
+    async def start(self) -> None:
+        """Connect and begin delivering. Must be called before iteration."""
+        ...
 
     def __aiter__(self) -> AsyncIterator[DeliveredIntent]: ...
 
-    async def commit(self, delivered: DeliveredIntent) -> None: ...
+    async def commit(self, delivered: DeliveredIntent) -> None:
+        """Acknowledge ``delivered``, advancing the source past it.
 
-    def set_revocation_handler(self, handler: RevocationHandler | None) -> None: ...
+        Called only after the intent reached a terminal dedup state, so a
+        crash before the commit redelivers rather than loses the intent.
+        """
+        ...
 
-    async def close(self) -> None: ...
+    def set_revocation_handler(self, handler: RevocationHandler | None) -> None:
+        """Install the callback invoked when partitions are revoked, or clear it.
+
+        A rebalance can take a partition mid-flight; the handler is how the
+        service abandons in-flight work it no longer owns.
+        """
+        ...
+
+    async def close(self) -> None:
+        """Stop delivering and release the transport's resources. Idempotent."""
+        ...
 
 
 @dataclass
@@ -84,6 +110,7 @@ class InMemoryIntentSource:
         return source
 
     async def start(self) -> None:
+        """Queue the scripted deliveries, then a sentinel that ends the stream."""
         self._started = True
         for delivery in self.deliveries:
             self._queue.put_nowait(delivery)
@@ -99,9 +126,11 @@ class InMemoryIntentSource:
             yield item
 
     async def commit(self, delivered: DeliveredIntent) -> None:
+        """Record ``delivered`` as committed."""
         self.committed.append(delivered)
 
     def set_revocation_handler(self, handler: RevocationHandler | None) -> None:
+        """Install or clear the revocation callback."""
         self._revocation_handler = handler
 
     async def revoke(self, partition: str) -> None:
@@ -110,10 +139,12 @@ class InMemoryIntentSource:
             await self._revocation_handler(partition)
 
     async def close(self) -> None:
+        """Mark the source closed; nothing to release."""
         self.closed = True
 
     @property
     def committed_intent_ids(self) -> list[str]:
+        """The ``intent_id`` of every committed delivery, in commit order."""
         return [d.intent.intent_id for d in self.committed]
 
 
@@ -164,6 +195,7 @@ class KafkaIntentSource:
         return _Listener()
 
     async def start(self) -> None:
+        """Start the consumer and subscribe, installing the rebalance listener."""
         await self._consumer.start()
         self._consumer.subscribe([self._topic], listener=self._listener())
 
@@ -176,6 +208,7 @@ class KafkaIntentSource:
             )
 
     async def commit(self, delivered: DeliveredIntent) -> None:
+        """Commit the delivery's offset + 1 — Kafka commits the *next* offset to read."""
         from aiokafka import TopicPartition
 
         topic, partition, offset = cast("tuple[str, int, int]", delivered.handle)
@@ -183,9 +216,11 @@ class KafkaIntentSource:
         await self._consumer.commit({TopicPartition(topic, partition): offset + 1})
 
     def set_revocation_handler(self, handler: RevocationHandler | None) -> None:
+        """Install or clear the callback invoked when a partition is revoked."""
         self._revocation_handler = handler
 
     async def close(self) -> None:
+        """Stop the consumer, releasing its partition assignment."""
         await self._consumer.stop()
 
 
@@ -235,6 +270,11 @@ class PubSubIntentSource:
             )
 
     async def start(self) -> None:
+        """Open the streaming pull, bridging its callback thread onto this loop.
+
+        Warns when the subscription is not ordering-key enabled: without
+        ordering, results for one entity may be published out of order.
+        """
         self._loop = asyncio.get_running_loop()
         self._warn_if_unordered()
 
@@ -256,14 +296,21 @@ class PubSubIntentSource:
             yield await self._queue.get()
 
     async def commit(self, delivered: DeliveredIntent) -> None:
+        """Ack the Pub/Sub message behind ``delivered``."""
         delivered.handle.ack()  # type: ignore[attr-defined]
 
     def set_revocation_handler(self, handler: RevocationHandler | None) -> None:
+        """No-op: Pub/Sub has no partition assignment that can be revoked.
+
+        A redelivery simply arrives at whichever subscriber holds the
+        ordering key next, so there is no in-flight work to abandon.
+        """
         # Pub/Sub has no partition assignment to revoke: a redelivery simply
         # arrives at whichever subscriber holds the ordering key next.
         return None
 
     async def close(self) -> None:
+        """Cancel the streaming pull and close the subscriber client."""
         if self._future is not None:
             self._future.cancel()  # type: ignore[attr-defined]
         self._client.close()
