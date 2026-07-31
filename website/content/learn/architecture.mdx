@@ -6,8 +6,11 @@ order: 3
 verifies:
   - symbol: beam_agents.RunAgent
   - symbol: beam_agents.RunAgentOutputs
+  - symbol: beam_agents.core.agent.Suspend
   - module: src/beam_agents/core/dofn.py
   - module: src/beam_agents/core/transform.py
+  - module: src/beam_agents/actions/write_intents.py
+  - module: src/beam_agents/observability/otlp.py
   - spec: openspec/specs/wire-schemas/spec.md
   - test: tests/core/test_dofn_streaming.py
   - test: tests/core/test_dofn_pipeline.py
@@ -18,13 +21,89 @@ verifies:
 
 Three streams feed one keyed transform, and four streams come out of it.
 
-```
-Kafka/PubSub events ──┐
-tool-results topic ───┼─► WithKeys(entity_id) ─► Flatten ─► [enrichment] ─► RunAgent
-approvals topic ──────┘                                                       │
-outputs: .output (main) · .intents ─► outbox topic ─► effector ─► results topic (re-injected)
-         .traces ─► OTLP/BigQuery · .errors ─► dead-letter sink
-```
+{/*
+  The geometry below is authored against a 600-wide viewBox on purpose: the
+  article column on this site is roughly 600px, so at this width the 11px
+  labels render at their intended size instead of being scaled down into
+  illegibility. Below `minWidth` the figure scrolls rather than squashing.
+
+  Two things the drawing has to make visible, because the prose immediately
+  after it calls them load-bearing: all three inputs enter the *same* WithKeys
+  and the *same* Flatten (they are inputs, not a side channel), and the
+  `.intents` return path crosses a boundary line out of the pipeline and back
+  (the loop closes outside the DAG).
+*/}
+
+<Diagram
+  title="The dataflow shape"
+  desc="Three input topics — events, approvals, and tool results — arrive on Kafka or Pub/Sub and are treated identically: the same WithKeys transform keys each of them on entity_key, the three keyed streams are flattened into one, and that stream passes through an optional enrichment stage into RunAgent. RunAgent emits four streams. Three of them terminate: .output, the main terminal output; .traces, bound for an OTLP or BigQuery sink; and .errors, bound for a dead-letter sink. The fourth, .intents, is the only one that comes back. It is written to an outbox topic on Kafka or Pub/Sub, executed by an effector running as a separate service outside the pipeline that deduplicates on the intent id, and the result is published onto the tool-results topic, where it re-enters as an ordinary input on the same key. The loop therefore closes outside the pipeline, and the Beam graph itself stays acyclic."
+  caption="Tool results and approvals are inputs — keyed and flattened exactly like events, not a side channel. Three of the four outputs terminate; only .intents comes back, and it crosses the line to do it. That is how the loop stays unbounded while the graph stays acyclic."
+  viewBox="0 0 600 540"
+  minWidth={560}
+>
+  {/* --- three input topics, drawn identically because they are identical --- */}
+  <DgText x={276} y={18} anchor="middle" variant="faint">KAFKA / PUB-SUB · ALL THREE ARE INPUTS</DgText>
+  <DgNode x={22} y={28} w={160} h={40} label="events" />
+  <DgNode x={196} y={28} w={160} h={40} label="approvals" />
+  <DgNode x={370} y={28} w={160} h={40} label="tool results" />
+  <DgEdge d="M102,68 V92" />
+  <DgEdge d="M276,68 V92" />
+  <DgEdge d="M450,68 V92" />
+  {/*
+    One wide box with three arrows in and three out: WithKeys is applied to
+    each input stream, not to a merged one. Drawing it as three separate boxes
+    would say the same thing three times; drawing one narrow box would say the
+    inputs merge before they are keyed, which is not what happens.
+  */}
+  <DgNode x={22} y={96} w={508} h={44} label="WithKeys(entity_key)" sub="SAME KEY FUNCTION FOR EVERY INPUT" />
+  {/*
+    Three arrows land on the Flatten box's top edge rather than merging on a
+    collector bar above it. The merge is what Flatten *is*, so it has to happen
+    at the box; a bar that merged them first left the box looking like a
+    no-op the streams had already flowed past.
+  */}
+  <DgEdge d="M102,140 V154 Q102,170 118,170 H216 Q232,170 232,186" />
+  <DgEdge d="M276,140 V186" />
+  <DgEdge d="M450,140 V154 Q450,170 434,170 H336 Q320,170 320,186" />
+  <DgNode x={196} y={190} w={160} h={44} label="Flatten" sub="ONE KEYED STREAM" />
+  <DgEdge d="M276,234 V260" />
+  {/* Soft fill plus the OPTIONAL qualifier is this site's "[brackets]". */}
+  <DgNode x={196} y={264} w={160} h={40} label="enrichment" sub="OPTIONAL" soft />
+  <DgEdge d="M276,304 V330" />
+  <DgNode x={140} y={334} w={272} h={80} label="RunAgent" sub="STATEFUL DOFN" />
+  {/* --- three outputs that terminate, each in its own stream colour ------- */}
+  <DgEdge d="M412,350 H436" stream="output" />
+  <DgText x={444} y={354} stream="output">.output</DgText>
+  <DgText x={444} y={366} variant="faint">MAIN OUTPUT</DgText>
+  <DgEdge d="M412,376 H436" stream="traces" />
+  <DgText x={444} y={380} stream="traces">.traces</DgText>
+  <DgText x={444} y={392} variant="faint">OTLP / BIGQUERY</DgText>
+  <DgEdge d="M412,402 H436" stream="errors" />
+  <DgText x={444} y={406} stream="errors">.errors</DgText>
+  <DgText x={444} y={418} variant="faint">DEAD-LETTER SINK</DgText>
+  {/*
+    `.intents` leaves on the left rather than joining the three rails on the
+    right: it is the one output that does not terminate, and routing it down
+    the left margin keeps it from crossing the three that do.
+  */}
+  <DgEdge d="M140,390 H92 Q76,390 76,406 V484 Q76,500 92,500" dashed stream="intents" />
+  <DgText x={136} y={384} anchor="end" stream="intents">.intents</DgText>
+  {/* --- the boundary. Everything below it is not in the Beam graph. ------- */}
+  <DgEdge d="M16,440 H584" arrow={false} />
+  <DgText x={300} y={430} anchor="middle" variant="faint">INSIDE THE PIPELINE · THE DAG IS ACYCLIC</DgText>
+  <DgText x={300} y={458} anchor="middle" variant="faint">OUTSIDE · THE LOOP CLOSES THROUGH THE BUS</DgText>
+  <DgNode x={96} y={478} w={160} h={44} label="outbox topic" sub="KAFKA / PUB-SUB" />
+  <DgEdge d="M256,500 H286" dashed stream="intents" />
+  <DgNode x={290} y={478} w={160} h={44} label="effector" sub="DEDUPES ON INTENT_ID" />
+  {/*
+    The return climbs the right margin and re-enters the *tool results* box,
+    not RunAgent. That is the claim: a result is an ordinary element on an
+    ordinary input topic, and it is keyed by the same WithKeys as everything
+    else on its way back in.
+  */}
+  <DgEdge d="M450,500 H544 Q560,500 560,484 V64 Q560,48 536,48" dashed />
+  <DgText x={497} y={492} anchor="middle" variant="faint">RE-INJECTED</DgText>
+</Diagram>
 
 Two things about that diagram are load-bearing.
 
@@ -43,6 +122,68 @@ back in on the results topic. The DAG stays acyclic and the loop stays
 unbounded.
 
 ## Two paths through RunAgent
+
+An activation either finishes or suspends. Both tracks below start with one
+element on one key and end with the same `.output`; what differs is how many
+activations it took and what had to survive in between.
+
+<Diagram
+  title="Two paths through RunAgent"
+  desc="Two tracks. On the fast path a single activation of RunAgent at sequence number n consumes the event and runs to completion inside one process() call, emitting .output. On the re-injection path the first activation, also at sequence number n, stages a ToolIntent and suspends: it persists a Continuation into keyed state and yields, so the worker moves on. The intent leaves on .intents to the outbox topic, an effector running outside the pipeline executes it and deduplicates on the intent id, and the resulting tool result re-enters on the same key. A second activation rehydrates the continuation and runs with ctx.is_resume true and the same sequence number n, then emits .output. The sequence number is unchanged across the suspension, which is what keeps the replay-cache keys and the deterministic intent ids of the resumed activation continuing the first one's numbering instead of colliding with it."
+  caption="Same key, same seq, two activations. Suspension is not a blocked thread: the first activation ends, the continuation persists in keyed state, and the second activation starts only when the result arrives."
+  viewBox="0 0 600 424"
+  minWidth={560}
+>
+  {/* --- track 1: one element in, one decision out ------------------------- */}
+  <DgText x={16} y={40} variant="title">Fast path</DgText>
+  <DgText x={16} y={58} variant="faint">ONE ACTIVATION · ONE process() CALL</DgText>
+  <DgNode x={16} y={76} w={104} h={40} label="event" soft />
+  <DgEdge d="M120,96 H144" />
+  <DgNode x={148} y={72} w={160} h={48} label="RunAgent" sub="SEQ = N" />
+  {/*
+    The long straight rail to `.output` is the argument: on this track nothing
+    leaves the pipeline between the event and the result. Track 2 puts its
+    `.output` at the same x so the detour, not the destination, is the
+    difference the eye picks up.
+  */}
+  <DgEdge d="M308,96 H540" stream="output" />
+  <DgText x={424} y={88} anchor="middle" variant="faint">RUNS TO COMPLETION</DgText>
+  <DgText x={548} y={100} stream="output">.output</DgText>
+  {/* --- track 2: stage, suspend, resume ----------------------------------- */}
+  <DgText x={16} y={166} variant="title">Re-injection path</DgText>
+  <DgText x={16} y={184} variant="faint">TWO ACTIVATIONS, ONE UNIT OF WORK</DgText>
+  {/*
+    The continuation sits above the two activations rather than between them:
+    it is the thing that spans the gap, and drawing it on the same row as the
+    outbox would imply it travels with the intent. It does not — it never
+    leaves keyed state.
+  */}
+  <DgNode x={148} y={204} w={160} h={40} label="Continuation" sub="KEYED STATE" soft />
+  <DgNode x={16} y={276} w={104} h={40} label="event" soft />
+  <DgEdge d="M120,296 H144" />
+  <DgNode x={148} y={272} w={160} h={48} label="RunAgent" sub="SEQ = N · SUSPENDS" />
+  <DgEdge d="M180,272 V248" />
+  <DgText x={188} y={262} variant="faint">PERSISTS</DgText>
+  <DgEdge d="M308,224 H408 Q424,224 424,240 V268" />
+  <DgText x={366} y={216} variant="faint">REHYDRATED</DgText>
+  <DgNode x={356} y={272} w={160} h={48} label="RunAgent" sub="SEQ = N · IS_RESUME" />
+  <DgEdge d="M516,296 H540" stream="output" />
+  <DgText x={548} y={300} stream="output">.output</DgText>
+  {/*
+    Dashed on all three: this is the message bus, not an edge in the DAG. The
+    bus row is pushed down far enough that the two vertical hops read as
+    journeys — at a shorter length a dashed stroke shows two dashes and looks
+    like a rendering artefact rather than a route out of the pipeline.
+  */}
+  <DgEdge d="M228,320 V352" dashed stream="intents" />
+  <DgText x={236} y={342} stream="intents">.intents</DgText>
+  <DgText x={16} y={382} variant="faint">OUTSIDE THE PIPELINE</DgText>
+  <DgNode x={148} y={356} w={160} h={44} label="outbox topic" sub="KAFKA / PUB-SUB" />
+  <DgEdge d="M308,378 H344" dashed stream="intents" />
+  <DgNode x={356} y={356} w={160} h={44} label="effector" sub="DEDUPES ON INTENT_ID" />
+  <DgEdge d="M436,356 V324" dashed />
+  <DgText x={428} y={342} anchor="end">tool result</DgText>
+</Diagram>
 
 ### Fast path
 
