@@ -4,8 +4,11 @@ summary: The TraceEvent stream, OTel GenAI attribute conventions, and the BigQue
 status: stable
 order: 3
 verifies:
+  - symbol: beam_agents.observability.ActivationTrace
   - module: src/beam_agents/observability/traces.py
   - module: src/beam_agents/observability/otlp.py
+  - module: src/beam_agents/core/loop.py
+  - module: src/beam_agents/core/dofn.py
   - module: docs/traces.md
   - spec: openspec/specs/wire-schemas/spec.md
   - test: tests/observability/test_activation_trace.py
@@ -18,9 +21,206 @@ model call, tool call, and staged intent inside it. Attributes follow the
 OpenTelemetry GenAI semantic conventions, and `trace_id`/`span_id` use the W3C
 trace-context wire sizes so an exporter passes them through untranslated.
 
+## The shape of one trace
+
+A trace is scoped to `(entity_key, seq)`, not to a single `process()` call. A
+suspension and its later resume run under the same `seq`, so the resume
+recomputes the same `trace_id` with nothing carried on the wire, and its
+activation span hangs under the first attempt's rather than starting a second
+trace.
+
+{/*
+  The nesting is the part prose keeps failing to convey. Every child event's
+  `parent_span_id` is *the attempt's* activation span, and a resume is itself a
+  child of the first attempt — so any activation that suspends is a two-level
+  tree, not the flat sequence a list of event names implies. That distinction
+  is the first thing anyone writing a query against `parent_span_id` needs.
+
+  Geometry notes, since the numbers here are hand-placed:
+
+  - The tree is authored at 620 user units wide because the docs article column
+    is ~630 CSS px. A 1000-unit diagram would either scroll on a 1440px screen
+    or scale its 11px type down to something unreadable.
+  - Spines sit inside their parent box's horizontal span (x=28 under the root,
+    x=72 under the resume) so a child visibly hangs *under* its parent, and
+    they carry no arrowhead: the direction is asserted by the short horizontal
+    branches, which is where parent/child actually gets claimed.
+*/}
+
+<Diagram
+  title="One activation's span tree"
+  desc="A trace is identified by the entity key and the activation sequence number. Its root is the activation span, which carries both the ACTIVATION_START and the ACTIVATION_END event because the two bracket one attempt and share a span id. Hanging under that root are the first attempt's child spans: LLM_CALL, one per model call whether it reached the provider or hit the replay cache; TOOL_CALL, one per inline read-only tool; INTENT_EMITTED, one per staged ToolIntent; and SUSPENDED, which records the deadline and the pending intent ids. The resume attempt gets its own activation span nested under the first attempt's, rather than starting a second trace, with its own children such as a further LLM_CALL made once the tool result arrives. The whole set is staged during the activation and emitted on the .traces PCollection at commit, from where AgentConfig.traces_to ships it to one sink: otlp:// over OTLP/HTTP, which is best-effort; or bigquery:// as flat rows, kafka:// as deterministic proto bytes, or pubsub:// as deterministic proto bytes, all three of which are lossless at-least-once. ACTIVATION_START alone is not exported over OTLP, because it shares its span id with ACTIVATION_END and OTLP names a span by trace id and span id."
+  caption="Every child event's parent is the activation span of the attempt it happened in, and a resume's activation span is a child of the first attempt's — so one suspended-and-resumed activation is a single two-level trace. ACTIVATION_START stays off the OTLP wire because ACTIVATION_END carries strictly more on the same span id; both remain on .traces for every other consumer."
+  viewBox="0 0 620 390"
+  minWidth={560}
+>
+  <DgText x={16} y={26} variant="faint">ONE TRACE PER (ENTITY_KEY, SEQ)</DgText>
+
+  {/* The trace root: the first attempt's activation span, parent of everything. */}
+  <DgNode
+    x={16}
+    y={44}
+    w={300}
+    h={36}
+    label="activation span"
+    sub="ACTIVATION_START + ACTIVATION_END"
+  />
+
+  {/* Spine A — the first attempt's children, including the resume. */}
+  <DgEdge d="M28,80 V286" arrow={false} />
+  <DgEdge d="M28,110 H52" />
+  <DgEdge d="M28,154 H52" />
+  <DgEdge d="M28,198 H52" />
+  <DgEdge d="M28,242 H52" />
+  <DgEdge d="M28,286 H52" />
+
+  <DgNode
+    x={56}
+    y={92}
+    w={260}
+    h={36}
+    label="LLM_CALL"
+    sub="ONE PER MODEL CALL, HIT OR MISS"
+    stream="traces"
+  />
+  <DgNode
+    x={56}
+    y={136}
+    w={260}
+    h={36}
+    label="TOOL_CALL"
+    sub="INLINE READ-ONLY TOOL"
+    stream="traces"
+  />
+  <DgNode
+    x={56}
+    y={180}
+    w={260}
+    h={36}
+    label="INTENT_EMITTED"
+    sub="ONE PER STAGED TOOLINTENT"
+    stream="traces"
+  />
+  <DgNode
+    x={56}
+    y={224}
+    w={260}
+    h={36}
+    label="SUSPENDED"
+    sub="DEADLINE + PENDING INTENT IDS"
+    stream="traces"
+  />
+
+  {/* The resume: its own activation span, parented to the root above. */}
+  <DgNode x={56} y={268} w={260} h={36} label="activation span" sub="THE RESUME, UNDER THE ROOT" />
+
+  {/* Spine B — the resume's own children, one level deeper. */}
+  <DgEdge d="M72,304 V330" arrow={false} />
+  <DgEdge d="M72,330 H96" />
+  <DgNode
+    x={100}
+    y={312}
+    w={216}
+    h={36}
+    label="LLM_CALL"
+    sub="AFTER THE RESULT ARRIVES"
+    stream="traces"
+  />
+
+  {/* A bracket gathering the whole tree, so the hand-off to `.traces` reads as
+      "all of it" rather than "the last box". */}
+  <DgEdge d="M330,48 H342 V344 H330" arrow={false} />
+  <DgEdge d="M342,196 H366 V62 H396" stream="traces" />
+
+  <DgText x={166} y={372} anchor="middle" variant="faint">STAGED DURING THE ACTIVATION, EMITTED AT COMMIT</DgText>
+
+  {/* Delivery. The qualifier on each sink is its delivery contract, because
+      that is the difference that decides which one an operator may rely on. */}
+  <DgNode x={400} y={44} w={204} h={36} label=".traces" sub="PCOLLECTION" stream="traces" />
+
+  <DgEdge d="M416,80 V272" arrow={false} stream="traces" />
+  <DgEdge d="M416,110 H440" stream="traces" />
+  <DgEdge d="M416,164 H440" stream="traces" />
+  <DgEdge d="M416,218 H440" stream="traces" />
+  <DgEdge d="M416,272 H440" stream="traces" />
+
+  <DgNode x={444} y={92} w={160} h={36} label="otlp://" sub="OTLP/HTTP · BEST-EFFORT" />
+  <DgNode x={444} y={146} w={160} h={36} label="bigquery://" sub="FLAT ROWS · LOSSLESS" />
+  <DgNode x={444} y={200} w={160} h={36} label="kafka://" sub="PROTO BYTES · LOSSLESS" />
+  <DgNode x={444} y={254} w={160} h={36} label="pubsub://" sub="PROTO BYTES · LOSSLESS" />
+
+  <DgText x={504} y={312} anchor="middle" variant="faint">ACTIVATION_START IS NOT</DgText>
+  <DgText x={504} y={326} anchor="middle" variant="faint">EXPORTED OVER OTLP</DgText>
+</Diagram>
+
+## What a failed activation leaves behind
+
 Traces show the atomic-commit rule from the outside: a committed activation
 emits its whole span set, while a failed one emits a single `ERROR` event,
 because the spans it staged are discarded along with its other effects.
+
+{/*
+  This asymmetry is the most missable property of the stream, and it decides
+  whether a dashboard built on `.traces` is honest: a query counting LLM_CALL
+  events is counting *committed* model calls only. The calls a failed
+  activation made are gone with everything else it staged.
+
+  Both branches share a layout so the eye reads the difference rather than
+  re-parsing two unrelated pictures. The load-bearing detail is that the failed
+  branch's `staged spans` box has nothing leaving it — the ERROR record comes
+  from a `FailureContext` built out of position scalars (step index, the name
+  of the last staged event, counts), never from the staged effects, which is
+  what keeps "a failed activation commits nothing" true for telemetry too.
+*/}
+
+<Diagram
+  title="Committed and failed activations on the traces stream"
+  desc="One activation forks into two possible outcomes. If it commits, the span set it staged is emitted whole and the entire set reaches the .traces output. If it raises part-way through, the staged spans are discarded and never emitted; instead a FailureContext holding only position scalars — the step index, the name of the last staged event, and counts of staged intents and model calls — is built directly from the failure. That context produces two records: one ERROR event on .traces, and one activation_error dead letter on .errors. Nothing leaves the discarded box, because a failed activation's effects stay discarded even for telemetry."
+  caption="The spans a failed activation staged go with everything else it staged, so a query counting LLM_CALL events is counting committed model calls only. Its single ERROR event is synthesized from position scalars — step index, last staged event name, counts — never from the rolled-back effects."
+  viewBox="0 0 620 368"
+  minWidth={560}
+>
+  <DgNode x={210} y={24} w={200} h={42} label="one activation" sub="TWO POSSIBLE OUTCOMES" />
+  <DgEdge d="M310,66 V88" arrow={false} />
+  <DgEdge d="M310,88 H160 V104" />
+  <DgEdge d="M310,88 H466 V104" />
+
+  {/* Left branch — it commits, and the whole span set escapes with it. */}
+  <DgNode x={24} y={108} w={272} h={42} label="it commits" sub="ATOMIC WITH STATE" />
+  <DgEdge d="M160,150 V178" />
+  <DgNode x={24} y={182} w={272} h={46} label="staged spans" sub="EMITTED, ALL OF THEM" soft />
+  <DgEdge d="M160,228 V268" stream="traces" />
+  <DgNode
+    x={24}
+    y={272}
+    w={272}
+    h={42}
+    label=".traces"
+    sub="THE WHOLE SPAN SET"
+    stream="traces"
+  />
+
+  {/* Right branch — it raises. The staged box is a dead end on purpose: nothing
+      leaves it, which is the whole claim. The two output legs drop from a
+      shared rail rather than straight out of FailureContext, so both are long
+      enough to read as lines instead of arrowheads stuck to a box. */}
+  <DgNode x={330} y={108} w={272} h={42} label="it raises" sub="PART-WAY THROUGH" />
+  <DgEdge d="M466,150 V164" arrow={false} />
+  <DgEdge d="M466,164 H393 V178" />
+  <DgEdge d="M466,164 H539 V178" />
+  <DgNode x={330} y={182} w={126} h={46} label="staged spans" sub="DISCARDED" soft />
+  <DgNode x={476} y={182} w={126} h={46} label="FailureContext" sub="POSITION ONLY" />
+
+  <DgEdge d="M539,228 V246" arrow={false} />
+  <DgEdge d="M539,246 H393" arrow={false} />
+  <DgEdge d="M393,246 V268" stream="traces" />
+  <DgEdge d="M539,246 V268" stream="errors" />
+  <DgNode x={330} y={272} w={126} h={42} label=".traces" sub="ONE ERROR" stream="traces" />
+  <DgNode x={476} y={272} w={126} h={42} label=".errors" sub="ACTIVATION_ERROR" stream="errors" />
+
+  <DgText x={310} y={340} anchor="middle" variant="faint">THE SPANS A FAILED ACTIVATION STAGED GO WITH ITS OTHER EFFECTS</DgText>
+  <DgText x={310} y={354} anchor="middle" variant="faint">ITS ERROR RECORD IS SYNTHESIZED FROM POSITION, NOT FROM THEM</DgText>
+</Diagram>
 
 <Example file="four_outputs.py" region="agent" />
 
