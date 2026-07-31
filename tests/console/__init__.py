@@ -1,1 +1,1 @@
-"""Tests for the console package."""
+"""Tests for the console: store, ingest, queries, API, sink, sources, and CLI."""
