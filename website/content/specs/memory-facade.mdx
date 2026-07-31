@@ -8,11 +8,59 @@ verifies:
   - test: tests/memory/test_facade_ring.py
 ---
 
-TBD - created by archiving change add-memory-facade. Update Purpose after archive.
+`Memory` is the working-memory API an agent sees: `get`/`set`/`delete` for
+scalars, and `append`/`ring` for bounded, ordered histories. It is constructed
+once per activation over a `MemoryBlob` read from keyed state, and it hands back
+a new blob at the end.
 
-This capability carries **7 requirements** and
-**17 scenarios**. Scenarios are not illustrations —
-each is the source a test is derived from and named after, which is the
-traceability chain this project requires: scenario, then test, then code.
+## It stages, it does not write
+
+The facade mutates in-memory data only. It performs no Beam state I/O and reads
+no wall-clock — the current time is passed in. Nothing an agent writes reaches
+durable state until the activation succeeds and the runtime commits the staged
+blob with the rest of the bundle.
+
+That is what makes a failed activation leave no trace: an agent that appended
+to a ring, called a model, and then raised has committed nothing. The blob it
+built is discarded, and the key looks exactly as it did before. A `dirty` flag
+stays `False` until the first real mutation, so an activation that only read
+memory does not force a pointless state write.
+
+## Rings, and why they are bounded by default
+
+`append(key, item, max_items=64)` maintains an ordered ring inside the entry's
+value bytes. When an append would exceed the bound, the oldest items are
+dropped. `ring(key)` returns oldest-to-newest, and an absent key is an empty
+ring rather than an error.
+
+The bound has a default because unbounded conversation history is the standard
+way a stateful agent turns into an outage: state grows per key, per event,
+forever, and the failure arrives long after the code that caused it shipped.
+Kind mixing fails fast for the same reason — `append` on a scalar key, or
+`ring` on a scalar, raises `TypeError` rather than reinterpreting bytes.
+
+## The caps
+
+Size accounting is incremental and exact: `size_bytes` is maintained across
+every mutation without rescanning, and always equals a from-scratch
+recomputation.
+
+- At **75% of the hard cap** the facade logs a warning once, increments
+  `beam_agents.memory:soft_cap_warnings`, and invokes the compaction hook. The
+  write still succeeds.
+- Above the **1 MiB hard cap** it invokes compaction once and, if that did not
+  bring the total back under, raises `MemoryOverflow` naming the key, the
+  attempted size, and the cap — without applying the triggering write.
+
+A `Compactor` receives the facade itself, so a compaction strategy mutates
+memory only through the same guarded API; cap enforcement is suspended during
+`compact()` so a compactor cannot re-enter its own trigger.
+
+## Related
+
+- [State and memory](/learn/state-and-memory) — how this fits the activation lifecycle.
+- [Wire schemas](/specs/wire-schemas) — `MemoryBlob`, the persisted form.
+- [Metrics](/docs/metrics) — where `soft_cap_warnings` shows up.
+- [Memory stores](/roadmap/memory-stores) — the durable backends that do not exist yet.
 
 <Spec capability="memory-facade" />

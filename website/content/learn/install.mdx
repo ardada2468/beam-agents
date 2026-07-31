@@ -43,6 +43,14 @@ uv run python -c "import beam_agents; print(sorted(beam_agents.__all__))"
 Importing the package performs no I/O, spawns no threads, and imports no
 optional dependency.
 
+To confirm the whole checkout is healthy, run the offline test tier. It needs
+no credentials and no docker, and it is the same tier CI requires on every
+change:
+
+```sh
+make test-unit
+```
+
 ## Optional extras
 
 Three extras exist, and each is genuinely optional — the core install works
@@ -63,6 +71,23 @@ uv sync --extra langgraph
 `LangGraphAgent` is exported lazily. Without the extra, accessing it raises an
 `ImportError` naming the extra to install rather than a bare
 `ModuleNotFoundError`.
+
+## Depending on it from another project
+
+There is no version to depend on, so depend on a commit:
+
+```sh
+uv add "git+https://github.com/ardada2468/beam-agents@<commit-sha>"
+```
+
+Pin the sha, not a branch. `main` moves, the declared version stays `0.0.0`
+whether or not anything changed underneath it, and nothing in this repository
+publishes a changelog you could diff instead. A branch dependency here is a
+dependency that can change meaning without changing its name.
+
+Treat anything you build this way as built against an unreleased project: the
+public surface is `beam_agents.__all__`, and it carries no stability promise
+yet.
 
 ## Not yet implemented
 

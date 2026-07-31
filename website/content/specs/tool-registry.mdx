@@ -8,11 +8,39 @@ verifies:
   - test: tests/tools/test_registry.py
 ---
 
-`beam_agents.tools` lets agent code declare tools via the `@tool` decorator, deriving each tool's provider-facing JSON schema from its Python signature through a generated Pydantic v2 model, and collects them in a `ToolRegistry` for name resolution and aggregate `tools_schema` lookup. The `side_effect` flag on every tool separates the fast path — `side_effect=False` tools run inline through `ToolRunner` with argument validation — from the effects path: a `side_effect=True` tool raises `SideEffectToolError` on any direct invocation, enforcing correctness invariant 5 that side effects only ever execute through `ctx.act(...)` and the intents/effector pipeline.
+`beam_agents.tools` lets agent code declare tools with a `@tool` decorator. Each
+tool's provider-facing JSON schema is derived from its Python signature through
+a generated Pydantic v2 model, and a `ToolRegistry` collects them for name
+resolution and aggregate `tools_schema` lookup. One definition produces both the
+callable and the schema the model is shown, so the two cannot describe different
+arguments.
 
-This capability carries **5 requirements** and
-**12 scenarios**. Scenarios are not illustrations —
-each is the source a test is derived from and named after, which is the
-traceability chain this project requires: scenario, then test, then code.
+## The side-effect flag is the whole design
+
+Every tool declares whether it has side effects, and that single flag splits the
+runtime in two:
+
+- **`side_effect=False`** — a read-only tool. `ToolRunner` validates the
+  arguments and calls it inline, inside the activation. Nothing leaves the
+  pipeline; see [read-only tools](/examples/read-only-tools).
+- **`side_effect=True`** — an effectful tool. Calling it directly raises
+  `SideEffectToolError`. The only way to invoke it is `ctx.act(...)`, which
+  stages a [`ToolIntent`](/specs/wire-schemas) that leaves on `.intents` and is
+  executed by [the effector](/docs/effector).
+
+That refusal is [correctness invariant 5](/learn/correctness-invariants) made
+mechanical. A side effect performed inline inside an activation happens again on
+every bundle retry, and it happens on a code path where nothing is staged, so a
+failed activation still leaves the effect behind. Raising on direct invocation
+turns "please always use `ctx.act`" from documentation into an error at the
+moment the mistake is made — including when the mistake is inside an adapted
+third-party agent framework rather than in code anyone here wrote.
+
+## Related
+
+- [Read-only tools](/examples/read-only-tools) — the inline path.
+- [Intents and resume](/examples/intents-and-resume) — the effects path.
+- [The effector](/docs/effector) — what executes an intent, once.
+- [Correctness invariants](/learn/correctness-invariants) — invariant 5 in full.
 
 <Spec capability="tool-registry" />

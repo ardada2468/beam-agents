@@ -21,6 +21,17 @@ verifies:
 | Python | `>=3.11,<3.13` |
 | Governance | Independent. **Not** an Apache Software Foundation project. |
 
+## Where to start
+
+- Read [how changes get made here](/specs/spec-driven-development) first. The
+  workflow is unusual enough that skipping it means writing the change twice.
+- Skim [the capability specs](/specs). They are the contract the implementation
+  is written against, and a new capability is a new one of those.
+- Run [the local loop](#the-local-loop) below once on an unmodified checkout,
+  so you know what a passing tree looks like before you change anything.
+- [Testing tiers and CI](/docs/testing-and-ci) explains which tier runs where,
+  and which one is required for every change.
+
 ## Before you write code
 
 This repository requires an OpenSpec change for anything under `src/`, and it
@@ -107,7 +118,13 @@ reason is what gets reviewed.
 
 ## Reporting problems
 
-Open an issue on the repository. For anything about this site specifically —
-a page that is out of date, a claim that does not hold, a check that produces a
-false positive — that is a bug in the same sense as a broken test, and worth
-reporting as one.
+Open an issue at
+[github.com/ardada2468/beam-agents/issues](https://github.com/ardada2468/beam-agents/issues).
+For anything about this site specifically — a page that is out of date, a claim
+that does not hold, a broken link, a check that produces a false positive —
+that is a bug in the same sense as a broken test, and worth reporting as one.
+
+The most useful bug report against the documentation names the page and quotes
+the sentence, because every claim on this site is supposed to be traceable to
+something in the repository. If a sentence cannot be traced, either the sentence
+is wrong or a check is missing, and both are worth fixing.

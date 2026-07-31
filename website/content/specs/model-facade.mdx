@@ -8,11 +8,64 @@ verifies:
   - test: tests/model/test_facade_complete.py
 ---
 
-TBD - created by archiving change async-llmclient-facade. Update Purpose after archive.
+`LlmFacade` is what an agent actually calls when it calls a model. It wraps one
+[provider client](/specs/model-client) and turns a bare `complete()` into a
+resilient, observable, replayable request: cache lookup, typed retry
+classification, jittered backoff, a per-endpoint circuit breaker, optional
+schema-constrained output, token accounting, and exactly one trace event.
 
-This capability carries **8 requirements** and
-**23 scenarios**. Scenarios are not illustrations —
-each is the source a test is derived from and named after, which is the
-traceability chain this project requires: scenario, then test, then code.
+## Everything nondeterministic is injected
+
+The facade is constructed per activation and takes its clock, its RNG, its
+sleeper, its circuit breaker, its retry policy, and its replay cache as
+arguments. It never reads wall-clock time, never generates unseeded randomness,
+and never performs Beam state I/O itself.
+
+That is not stylistic. A Beam bundle can be retried, and a retried bundle must
+take the same path it took the first time or the guarantees below stop meaning
+anything. Injecting every source of nondeterminism is what makes "replay is
+path-stable" a testable property instead of an aspiration — and it is why the
+backoff sleeps against an injected sleeper rather than `asyncio.sleep`.
+
+## The cache comes first
+
+`complete()` computes the cache key over the effective request material —
+including any `output_schema` contribution — and consults [the replay
+cache](/specs/llm-replay-cache) *before* anything else. A live hit returns with
+zero provider calls, zero retry attempts, and without consulting the circuit
+breaker at all.
+
+The ordering is the point. It means a retried bundle costs nothing extra, and
+it means a replay still succeeds while the endpoint is unhealthy: the breaker
+guards new work, not repeated work. This is
+[correctness invariant 3](/learn/correctness-invariants) stated as an
+implementation constraint.
+
+## Failure handling
+
+Only `RateLimitError`, `ServerError`, and `ProviderTimeout` are retried, and
+they are classified by exception type. Everything else — including an output
+that failed schema validation — propagates immediately, because retrying a
+request that is wrong rather than unlucky just spends money slower.
+
+The circuit breaker is a documented worker-local singleton with the usual three
+states, and `CircuitOpenError` is deliberately *not* a `ProviderError`: a tripped
+breaker is not a transport failure to retry, it is a refusal to try.
+
+## What comes out
+
+A `FacadeResult` carries the response, the parsed model instance when an
+`output_schema` was supplied, the token usage, and the number of attempts made.
+Billed usage accumulates only on cache misses — a hit reports the cached
+response's usage but adds nothing to the accumulator, because no provider call
+happened. Usage and traces are staged like every other activation effect, so a
+failed activation contributes neither.
+
+## Related
+
+- [Model client](/specs/model-client) — the protocol being wrapped.
+- [LLM replay cache](/specs/llm-replay-cache) — the short-circuit above.
+- [Traces](/docs/traces) — where the per-call `LLM_CALL` event goes.
+- [Metrics](/docs/metrics) — what the usage accumulator feeds.
 
 <Spec capability="model-facade" />
