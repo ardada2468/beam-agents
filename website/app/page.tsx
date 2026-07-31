@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import type { CSSProperties } from 'react';
 import Link from 'next/link';
 import { Example } from '@/components/Example';
 import { PipelineDiagram } from '@/components/PipelineDiagram';
@@ -95,6 +96,15 @@ const NOT_BUILT = [
   'Spark, which no test in the repository exercises',
 ] as const;
 
+/*
+ * A subgrid can only borrow rows its parent has declared, so `.ledger` has to
+ * be told how many item rows to declare. Deriving it from the two lists means
+ * adding a line to either one keeps the columns aligned without a CSS edit.
+ */
+const LEDGER_ROWS = {
+  '--ledger-rows': String(Math.max(BUILT.length, NOT_BUILT.length)),
+} as CSSProperties;
+
 export default function Home() {
   const jsonLd = {
     '@context': 'https://schema.org',
@@ -114,8 +124,12 @@ export default function Home() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
 
-      {/* ---------- hero ---------- */}
-      <section className="shell pt-14 pb-16 sm:pt-20 sm:pb-20">
+      {/* ---------- hero ----------
+          The vertical steps are a scale, not a ramp: the eyebrow, headline, and
+          lede are one cluster and sit close together; the invocation and the
+          call to action are a second, and the widest gap on the page separates
+          the two. */}
+      <section className="shell band band--lead">
         <p className="eyebrow">
           Pre-release · v{PACKAGE_VERSION} · {LICENSE} · Python 3.11–3.12
         </p>
@@ -129,32 +143,30 @@ export default function Home() {
           framework for authoring agents.
         </p>
 
+        {/* `w-fit` rather than `inline-block`: an inline-block sits on a line
+            box and collects the line's descender space underneath it, which put
+            a few unaccounted-for pixels between this and the buttons. */}
         <p
-          className="mono mt-7 inline-block border px-3.5 py-2.5 text-[0.9rem]"
+          className="mono mt-9 w-fit border px-3.5 py-2.5 text-[0.9rem]"
           style={{ borderColor: 'var(--rule)', background: 'var(--paper-2)' }}
         >
           events <span style={{ color: 'var(--ink-3)' }}>|</span> RunAgent(my_agent)
         </p>
 
-        <div className="mt-8 flex flex-wrap items-center gap-3">
-          <Link
-            href="/learn/what-is-beam-agents"
-            className="px-4 py-2.5 text-[0.93rem] font-medium no-underline"
-            style={{ background: 'var(--ink)', color: 'var(--paper)', borderRadius: 2 }}
-          >
+        {/* All three share `.btn`'s box, so the two buttons are the same height
+            — the filled one used to be 2px shorter, having no border to the
+            outlined one's 1px — and the text of all three sits on one line. */}
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <Link href="/learn/what-is-beam-agents" className="btn btn--primary">
             Read the concepts
           </Link>
-          <Link
-            href="/learn/install"
-            className="border px-4 py-2.5 text-[0.93rem] font-medium no-underline"
-            style={{ borderColor: 'var(--rule-2)', color: 'var(--ink)', borderRadius: 2 }}
-          >
+          <Link href="/learn/install" className="btn btn--secondary">
             Install from source
           </Link>
           <a
             href={REPO_URL}
-            className="px-1 text-[0.93rem] no-underline"
-            style={{ color: 'var(--ink-2)' }}
+            className="btn"
+            style={{ color: 'var(--ink-2)', paddingInline: '0.35rem' }}
           >
             GitHub ↗
           </a>
@@ -163,7 +175,7 @@ export default function Home() {
 
       {/* ---------- the signature: the pipeline ---------- */}
       <section className="rule-top">
-        <div className="shell py-12 sm:py-16">
+        <div className="shell band band--lead">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="eyebrow">The shape of an activation</p>
@@ -186,18 +198,15 @@ export default function Home() {
 
       {/* ---------- the four outputs ---------- */}
       <section className="rule-top">
-        <div className="shell py-12 sm:py-16">
+        <div className="shell band">
           <p className="eyebrow">Four outputs</p>
           <h2 className="h-section mt-2 max-w-[30ch]">
             A complete pipeline consumes all four. Most forget the last one.
           </h2>
 
-          <dl
-            className="mt-9 grid gap-px sm:grid-cols-2 lg:grid-cols-4"
-            style={{ background: 'var(--rule)' }}
-          >
+          <dl className="rule-grid mt-9">
             {OUTPUTS.map((output) => (
-              <div key={output.key} className="p-5" style={{ background: 'var(--paper)' }}>
+              <div key={output.key}>
                 <dt>
                   <span
                     aria-hidden="true"
@@ -223,13 +232,15 @@ export default function Home() {
 
       {/* ---------- guarantees ---------- */}
       <section className="rule-top">
-        <div className="shell py-12 sm:py-16">
+        <div className="shell band">
           <p className="eyebrow">What the runtime holds</p>
           <h2 className="h-section mt-2 max-w-[30ch]">
             Four invariants, each traceable to the test that gates it.
           </h2>
 
-          <ul className="mt-9 grid gap-x-10 gap-y-9 sm:grid-cols-2">
+          {/* A grid, so the four rules start on the same two verticals and each
+              pair starts on the same horizontal. */}
+          <ul className="mt-9 grid gap-x-12 gap-y-9 sm:grid-cols-2">
             {GUARANTEES.map((guarantee) => (
               <li
                 key={guarantee.title}
@@ -242,7 +253,14 @@ export default function Home() {
                 <p className="mt-1.5 max-w-[46ch] text-[0.93rem]" style={{ color: 'var(--ink-2)' }}>
                   {guarantee.body}
                 </p>
-                <p className="mono mt-2.5 text-[0.72rem]" style={{ color: 'var(--ink-3)' }}>
+                {/* A test path is one unbreakable word. Left alone it sets the
+                    grid track's minimum and pushes the whole page wider than
+                    the viewport — invisibly, because `body` hides the overflow
+                    — at 320px and again at the two-column breakpoint. */}
+                <p
+                  className="mono mt-2.5 text-[0.72rem]"
+                  style={{ color: 'var(--ink-3)', overflowWrap: 'anywhere' }}
+                >
                   {guarantee.proof}
                 </p>
               </li>
@@ -253,7 +271,7 @@ export default function Home() {
 
       {/* ---------- real code ---------- */}
       <section className="rule-top">
-        <div className="shell py-12 sm:py-16">
+        <div className="shell band">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="eyebrow">An activation, in full</p>
@@ -280,18 +298,21 @@ export default function Home() {
 
       {/* ---------- honest status ---------- */}
       <section className="rule-top">
-        <div className="shell py-12 sm:py-16">
+        <div className="shell band">
           <p className="eyebrow">Where the project actually is</p>
           <h2 className="h-section mt-2 max-w-[28ch]">
             Read the right-hand column before you plan around this.
           </h2>
 
-          <div className="mt-9 grid gap-x-12 gap-y-8 sm:grid-cols-2">
+          {/* `.ledger` is a subgrid: the two columns share their rows, so an
+              item that wraps in one of them keeps its opposite number level
+              instead of shifting every rule below it. */}
+          <div className="ledger mt-9" style={LEDGER_ROWS}>
             <div>
-              <h3 className="eyebrow" style={{ color: 'var(--ink)' }}>
+              <h3 className="eyebrow ledger__head" style={{ color: 'var(--ink)' }}>
                 Built and tested
               </h3>
-              <ul className="mt-4 space-y-2.5">
+              <ul className="ledger__list">
                 {BUILT.map((item) => (
                   <li
                     key={item}
@@ -304,10 +325,10 @@ export default function Home() {
               </ul>
             </div>
             <div>
-              <h3 className="eyebrow" style={{ color: 'var(--s-errors)' }}>
+              <h3 className="eyebrow ledger__head" style={{ color: 'var(--s-errors)' }}>
                 Not built
               </h3>
-              <ul className="mt-4 space-y-2.5">
+              <ul className="ledger__list">
                 {NOT_BUILT.map((item) => (
                   <li
                     key={item}
@@ -318,7 +339,7 @@ export default function Home() {
                   </li>
                 ))}
               </ul>
-              <p className="mt-4 text-[0.9rem]">
+              <p className="ledger__note text-[0.9rem]">
                 <Link href="/roadmap">The roadmap, marked as roadmap →</Link>
               </p>
             </div>
@@ -328,7 +349,7 @@ export default function Home() {
 
       {/* ---------- how this site is kept honest ---------- */}
       <section className="rule-top">
-        <div className="shell py-12 sm:py-16">
+        <div className="shell band">
           <p className="eyebrow">About this documentation</p>
           <h2 className="h-section mt-2 max-w-[32ch]">
             Every page declares what backs it, and the build fails when that stops being true.
