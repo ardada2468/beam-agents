@@ -5,11 +5,15 @@ COMPOSE := docker compose -f docker/compose.yaml
 # leg (promote-spark-runner, design D2/D3) would be undone at the
 # infrastructure layer if a PR paid for Spark containers.
 COMPOSE_SPARK := docker compose -f docker/compose.yaml -f docker/compose.spark.yaml
+# The console stack is standalone, never an overlay: it shares no service with
+# $(COMPOSE) and no test tier requires it. `compose.console.yaml` sets its own
+# `name:` so the two projects cannot tear each other down.
+COMPOSE_CONSOLE := docker compose -f docker/compose.console.yaml
 # Lazily expanded (`=`, not `:=`): every target, including `help`, would
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build proto docs docs-serve build changelog changelog-draft
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build console-build console-up console-down console-logs console-frontend proto docs docs-serve build changelog changelog-draft
 
 BENCH_RESULTS := bench-results
 # Local-iteration knob only. CI pins the modules' own sampling constants by
@@ -196,6 +200,34 @@ compose-logs-spark: ## Collect the Spark overlay's service logs into LOGS_DIR
 	for svc in spark-jobserver beam-sdk-harness-spark; do \
 		$(COMPOSE_SPARK) logs --no-color --timestamps $$svc > $(LOGS_DIR)/$$svc.log 2>&1 || true; \
 	done
+
+# The console stack (docs/console.md). Separate from the compose-* targets on
+# purpose: nothing in the test suite needs it, and no CI lane starts it.
+console-build: ## Build the console image (UI bundle included)
+	$(COMPOSE_CONSOLE) build
+
+# `--build` by default, matching compose-up's reasoning: the image bakes in the
+# current `src/beam_agents` AND the current `frontend/`, so a stale image shows
+# yesterday's console. Both are cheap to rebuild — the Dockerfile's layer order
+# keeps a source-only change off the dependency-install layers.
+CONSOLE_UP_FLAGS ?= --wait --build
+console-up: ## Start the console at http://localhost:8787 with the demo pipeline
+	$(COMPOSE_CONSOLE) up -d $(CONSOLE_UP_FLAGS)
+
+# No `-v`: the database volume is the point (design D6). `docker compose
+# -f docker/compose.console.yaml down -v` is the deliberate way to discard it.
+console-down: ## Tear down the console stack, keeping the database volume
+	$(COMPOSE_CONSOLE) down
+
+console-logs: ## Follow the console and demo-pipeline logs
+	$(COMPOSE_CONSOLE) logs -f console console-demo
+
+# The UI bundle without docker, for frontend iteration and for building a wheel
+# that ships the UI: hatchling force-includes `console/static/**` when it
+# exists, so running this before `make build` is what makes a local wheel
+# self-contained (design D9). Needs Node; nothing else in this Makefile does.
+console-frontend: ## Build the console UI bundle into the package (needs Node)
+	cd frontend && npm ci && npm run build
 
 proto: ## Regenerate protobuf Python bindings from protos/*.proto
 	scripts/gen_proto.sh
