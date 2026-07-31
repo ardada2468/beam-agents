@@ -55,7 +55,7 @@ import pytest
 from apache_beam.io.kafka import ReadFromKafka
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
-from google.cloud import pubsub_v1  # type: ignore[attr-defined]
+from google.cloud import pubsub_v1
 
 from beam_agents._protos import ToolIntent
 from beam_agents.actions.write_intents import WriteIntents

@@ -112,9 +112,14 @@ class _OrderedPubsubWriteDoFn(beam.DoFn):
         self._topic_name = topic
 
     def setup(self) -> None:
-        # google.cloud is a namespace package; mypy can't see pubsub_v1 as an
-        # attribute of it even with ignore_missing_imports on google.*.
-        from google.cloud import pubsub_v1  # type: ignore[attr-defined]
+        # `google.cloud` is a namespace package, so mypy resolves `pubsub_v1`
+        # only when google-cloud-pubsub is actually installed in the typecheck
+        # environment. It is: the `test` group mirrors `google-adk` (the ADK
+        # adapter's tests need it), which pulls google-cloud-aiplatform and
+        # thence google-cloud-pubsub. If that transitive edge ever goes away
+        # this line fails loudly with attr-defined and wants its
+        # `# type: ignore[attr-defined]` back.
+        from google.cloud import pubsub_v1
 
         self._client = pubsub_v1.PublisherClient(
             publisher_options=pubsub_v1.types.PublisherOptions(

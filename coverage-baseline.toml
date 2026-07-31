@@ -63,4 +63,7 @@
 # instead of merely lane-specific. Re-measure and raise this number when the
 # integration lane's coverage is folded in, or when those backends gain offline
 # call-shape tests that reach their branches.
-branch_rate = 0.9015
+#
+# add-yaml-provider: 0.9028 (the YAML provider's reference grammar, config
+# mapping, and row conversion are fully exercised by offline unit tests).
+branch_rate = 0.9028
