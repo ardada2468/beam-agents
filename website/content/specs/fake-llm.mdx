@@ -8,11 +8,46 @@ verifies:
   - test: tests/model/test_fake_matching.py
 ---
 
-TBD - created by archiving change add-fake-llm-provider. Update Purpose after archive.
+`FakeLLM` is a structural [`LLMClient`](/specs/model-client) that answers
+`complete()` from a script instead of from a provider. It is constructed with
+an ordered list of `(matcher, behavior)` rules; on each call the rules are
+evaluated in registration order and the first matcher that accepts the request
+serves it — either by returning configured response bytes as an `LlmResponse`,
+or by raising a configured `ProviderError`. Convenience matchers cover the
+common cases (match on `model_id`, match on a substring of the request
+material, match anything), so a test rarely has to write a raw predicate.
 
-This capability carries **8 requirements** and
-**17 scenarios**. Scenarios are not illustrations —
-each is the source a test is derived from and named after, which is the
-traceability chain this project requires: scenario, then test, then code.
+## Why the runtime needs one
+
+Most of what this project claims is a claim about *counts and paths*, not about
+text: a retried bundle makes no additional provider call, a resumed activation
+keeps its `seq`, a suspended activation commits nothing. None of those are
+checkable against a real provider, because a real provider is nondeterministic,
+costs money, and needs credentials that a test tier running on every commit
+cannot have.
+
+`FakeLLM` closes that gap. It records every request it was handed and counts
+the calls that actually reached it, which is what turns "the replay cache
+short-circuits the provider" into an assertion a test can make. It performs no
+I/O and reads no clock, so it is safe inside the same offline tier the examples
+on this site run in — including [the getting-started
+pipeline](/learn/getting-started), which needs no network and no docker.
+
+A request that no rule matches is an error, not a default response. Scripting a
+fake loosely is how a test ends up asserting on a response nobody meant to
+configure, so `FakeLLM` fails closed and names the request it could not serve.
+
+## Where it lives
+
+`FakeLLM` is test infrastructure in `beam_agents.model`, deliberately kept out
+of the public root API — it is the double the repository tests against, not a
+provider the runtime offers. Substituting a real client is a change to the
+`AgentConfig` provider factory alone.
+
+## Related
+
+- [Model client](/specs/model-client) — the protocol `FakeLLM` implements.
+- [Model facade](/specs/model-facade) — retry, circuit breaking, and caching layered above it.
+- [Testing tiers and CI](/docs/testing-and-ci) — where the offline tier runs.
 
 <Spec capability="fake-llm" />

@@ -59,9 +59,39 @@ input, and failing at construction beats failing on a worker.
 uv run python website/examples/fast_path.py
 ```
 
-The output asserts what per-key state buys you: `acct-1`'s two events see a
-ring one then two deep, while `acct-2` starts fresh at one. Separate keys,
-separate memory.
+It prints `fast_path: ok`. What it asserts on the way there is the interesting
+part:
+
+```py
+assert_that(results, equal_to([b"escalate:1", b"escalate:2", b"escalate:1"]))
+```
+
+Three events, two keys. `acct-1`'s two events see a ring one deep and then two
+deep, because per-key state persists across activations and per-key
+serialization orders them relative to each other. `acct-2` starts fresh at one:
+separate key, separate memory. Nothing in the agent code arranged that — it is
+what the transform is.
+
+The example is executed by the repository's offline test tier on every change,
+so if this page and the code ever disagreed, CI would say so before you did.
+
+## What just happened
+
+One `process()` call per event, each one an **activation**:
+
+1. The runtime read the key's `MemoryBlob` out of Beam state and handed the
+   agent a `Memory` facade over it.
+2. `ctx.memory.append` staged a ring write. Nothing was persisted yet.
+3. `ctx.call_model` consulted the replay cache before the provider, so a
+   retried bundle would not call the provider a second time, and staged a trace
+   event for the call.
+4. `Complete(output=...)` ended the activation, and the runtime committed the
+   staged memory write, the sequence-counter bump, and the emitted element
+   together with the bundle.
+
+Had step 3 raised, step 4 would never have run: no memory write, no `seq`
+advance, and a record on `.errors` instead of on `.output`. That all-or-nothing
+boundary is the property the rest of the documentation keeps referring back to.
 
 ## What to read next
 
@@ -75,3 +105,6 @@ Depending on what you are trying to do:
   [correctness invariants](/learn/correctness-invariants).
 - **Bring an existing LangGraph graph** →
   [the LangGraph adapter](/examples/langgraph-adapter).
+- **See all four outputs at once** → [the four outputs](/examples/four-outputs).
+- **Look up a name** → [the API reference](/api), or
+  [the glossary](/learn/glossary) if it is a word rather than a symbol.

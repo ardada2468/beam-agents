@@ -1,6 +1,6 @@
 ---
 title: Glossary
-summary: The terms this project uses precisely — activation, continuation, intent, effector, re-injection, replay cache, seq, fast path.
+summary: The terms this project uses precisely — activation, entity key, staging, continuation, intent, effector, re-injection, replay cache, seq.
 status: stable
 order: 9
 verifies:
@@ -13,12 +13,39 @@ verifies:
 These words carry specific meanings here. Where the same word means something
 looser elsewhere in the ecosystem, that is noted.
 
+The order below is conceptual rather than alphabetical: each entry leans on the
+ones above it.
+
 ## Activation
 
 One execution of the agent, for one key, inside one `process()` call. Not "a
 conversation" and not "a session" — a single invocation with a single outcome.
 An agent that suspends and resumes has had **two** activations, sharing one
 `seq`.
+
+## Entity key
+
+The `bytes` key an activation runs under — the account, user, device, or
+whatever else the pipeline partitions by. It is the Beam key, so it is also the
+unit of state isolation and of serialization: two entity keys never share
+memory and never contend, and one entity key is processed one activation at a
+time. Input to `RunAgent` must already be keyed by it.
+
+## Outcome
+
+What an agent returns: `Complete(output=...)`, which ends the activation and
+emits on `.output`, or `Suspend(...)`, which persists a continuation and waits
+for a `ToolResult` or an `Approval`. There is no third option and no implicit
+fall-through, because "what happened to this activation" has to be answerable
+from the return value alone.
+
+## Staging
+
+Recording an effect in the activation context instead of performing it. Memory
+writes, cache inserts, intents, traces, and outputs are all staged, and applied
+only when the activation succeeds and its bundle commits. It is the mechanism
+behind the atomicity invariant: an activation that raises halfway through has
+staged work and applied none of it.
 
 ## Continuation
 
@@ -39,6 +66,30 @@ The external reference service that consumes intents, deduplicates on
 `intent_id`, executes the tool exactly once per intent, and publishes
 `ToolResult`s. It runs **outside** the pipeline, as a separate process. It is a
 reference implementation, not a hosted service.
+
+## Effectively-once
+
+The delivery property the effects path targets: an intent is executed once
+observably, even though the pipeline may produce it more than once. It is not a
+claim that the message is delivered exactly once — that is unachievable across
+a process boundary. It is deterministic intent identity plus deduplication at
+the executor, which together make a duplicate a lookup rather than a second
+effect. See [correctness invariant 2](/learn/correctness-invariants).
+
+## Side-effecting tool
+
+A tool declared `side_effect=True`. Calling one directly raises
+`SideEffectToolError`; the only way to invoke it is `ctx.act(...)`, which stages
+an intent. Its counterpart, a `side_effect=False` tool, runs inline inside the
+activation and never leaves the pipeline. See
+[the tool registry](/specs/tool-registry).
+
+## Approval
+
+A human decision re-entering the pipeline on the same key, in the same shape as
+a `ToolResult`. Human-in-the-loop is not a separate mechanism here — it is the
+effects path with a person where the executor would be, which is why it inherits
+the same expiry and fail-closed behavior.
 
 ## Re-injection
 
