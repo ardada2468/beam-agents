@@ -1,4 +1,5 @@
 import type { Heading } from '@/lib/content';
+import { Literals } from './Literals';
 
 /**
  * The in-page table of contents.
@@ -11,6 +12,13 @@ import type { Heading } from '@/lib/content';
  * the "renders nothing" case is the common one. `hasTableOfContents` exists so
  * the page can ask before it draws the gutter's hairline: a rule with nothing
  * beside it is worse than no rule.
+ *
+ * Headings arrive as raw markdown source, because `extractHeadings` reads them
+ * off the MDX before it is compiled — so a heading like
+ * `## Intent (\`ToolIntent\`)` carries its backticks with it. The body renders
+ * that as a code span; printing the delimiters here instead made the gutter
+ * look like an unrendered file. `Literals` changes no words, only the markup
+ * that was already written.
  */
 
 function shownHeadings(headings: readonly Heading[]): readonly Heading[] {
@@ -35,7 +43,7 @@ export function TableOfContents({ headings }: { headings: readonly Heading[] }) 
               className="no-underline"
               style={{ color: heading.depth === 3 ? 'var(--ink-3)' : 'var(--ink-2)' }}
             >
-              {heading.text}
+              <Literals text={heading.text} />
             </a>
           </li>
         ))}

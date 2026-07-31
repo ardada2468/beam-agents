@@ -229,3 +229,11 @@ drops on delivery failure by contract, and intents and errors are
 correctness-bearing streams that need a lossless sink.
 
 <RepoDoc file="docs/traces.md" />
+
+## Related
+
+- [The four outputs](/examples/four-outputs) — the program embedded above, and
+  the failed activation whose span set collapses to one `ERROR`.
+- [Metrics](/docs/metrics) — the counters recorded on the same path.
+- [The errors output](/docs/errors) — the dead letter a failed activation emits
+  alongside that `ERROR` trace.

@@ -348,3 +348,18 @@ never skipped or marked flaky.
 
 See [testing and CI](/docs/testing-and-ci) for how the tiers are split and what
 runs where.
+
+## Watch them hold
+
+Each invariant above is illustrated with a region of a real program. Those
+programs run offline on the DirectRunner, so the quickest way to check a claim
+is to run the one that demonstrates it:
+
+- [The four outputs](/examples/four-outputs) — invariant 1, with one key that
+  raises so you can watch the discard.
+- [Intents and resume](/examples/intents-and-resume) — invariant 2, naming an
+  intent id before the pipeline runs.
+- [The fast path](/examples/fast-path) — invariants 3 and 4 on the simplest
+  possible activation.
+- [Human in the loop](/examples/human-in-the-loop) — invariant 6, fail-closed
+  at both layers.

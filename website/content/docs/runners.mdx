@@ -92,8 +92,8 @@ preference:
 - **Stateful DoFn support with KV input.** `RunAgent` validates its input is
   KV-shaped at pipeline-construction time and raises `ValueError` otherwise.
 - **Watermark and real-time timers.** `TTL_TIMER` is event-time; `HITL_TIMER`
-  and `FLUSH_TIMER` are processing-time. A runner without both cannot provide
-  memory GC and fail-closed approvals.
+  is processing-time. A runner without both domains cannot provide memory GC
+  and fail-closed approvals.
 - **Bundle retry semantics.** The atomic-commit and replay-cache guarantees are
   stated in terms of bundle retries; a runner that retries differently changes
   what those guarantees mean.

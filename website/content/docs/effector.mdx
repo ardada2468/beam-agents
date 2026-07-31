@@ -140,3 +140,12 @@ idempotent on `intent_id`. The end-to-end semantics gate exercises exactly that
 10,000 events.
 
 <RepoDoc file="docs/effector.md" />
+
+## Related
+
+- [Intents and resume](/examples/intents-and-resume) — the program embedded
+  above, which names the intent id before the pipeline runs.
+- [Correctness invariant 2](/learn/correctness-invariants) — the deterministic
+  id the dedup store is keyed on.
+- [Human in the loop](/docs/human-in-the-loop) — an approval is the same
+  round trip with a person in it.

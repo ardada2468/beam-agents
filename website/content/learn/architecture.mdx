@@ -225,7 +225,6 @@ The runtime is one Beam stateful `DoFn`. Its state and timers are:
 |---|---|---|
 | `TTL_TIMER` | Watermark | Working-memory garbage collection |
 | `HITL_TIMER` | Real time | Approval/result timeout |
-| `FLUSH_TIMER` | Real time | Adaptive batching |
 
 The Python SDK has no `MapState`, so bounded maps live inside single-value
 protobuf blobs with explicit LRU eviction. Every blob is capped at 100 KiB and
