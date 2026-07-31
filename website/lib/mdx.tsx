@@ -9,6 +9,7 @@ import { Diagram, DgEdge, DgNode, DgText } from '@/components/Diagram';
 import { Figure } from '@/components/Figure';
 import { RepoDoc } from '@/components/RepoDoc';
 import { Spec } from '@/components/Spec';
+import { StateCells, StateWriteLifecycle } from '@/components/diagrams/StateDiagrams';
 
 /**
  * Render an MDX body to a server-rendered React tree.
@@ -48,6 +49,11 @@ export async function renderMdx(source: string): Promise<ReactElement> {
       Figure,
       RepoDoc,
       Spec,
+      // Page-specific diagrams. Each is composed from the primitives above and
+      // named for the page it belongs to, so the map stays greppable as more
+      // pages get drawings.
+      StateCells,
+      StateWriteLifecycle,
     },
   });
   return content;
