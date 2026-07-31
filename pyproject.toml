@@ -444,10 +444,12 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 module = [
     "examples.hello_world",
     "examples.fraud_triage",
+    "examples.fraud_triage_dataflow.launch",
     "examples.iot_reaction",
     "examples.slack_approval.agent",
     "tests.examples.test_hello_world",
     "tests.examples.test_fraud_triage",
+    "tests.examples.test_flex_template_launcher",
     "tests.examples.test_iot_reaction",
     "tests.examples.test_continuous_eval",
     "tests.examples.test_slack_approval",

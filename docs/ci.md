@@ -10,7 +10,7 @@ plus the docs build:
 | `integration.yml` → `integration` job | push to `main`, pull request | integration minus semantics gates (core services only: Redpanda, Redis, GCP emulators via `make compose-up-core`) | yes |
 | `integration.yml` → `flink-minicluster` job | push to `main`, pull request | docker-backed semantics gates on the Flink mini-cluster (`make test-semantics` + `make test-conformance-flink`, full compose stack) | yes (add to required contexts at merge) |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
-| `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation and the [benchmark suite](benchmarks.md) unconditionally; the [Dataflow `--update` compatibility gate](#the-dataflow-update-compatibility-gate) and provider smoke tests when credentials exist | no (release-blocking) |
+| `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation and the [benchmark suite](benchmarks.md) unconditionally; the [Dataflow `--update` compatibility gate](#the-dataflow-update-compatibility-gate), the [fraud-triage Flex Template](#the-fraud-triage-flex-template) build and launch gate, and provider smoke tests when credentials exist | no (release-blocking) |
 | `spark-weekly.yml`  | schedule `0 6 * * 1` UTC, manual  | the adapter conformance matrix's weekly Spark leg (`make test-conformance-spark`, base stack + `docker/compose.spark.yaml`) plus the promotion-window report | no (never per-PR — see [the weekly Spark leg](#the-weekly-spark-leg)) |
 | `docs.yml`          | push to `main`, pull request      | docs (strict `mkdocs` build; Pages deploy from `main`) | no (see the docs-workflow note) |
 
@@ -49,7 +49,43 @@ variables `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and
 ever used. The `--update` gate needs two more, `GCP_REGION` and
 `GCP_DATAFLOW_TEMP_BUCKET`; without either it skips visibly rather than being
 deselected, so a partially configured project produces a reported skip, not a
-silent pass.
+silent pass. The Flex Template gate needs one further variable,
+`GCP_ARTIFACT_REGISTRY_REPO`, and skips the same way without it.
+
+## The fraud-triage Flex Template
+
+The nightly `dataflow` job builds
+[`examples/fraud_triage_dataflow/Dockerfile`](https://github.com/ardada2468/beam-agents/blob/main/examples/fraud_triage_dataflow/README.md),
+pushes it to Artifact Registry as `fraud-flex:<git-sha>`, and runs `gcloud
+dataflow flex-template build` to publish a spec at
+`gs://$GCP_DATAFLOW_TEMP_BUCKET/templates/fraud-flex-<git-sha>.json`. Both
+artifacts carry the commit SHA that produced them and **no `latest` alias is
+published**: nothing downstream should depend on a moving nightly artifact.
+`tests/dataflow/test_flex_template_launch.py` then launches that spec — the
+run's own, handed to it as `BEAM_AGENTS_FLEX_TEMPLATE_SPEC` — waits for
+`JOB_STATE_RUNNING`, and cancels. It validates *packaging*: red means the
+template, its parameters, or the worker image broke, not that the runtime did.
+
+The Artifact Registry repository is **pre-provisioned by an admin**, once, not
+created by the workflow — CI's service account gets writer, not admin:
+
+```sh
+gcloud artifacts repositories create beam-agents \
+  --project=MY_PROJECT --location=MY_REGION --repository-format=docker \
+  --description="beam-agents Dataflow Flex Template images"
+
+gcloud artifacts repositories add-iam-policy-binding beam-agents \
+  --project=MY_PROJECT --location=MY_REGION \
+  --member="serviceAccount:$GCP_SERVICE_ACCOUNT" \
+  --role=roles/artifactregistry.writer
+```
+
+Then set `GCP_ARTIFACT_REGISTRY_REPO` to the repository name (`beam-agents`
+above). Retention is a repository-level cleanup policy rather than anything CI
+does — SHA-tagged nightlies accumulate one image per green night, so a policy
+deleting versions older than ~30 days keeps the last month launchable while
+bounding storage. GCS template specs are small JSON objects; a matching
+lifecycle rule on the `templates/` prefix does the same job.
 
 ## The Dataflow `--update` compatibility gate
 

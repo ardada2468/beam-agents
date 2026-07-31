@@ -62,6 +62,15 @@ b'freeze:acct-a'
 b'__hitl_timeout__'
 ```
 
+## Running it on Dataflow
+
+The pipeline below is scripted: a `TestStream` plays the transaction and
+approval topics so the example runs offline with no credentials. Swapping that
+harness for real Pub/Sub topics — the *same* `triage` agent, with topics, the
+provider and the approval deadline as launch parameters — is what
+[Fraud triage on Dataflow](fraud-triage-dataflow.md) packages as a Flex
+Template.
+
 ## The whole program
 
 The code below is included verbatim from
