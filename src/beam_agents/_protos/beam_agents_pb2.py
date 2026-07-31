@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n%beam_agents/_protos/beam_agents.proto\x12\x0e\x62\x65\x61m_agents.v1\"\xc1\x01\n\nMemoryBlob\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12\x37\n\x07\x65ntries\x18\x02 \x03(\x0b\x32&.beam_agents.v1.MemoryBlob.MemoryEntry\x12\x19\n\x11total_value_bytes\x18\x03 \x01(\x03\x1a\x41\n\x0bMemoryEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x0c\x12\x16\n\x0elast_access_ms\x18\x03 \x01(\x03\"\xb5\x02\n\nToolIntent\x12\x11\n\tintent_id\x18\x01 \x01(\t\x12\x12\n\nentity_key\x18\x02 \x01(\x0c\x12\x0b\n\x03seq\x18\x03 \x01(\x03\x12\x12\n\nstep_index\x18\x04 \x01(\r\x12\x11\n\ttool_name\x18\x05 \x01(\t\x12\x11\n\targs_json\x18\x06 \x01(\t\x12\x15\n\rcreated_at_ms\x18\x07 \x01(\x03\x12\x15\n\rexpires_at_ms\x18\x08 \x01(\x03\x12\x0f\n\x07\x61ttempt\x18\t \x01(\r\x12-\n\x04kind\x18\n \x01(\x0e\x32\x1f.beam_agents.v1.ToolIntent.Kind\x12\x10\n\x08trace_id\x18\x0b \x01(\x0c\"9\n\x04Kind\x12\x19\n\x15TOOL_KIND_UNSPECIFIED\x10\x00\x12\x08\n\x04TOOL\x10\x01\x12\x0c\n\x08\x41PPROVAL\x10\x02\"\x84\x02\n\nToolResult\x12\x11\n\tintent_id\x18\x01 \x01(\t\x12\x12\n\nentity_key\x18\x02 \x01(\x0c\x12\x0b\n\x03seq\x18\x03 \x01(\x03\x12\x31\n\x06status\x18\x04 \x01(\x0e\x32!.beam_agents.v1.ToolResult.Status\x12\x0f\n\x07payload\x18\x05 \x01(\x0c\x12\x15\n\rerror_message\x18\x06 \x01(\t\x12\x17\n\x0f\x63ompleted_at_ms\x18\x07 \x01(\x03\"N\n\x06Status\x12\x16\n\x12STATUS_UNSPECIFIED\x10\x00\x12\x06\n\x02OK\x10\x01\x12\t\n\x05\x45RROR\x10\x02\x12\x0b\n\x07\x45XPIRED\x10\x03\x12\x0c\n\x08REJECTED\x10\x04\"\xea\x03\n\nTraceEvent\x12\x10\n\x08trace_id\x18\x01 \x01(\x0c\x12\x0f\n\x07span_id\x18\x02 \x01(\x0c\x12\x16\n\x0eparent_span_id\x18\x03 \x01(\x0c\x12\x12\n\nentity_key\x18\x04 \x01(\x0c\x12\x0b\n\x03seq\x18\x05 \x01(\x03\x12\x12\n\nstep_index\x18\x06 \x01(\r\x12\x38\n\nevent_type\x18\x07 \x01(\x0e\x32$.beam_agents.v1.TraceEvent.EventType\x12>\n\nattributes\x18\x08 \x03(\x0b\x32*.beam_agents.v1.TraceEvent.AttributesEntry\x12\x10\n\x08start_ms\x18\t \x01(\x03\x12\x0e\n\x06\x65nd_ms\x18\n \x01(\x03\x1a\x31\n\x0f\x41ttributesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x9c\x01\n\tEventType\x12\x1a\n\x16\x45VENT_TYPE_UNSPECIFIED\x10\x00\x12\x14\n\x10\x41\x43TIVATION_START\x10\x01\x12\x0c\n\x08LLM_CALL\x10\x02\x12\r\n\tTOOL_CALL\x10\x03\x12\x12\n\x0eINTENT_EMITTED\x10\x04\x12\x12\n\x0e\x41\x43TIVATION_END\x10\x05\x12\t\n\x05\x45RROR\x10\x06\x12\r\n\tSUSPENDED\x10\x07\"\x9e\x03\n\rAgentEnvelope\x12\x12\n\nentity_key\x18\x01 \x01(\x0c\x12\x15\n\revent_time_ms\x18\x02 \x01(\x03\x12\x18\n\x0e\x65xternal_event\x18\x03 \x01(\x0cH\x00\x12\x31\n\x0btool_result\x18\x04 \x01(\x0b\x32\x1a.beam_agents.v1.ToolResultH\x00\x12:\n\x08\x61pproval\x18\x05 \x01(\x0b\x32&.beam_agents.v1.AgentEnvelope.ApprovalH\x00\x12J\n\x0e\x65xport_request\x18\x06 \x01(\x0b\x32\x30.beam_agents.v1.AgentEnvelope.StateExportRequestH\x00\x1aX\n\x08\x41pproval\x12\x11\n\tintent_id\x18\x01 \x01(\t\x12\x10\n\x08\x61pproved\x18\x02 \x01(\x08\x12\x10\n\x08\x61pprover\x18\x03 \x01(\t\x12\x15\n\rdecided_at_ms\x18\x04 \x01(\x03\x1a(\n\x12StateExportRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\tB\t\n\x07payload\"\xb8\x02\n\rStateSnapshot\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12\x12\n\nentity_key\x18\x02 \x01(\x0c\x12\x0b\n\x03seq\x18\x03 \x01(\x03\x12\x16\n\x0esnapshot_at_ms\x18\x04 \x01(\x03\x12*\n\x06memory\x18\x05 \x01(\x0b\x32\x1a.beam_agents.v1.MemoryBlob\x12/\n\tllm_cache\x18\x06 \x01(\x0b\x32\x1c.beam_agents.v1.LlmCacheBlob\x12\x32\n\x0c\x63ontinuation\x18\x07 \x01(\x0b\x32\x1c.beam_agents.v1.Continuation\x12+\n\x07pending\x18\x08 \x03(\x0b\x32\x1a.beam_agents.v1.ToolIntent\x12\x12\n\nrequest_id\x18\t \x01(\t\"b\n\x15\x41\x63tivationErrorRecord\x12\x12\n\nentity_key\x18\x01 \x01(\x0c\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x15\n\revent_time_ms\x18\x04 \x01(\x03\"\xcf\x01\n\x0c\x43ontinuation\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12\x0b\n\x03seq\x18\x02 \x01(\x03\x12\x12\n\nstep_index\x18\x03 \x01(\r\x12\x1a\n\x12pending_intent_ids\x18\x04 \x03(\t\x12\x0f\n\x07\x61\x64\x61pter\x18\x05 \x01(\t\x12\x10\n\x08snapshot\x18\x06 \x01(\x0c\x12\x17\n\x0fsuspended_at_ms\x18\x07 \x01(\x03\x12\x13\n\x0b\x64\x65\x61\x64line_ms\x18\x08 \x01(\x03\x12\x13\n\x0b\x65scalations\x18\t \x01(\r\"\x9b\x02\n\x0cLlmCacheBlob\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12;\n\x07\x65ntries\x18\x02 \x03(\x0b\x32*.beam_agents.v1.LlmCacheBlob.LlmCacheEntry\x12\x1c\n\x14total_response_bytes\x18\x03 \x01(\x03\x1a\x91\x01\n\rLlmCacheEntry\x12\x11\n\tcache_key\x18\x01 \x01(\t\x12\x10\n\x08response\x18\x02 \x01(\x0c\x12\x17\n\x0fresponse_digest\x18\x03 \x01(\x0c\x12\x15\n\rcreated_at_ms\x18\x04 \x01(\x03\x12\x16\n\x0elast_access_ms\x18\x05 \x01(\x03\x12\x13\n\x0b\x64igest_only\x18\x06 \x01(\x08\"n\n\x0eLongTermRecord\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12\x0b\n\x03key\x18\x02 \x01(\t\x12\r\n\x05value\x18\x03 \x01(\x0c\x12\x0b\n\x03seq\x18\x04 \x01(\x03\x12\x15\n\rupdated_at_ms\x18\x05 \x01(\x03\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n%beam_agents/_protos/beam_agents.proto\x12\x0e\x62\x65\x61m_agents.v1\"\xc1\x01\n\nMemoryBlob\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12\x37\n\x07\x65ntries\x18\x02 \x03(\x0b\x32&.beam_agents.v1.MemoryBlob.MemoryEntry\x12\x19\n\x11total_value_bytes\x18\x03 \x01(\x03\x1a\x41\n\x0bMemoryEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x0c\x12\x16\n\x0elast_access_ms\x18\x03 \x01(\x03\"\xec\x03\n\nToolIntent\x12\x11\n\tintent_id\x18\x01 \x01(\t\x12\x12\n\nentity_key\x18\x02 \x01(\x0c\x12\x0b\n\x03seq\x18\x03 \x01(\x03\x12\x12\n\nstep_index\x18\x04 \x01(\r\x12\x11\n\ttool_name\x18\x05 \x01(\t\x12\x11\n\targs_json\x18\x06 \x01(\t\x12\x15\n\rcreated_at_ms\x18\x07 \x01(\x03\x12\x15\n\rexpires_at_ms\x18\x08 \x01(\x03\x12\x0f\n\x07\x61ttempt\x18\t \x01(\r\x12-\n\x04kind\x18\n \x01(\x0e\x32\x1f.beam_agents.v1.ToolIntent.Kind\x12\x10\n\x08trace_id\x18\x0b \x01(\x0c\x12\x44\n\x10signature_scheme\x18\x0c \x01(\x0e\x32*.beam_agents.v1.ToolIntent.SignatureScheme\x12\x16\n\x0esigning_key_id\x18\r \x01(\t\x12\x11\n\tsignature\x18\x0e \x01(\x0c\"9\n\x04Kind\x12\x19\n\x15TOOL_KIND_UNSPECIFIED\x10\x00\x12\x08\n\x04TOOL\x10\x01\x12\x0c\n\x08\x41PPROVAL\x10\x02\"D\n\x0fSignatureScheme\x12 \n\x1cSIGNATURE_SCHEME_UNSPECIFIED\x10\x00\x12\x0f\n\x0bHMAC_SHA256\x10\x01\"\x84\x02\n\nToolResult\x12\x11\n\tintent_id\x18\x01 \x01(\t\x12\x12\n\nentity_key\x18\x02 \x01(\x0c\x12\x0b\n\x03seq\x18\x03 \x01(\x03\x12\x31\n\x06status\x18\x04 \x01(\x0e\x32!.beam_agents.v1.ToolResult.Status\x12\x0f\n\x07payload\x18\x05 \x01(\x0c\x12\x15\n\rerror_message\x18\x06 \x01(\t\x12\x17\n\x0f\x63ompleted_at_ms\x18\x07 \x01(\x03\"N\n\x06Status\x12\x16\n\x12STATUS_UNSPECIFIED\x10\x00\x12\x06\n\x02OK\x10\x01\x12\t\n\x05\x45RROR\x10\x02\x12\x0b\n\x07\x45XPIRED\x10\x03\x12\x0c\n\x08REJECTED\x10\x04\"\xea\x03\n\nTraceEvent\x12\x10\n\x08trace_id\x18\x01 \x01(\x0c\x12\x0f\n\x07span_id\x18\x02 \x01(\x0c\x12\x16\n\x0eparent_span_id\x18\x03 \x01(\x0c\x12\x12\n\nentity_key\x18\x04 \x01(\x0c\x12\x0b\n\x03seq\x18\x05 \x01(\x03\x12\x12\n\nstep_index\x18\x06 \x01(\r\x12\x38\n\nevent_type\x18\x07 \x01(\x0e\x32$.beam_agents.v1.TraceEvent.EventType\x12>\n\nattributes\x18\x08 \x03(\x0b\x32*.beam_agents.v1.TraceEvent.AttributesEntry\x12\x10\n\x08start_ms\x18\t \x01(\x03\x12\x0e\n\x06\x65nd_ms\x18\n \x01(\x03\x1a\x31\n\x0f\x41ttributesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x9c\x01\n\tEventType\x12\x1a\n\x16\x45VENT_TYPE_UNSPECIFIED\x10\x00\x12\x14\n\x10\x41\x43TIVATION_START\x10\x01\x12\x0c\n\x08LLM_CALL\x10\x02\x12\r\n\tTOOL_CALL\x10\x03\x12\x12\n\x0eINTENT_EMITTED\x10\x04\x12\x12\n\x0e\x41\x43TIVATION_END\x10\x05\x12\t\n\x05\x45RROR\x10\x06\x12\r\n\tSUSPENDED\x10\x07\"\x9e\x03\n\rAgentEnvelope\x12\x12\n\nentity_key\x18\x01 \x01(\x0c\x12\x15\n\revent_time_ms\x18\x02 \x01(\x03\x12\x18\n\x0e\x65xternal_event\x18\x03 \x01(\x0cH\x00\x12\x31\n\x0btool_result\x18\x04 \x01(\x0b\x32\x1a.beam_agents.v1.ToolResultH\x00\x12:\n\x08\x61pproval\x18\x05 \x01(\x0b\x32&.beam_agents.v1.AgentEnvelope.ApprovalH\x00\x12J\n\x0e\x65xport_request\x18\x06 \x01(\x0b\x32\x30.beam_agents.v1.AgentEnvelope.StateExportRequestH\x00\x1aX\n\x08\x41pproval\x12\x11\n\tintent_id\x18\x01 \x01(\t\x12\x10\n\x08\x61pproved\x18\x02 \x01(\x08\x12\x10\n\x08\x61pprover\x18\x03 \x01(\t\x12\x15\n\rdecided_at_ms\x18\x04 \x01(\x03\x1a(\n\x12StateExportRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\tB\t\n\x07payload\"\xb8\x02\n\rStateSnapshot\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12\x12\n\nentity_key\x18\x02 \x01(\x0c\x12\x0b\n\x03seq\x18\x03 \x01(\x03\x12\x16\n\x0esnapshot_at_ms\x18\x04 \x01(\x03\x12*\n\x06memory\x18\x05 \x01(\x0b\x32\x1a.beam_agents.v1.MemoryBlob\x12/\n\tllm_cache\x18\x06 \x01(\x0b\x32\x1c.beam_agents.v1.LlmCacheBlob\x12\x32\n\x0c\x63ontinuation\x18\x07 \x01(\x0b\x32\x1c.beam_agents.v1.Continuation\x12+\n\x07pending\x18\x08 \x03(\x0b\x32\x1a.beam_agents.v1.ToolIntent\x12\x12\n\nrequest_id\x18\t \x01(\t\"b\n\x15\x41\x63tivationErrorRecord\x12\x12\n\nentity_key\x18\x01 \x01(\x0c\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x15\n\revent_time_ms\x18\x04 \x01(\x03\"\xcf\x01\n\x0c\x43ontinuation\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12\x0b\n\x03seq\x18\x02 \x01(\x03\x12\x12\n\nstep_index\x18\x03 \x01(\r\x12\x1a\n\x12pending_intent_ids\x18\x04 \x03(\t\x12\x0f\n\x07\x61\x64\x61pter\x18\x05 \x01(\t\x12\x10\n\x08snapshot\x18\x06 \x01(\x0c\x12\x17\n\x0fsuspended_at_ms\x18\x07 \x01(\x03\x12\x13\n\x0b\x64\x65\x61\x64line_ms\x18\x08 \x01(\x03\x12\x13\n\x0b\x65scalations\x18\t \x01(\r\"\x9b\x02\n\x0cLlmCacheBlob\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12;\n\x07\x65ntries\x18\x02 \x03(\x0b\x32*.beam_agents.v1.LlmCacheBlob.LlmCacheEntry\x12\x1c\n\x14total_response_bytes\x18\x03 \x01(\x03\x1a\x91\x01\n\rLlmCacheEntry\x12\x11\n\tcache_key\x18\x01 \x01(\t\x12\x10\n\x08response\x18\x02 \x01(\x0c\x12\x17\n\x0fresponse_digest\x18\x03 \x01(\x0c\x12\x15\n\rcreated_at_ms\x18\x04 \x01(\x03\x12\x16\n\x0elast_access_ms\x18\x05 \x01(\x03\x12\x13\n\x0b\x64igest_only\x18\x06 \x01(\x08\"n\n\x0eLongTermRecord\x12\x1c\n\x14state_schema_version\x18\x01 \x01(\r\x12\x0b\n\x03key\x18\x02 \x01(\t\x12\r\n\x05value\x18\x03 \x01(\x0c\x12\x0b\n\x03seq\x18\x04 \x01(\x03\x12\x15\n\rupdated_at_ms\x18\x05 \x01(\x03\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -38,35 +38,37 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_MEMORYBLOB_MEMORYENTRY']._serialized_start=186
   _globals['_MEMORYBLOB_MEMORYENTRY']._serialized_end=251
   _globals['_TOOLINTENT']._serialized_start=254
-  _globals['_TOOLINTENT']._serialized_end=563
-  _globals['_TOOLINTENT_KIND']._serialized_start=506
-  _globals['_TOOLINTENT_KIND']._serialized_end=563
-  _globals['_TOOLRESULT']._serialized_start=566
-  _globals['_TOOLRESULT']._serialized_end=826
-  _globals['_TOOLRESULT_STATUS']._serialized_start=748
-  _globals['_TOOLRESULT_STATUS']._serialized_end=826
-  _globals['_TRACEEVENT']._serialized_start=829
-  _globals['_TRACEEVENT']._serialized_end=1319
-  _globals['_TRACEEVENT_ATTRIBUTESENTRY']._serialized_start=1111
-  _globals['_TRACEEVENT_ATTRIBUTESENTRY']._serialized_end=1160
-  _globals['_TRACEEVENT_EVENTTYPE']._serialized_start=1163
-  _globals['_TRACEEVENT_EVENTTYPE']._serialized_end=1319
-  _globals['_AGENTENVELOPE']._serialized_start=1322
-  _globals['_AGENTENVELOPE']._serialized_end=1736
-  _globals['_AGENTENVELOPE_APPROVAL']._serialized_start=1595
-  _globals['_AGENTENVELOPE_APPROVAL']._serialized_end=1683
-  _globals['_AGENTENVELOPE_STATEEXPORTREQUEST']._serialized_start=1685
-  _globals['_AGENTENVELOPE_STATEEXPORTREQUEST']._serialized_end=1725
-  _globals['_STATESNAPSHOT']._serialized_start=1739
-  _globals['_STATESNAPSHOT']._serialized_end=2051
-  _globals['_ACTIVATIONERRORRECORD']._serialized_start=2053
-  _globals['_ACTIVATIONERRORRECORD']._serialized_end=2151
-  _globals['_CONTINUATION']._serialized_start=2154
-  _globals['_CONTINUATION']._serialized_end=2361
-  _globals['_LLMCACHEBLOB']._serialized_start=2364
-  _globals['_LLMCACHEBLOB']._serialized_end=2647
-  _globals['_LLMCACHEBLOB_LLMCACHEENTRY']._serialized_start=2502
-  _globals['_LLMCACHEBLOB_LLMCACHEENTRY']._serialized_end=2647
-  _globals['_LONGTERMRECORD']._serialized_start=2649
-  _globals['_LONGTERMRECORD']._serialized_end=2759
+  _globals['_TOOLINTENT']._serialized_end=746
+  _globals['_TOOLINTENT_KIND']._serialized_start=619
+  _globals['_TOOLINTENT_KIND']._serialized_end=676
+  _globals['_TOOLINTENT_SIGNATURESCHEME']._serialized_start=678
+  _globals['_TOOLINTENT_SIGNATURESCHEME']._serialized_end=746
+  _globals['_TOOLRESULT']._serialized_start=749
+  _globals['_TOOLRESULT']._serialized_end=1009
+  _globals['_TOOLRESULT_STATUS']._serialized_start=931
+  _globals['_TOOLRESULT_STATUS']._serialized_end=1009
+  _globals['_TRACEEVENT']._serialized_start=1012
+  _globals['_TRACEEVENT']._serialized_end=1502
+  _globals['_TRACEEVENT_ATTRIBUTESENTRY']._serialized_start=1294
+  _globals['_TRACEEVENT_ATTRIBUTESENTRY']._serialized_end=1343
+  _globals['_TRACEEVENT_EVENTTYPE']._serialized_start=1346
+  _globals['_TRACEEVENT_EVENTTYPE']._serialized_end=1502
+  _globals['_AGENTENVELOPE']._serialized_start=1505
+  _globals['_AGENTENVELOPE']._serialized_end=1919
+  _globals['_AGENTENVELOPE_APPROVAL']._serialized_start=1778
+  _globals['_AGENTENVELOPE_APPROVAL']._serialized_end=1866
+  _globals['_AGENTENVELOPE_STATEEXPORTREQUEST']._serialized_start=1868
+  _globals['_AGENTENVELOPE_STATEEXPORTREQUEST']._serialized_end=1908
+  _globals['_STATESNAPSHOT']._serialized_start=1922
+  _globals['_STATESNAPSHOT']._serialized_end=2234
+  _globals['_ACTIVATIONERRORRECORD']._serialized_start=2236
+  _globals['_ACTIVATIONERRORRECORD']._serialized_end=2334
+  _globals['_CONTINUATION']._serialized_start=2337
+  _globals['_CONTINUATION']._serialized_end=2544
+  _globals['_LLMCACHEBLOB']._serialized_start=2547
+  _globals['_LLMCACHEBLOB']._serialized_end=2830
+  _globals['_LLMCACHEBLOB_LLMCACHEENTRY']._serialized_start=2685
+  _globals['_LLMCACHEBLOB_LLMCACHEENTRY']._serialized_end=2830
+  _globals['_LONGTERMRECORD']._serialized_start=2832
+  _globals['_LONGTERMRECORD']._serialized_end=2942
 # @@protoc_insertion_point(module_scope)

@@ -82,4 +82,8 @@
 # add-token-budgets: the budget meter, BudgetExceeded routing, and the two new
 # usage distributions are fully exercised by offline unit tests. Measured on
 # the combined tree with add-replay-cli: 0.9118.
+#
+# add-effector-security: the signing/verification paths, the redaction helpers,
+# and the effector's phase-zero dead-letter route are fully exercised by
+# offline unit tests. Re-measured on the combined tree below.
 branch_rate = 0.9118

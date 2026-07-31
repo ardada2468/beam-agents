@@ -41,10 +41,21 @@ from urllib.parse import urlparse
 import apache_beam as beam
 from apache_beam.typehints.typehints import AnyTypeConstraint, TupleHint
 
+from beam_agents.intent_signing import sign_intent
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from beam_agents._protos import ToolIntent
+
+    # Annotation-only: `TransportSecurity` lives with the effector's config
+    # (the other side of the same topic configures it identically), and the
+    # pipeline never needs the effector package at runtime to use one — the
+    # caller who builds the block imports it, and this module only calls
+    # methods on it. Keeping the import out of the runtime closure is what
+    # stops `import beam_agents` from dragging in the effector service.
+    from beam_agents.effector.config import TransportSecurity
+    from beam_agents.intent_signing import IntentSigner
 
 DEAD_LETTER_TAG = "dead_letter"
 
@@ -80,11 +91,30 @@ def _parse_intents_uri(uri: str) -> tuple[str, tuple[str, str]]:
     return scheme, (parsed.netloc, segments[0])
 
 
-def _build_kafka_writer(brokers: str, topic: str) -> beam.PTransform:
+def _kafka_producer_config(brokers: str, security: TransportSecurity | None) -> dict[str, str]:
+    """Java-client producer properties for Beam's cross-language Kafka sink.
+
+    Split out from the writer so the offline lane can assert the security
+    settings actually reach the client's configuration without constructing a
+    cross-language transform (which needs an expansion service).
+
+    Credential *references* are resolved here, at client-construction time, and
+    the resolved values live only in the returned dict — never back on the
+    configuration object (design D7).
+    """
+    config = {"bootstrap.servers": brokers, "enable.idempotence": "true"}
+    if security is not None:
+        config.update(security.java_producer_config())
+    return config
+
+
+def _build_kafka_writer(
+    brokers: str, topic: str, security: TransportSecurity | None = None
+) -> beam.PTransform:
     from apache_beam.io.kafka import WriteToKafka
 
     return WriteToKafka(
-        producer_config={"bootstrap.servers": brokers, "enable.idempotence": "true"},
+        producer_config=_kafka_producer_config(brokers, security),
         topic=topic,
     )
 
@@ -178,11 +208,18 @@ class _PubsubOutboxWriter(beam.PTransform):
         )
 
 
-def _build_pubsub_writer(project: str, topic: str) -> beam.PTransform:
+def _build_pubsub_writer(
+    project: str, topic: str, security: TransportSecurity | None = None
+) -> beam.PTransform:
+    # `security` is accepted and ignored: Pub/Sub authenticates through
+    # Application Default Credentials, so there is nothing to configure — only
+    # IAM roles to grant, which docs/security.md enumerates. Taking the
+    # parameter keeps both writers callable through one dispatch table.
+    del security
     return _PubsubOutboxWriter(project, topic)
 
 
-_WRITERS: dict[str, Callable[[str, str], beam.PTransform]] = {
+_WRITERS: dict[str, Callable[[str, str, TransportSecurity | None], beam.PTransform]] = {
     "kafka": _build_kafka_writer,
     "pubsub": _build_pubsub_writer,
 }
@@ -227,11 +264,37 @@ def _validate_kv_input(pcoll: beam.pvalue.PCollection) -> None:
 
 
 class _SerializeIntent(beam.DoFn):
-    """Serializes ``ToolIntent`` to canonical bytes; dead-letters on failure."""
+    """Serializes ``ToolIntent`` to canonical bytes; dead-letters on failure.
+
+    When a signer is configured, the signature is stamped **here** rather than
+    in ``ctx.act``'s staging path (design D3). The signature is a transport
+    property, so intents held in ``PENDING`` state and the ``Continuation``s
+    that list them stay byte-identical to the pre-signing runtime — no state
+    compat question, no ``state_schema_version`` question — and the key
+    material never enters the agent DoFn or the pipeline graph, because it is
+    resolved from a reference in ``setup()``, worker-side.
+    """
+
+    def __init__(self, signer: IntentSigner | None = None) -> None:
+        self._signer = signer
+        self._key: bytes | None = None
+
+    def setup(self) -> None:
+        # Resolved per worker, from the reference the graph carries. A missing
+        # or wrong key id fails the worker at startup rather than producing an
+        # intent stream nothing downstream can verify.
+        if self._signer is not None:
+            self._key = self._signer.resolve_key()
 
     def process(self, element: tuple[bytes, ToolIntent]):
         key, intent = element
         try:
+            if self._signer is not None:
+                assert self._key is not None, "setup() must run before process()"
+                # `sign_intent` returns a copy: the element's intent is the
+                # object staged in keyed state, and mutating it here would
+                # rewrite committed state bytes.
+                intent = sign_intent(intent, key_id=self._signer.key_id, key=self._key)
             payload = intent.SerializeToString(deterministic=True)
         except Exception as exc:  # any failure is dead-lettered, never raised
             yield beam.pvalue.TaggedOutput(DEAD_LETTER_TAG, (element, str(exc)))
@@ -251,6 +314,8 @@ class WriteIntents(beam.PTransform):
         uri: str,
         *,
         writer_factory: Callable[[str], beam.PTransform] | None = None,
+        signer: IntentSigner | None = None,
+        transport_security: TransportSecurity | None = None,
     ) -> None:
         """Construct a ``WriteIntents`` writing to ``uri``.
 
@@ -260,16 +325,29 @@ class WriteIntents(beam.PTransform):
         real Kafka/Pub/Sub writer with a caller-supplied one (for tests);
         it is called with ``uri`` and must return the terminal write
         ``PTransform`` for ``PCollection[KV[bytes, bytes]]``.
+
+        ``signer`` names the HMAC key each intent is signed with, by
+        reference; the effector refuses unsigned intents once its
+        ``verify_intents`` dial reaches ``require``. ``transport_security``
+        carries the broker's SASL/TLS settings, again with credentials by
+        reference. Both are validated here — eagerly, import-free, before any
+        pipeline exists — and neither ever holds a resolved secret.
         """
         super().__init__()
         self._uri = uri
         self._scheme, self._parts = _parse_intents_uri(uri)
         self._writer_factory = writer_factory
+        if signer is not None:
+            signer.validate()
+        if transport_security is not None:
+            transport_security.validate()
+        self._signer = signer
+        self._transport_security = transport_security
 
     def _build_writer(self) -> beam.PTransform:
         if self._writer_factory is not None:
             return self._writer_factory(self._uri)
-        return _WRITERS[self._scheme](*self._parts)
+        return _WRITERS[self._scheme](*self._parts, self._transport_security)
 
     def expand(self, pcoll: beam.pvalue.PCollection) -> WriteIntentsResult:
         _validate_kv_input(pcoll)
@@ -277,7 +355,9 @@ class WriteIntents(beam.PTransform):
         # expansion service needs a concrete KvCoder<ByteArrayCoder,
         # ByteArrayCoder> reported for the main output, not Beam's generic/
         # pickle-based fallback coder.
-        serializer = beam.ParDo(_SerializeIntent()).with_output_types(tuple[bytes, bytes])
+        serializer = beam.ParDo(_SerializeIntent(self._signer)).with_output_types(
+            tuple[bytes, bytes]
+        )
         tagged = pcoll | "SerializeIntent" >> serializer.with_outputs(
             DEAD_LETTER_TAG, main="serialized"
         )

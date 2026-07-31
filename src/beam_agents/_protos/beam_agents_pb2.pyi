@@ -27,7 +27,7 @@ class MemoryBlob(_message.Message):
     def __init__(self, state_schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[MemoryBlob.MemoryEntry, _Mapping]]] = ..., total_value_bytes: _Optional[int] = ...) -> None: ...
 
 class ToolIntent(_message.Message):
-    __slots__ = ("intent_id", "entity_key", "seq", "step_index", "tool_name", "args_json", "created_at_ms", "expires_at_ms", "attempt", "kind", "trace_id")
+    __slots__ = ("intent_id", "entity_key", "seq", "step_index", "tool_name", "args_json", "created_at_ms", "expires_at_ms", "attempt", "kind", "trace_id", "signature_scheme", "signing_key_id", "signature")
     class Kind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
         __slots__ = ()
         TOOL_KIND_UNSPECIFIED: _ClassVar[ToolIntent.Kind]
@@ -36,6 +36,12 @@ class ToolIntent(_message.Message):
     TOOL_KIND_UNSPECIFIED: ToolIntent.Kind
     TOOL: ToolIntent.Kind
     APPROVAL: ToolIntent.Kind
+    class SignatureScheme(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        SIGNATURE_SCHEME_UNSPECIFIED: _ClassVar[ToolIntent.SignatureScheme]
+        HMAC_SHA256: _ClassVar[ToolIntent.SignatureScheme]
+    SIGNATURE_SCHEME_UNSPECIFIED: ToolIntent.SignatureScheme
+    HMAC_SHA256: ToolIntent.SignatureScheme
     INTENT_ID_FIELD_NUMBER: _ClassVar[int]
     ENTITY_KEY_FIELD_NUMBER: _ClassVar[int]
     SEQ_FIELD_NUMBER: _ClassVar[int]
@@ -47,6 +53,9 @@ class ToolIntent(_message.Message):
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
     TRACE_ID_FIELD_NUMBER: _ClassVar[int]
+    SIGNATURE_SCHEME_FIELD_NUMBER: _ClassVar[int]
+    SIGNING_KEY_ID_FIELD_NUMBER: _ClassVar[int]
+    SIGNATURE_FIELD_NUMBER: _ClassVar[int]
     intent_id: str
     entity_key: bytes
     seq: int
@@ -58,7 +67,10 @@ class ToolIntent(_message.Message):
     attempt: int
     kind: ToolIntent.Kind
     trace_id: bytes
-    def __init__(self, intent_id: _Optional[str] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., tool_name: _Optional[str] = ..., args_json: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., attempt: _Optional[int] = ..., kind: _Optional[_Union[ToolIntent.Kind, str]] = ..., trace_id: _Optional[bytes] = ...) -> None: ...
+    signature_scheme: ToolIntent.SignatureScheme
+    signing_key_id: str
+    signature: bytes
+    def __init__(self, intent_id: _Optional[str] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., tool_name: _Optional[str] = ..., args_json: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., attempt: _Optional[int] = ..., kind: _Optional[_Union[ToolIntent.Kind, str]] = ..., trace_id: _Optional[bytes] = ..., signature_scheme: _Optional[_Union[ToolIntent.SignatureScheme, str]] = ..., signing_key_id: _Optional[str] = ..., signature: _Optional[bytes] = ...) -> None: ...
 
 class ToolResult(_message.Message):
     __slots__ = ("intent_id", "entity_key", "seq", "status", "payload", "error_message", "completed_at_ms")

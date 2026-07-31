@@ -61,6 +61,17 @@ message ToolIntent {
     APPROVAL = 2;
   }
 
+  // How `signature` was computed. Additive under state_schema_version = 1: an
+  // intent written before the signature envelope existed decodes as
+  // SIGNATURE_SCHEME_UNSPECIFIED with an empty `signature`, which readers
+  // treat as unsigned (NOT as a signature that fails to verify). The enum is
+  // the seam an asymmetric scheme lands on additively; a verifier that does
+  // not recognize a scheme fails closed rather than ignoring it.
+  enum SignatureScheme {
+    SIGNATURE_SCHEME_UNSPECIFIED = 0;
+    HMAC_SHA256 = 1;
+  }
+
   string intent_id = 1;
   bytes entity_key = 2;
   int64 seq = 3;
@@ -80,6 +91,28 @@ message ToolIntent {
   // state_schema_version = 1: an intent written before this field existed
   // decodes as empty, which readers treat as "no trace correlation available".
   bytes trace_id = 11;
+
+  // Signature envelope binding every field above to a key the pipeline holds,
+  // so the effector can refuse an intent it did not mint before touching a
+  // dedup store or a tool. Like `intent_id`, these are transported and never
+  // computed here.
+  //
+  // The signature is defined over the deterministic serialization of THIS
+  // message with all three signature fields cleared. That definition is what
+  // makes the project's additive-evolution rule load-bearing rather than
+  // merely tidy: every future `ToolIntent` field must take a number above all
+  // existing ones, so a verifier on older bindings preserves it as an unknown
+  // field and re-emits it after the known fields — matching the signer's
+  // sorted-by-number layout, and keeping the signing input stable across
+  // schema skew. Serializing the whole message also means a field added later
+  // is covered by the signature by default, rather than silently falling
+  // outside it.
+  SignatureScheme signature_scheme = 12;
+  // Names the key in the verifier's keyring, so rotation is: add the new key
+  // to the effector, switch the signer's id, retire the old key after the
+  // outbox retention window.
+  string signing_key_id = 13;
+  bytes signature = 14;
 }
 
 // Effector outcome, re-injected on the same key as the originating intent.

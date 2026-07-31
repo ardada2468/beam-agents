@@ -209,6 +209,75 @@ def test_intent_without_kind_reads_as_unspecified_tool_call() -> None:
     assert parsed.kind != ToolIntent.APPROVAL
 
 
+def test_signature_fields_round_trip() -> None:
+    # Scenario: Signature fields round-trip.
+    signature = bytes(range(32))
+    intent = ToolIntent(
+        intent_id="11111111-2222-5333-8444-555555555555",
+        tool_name="http.post",
+        signature_scheme=ToolIntent.HMAC_SHA256,
+        signing_key_id="k1",
+        signature=signature,
+    )
+
+    parsed = ToolIntent()
+    parsed.ParseFromString(intent.SerializeToString(deterministic=True))
+
+    assert parsed.signature_scheme == ToolIntent.HMAC_SHA256
+    assert parsed.signing_key_id == "k1"
+    assert parsed.signature == signature
+    assert len(parsed.signature) == 32
+
+
+def test_a_pre_signature_intent_decodes_as_unsigned() -> None:
+    # Scenario: A pre-signature intent decodes as unsigned.
+    # An unset proto3 scalar is absent from the wire, so bytes produced before
+    # the signature fields existed are exactly these bytes. The committed
+    # `tests/core/golden/v1/tool_intent.bin` blob is the real pre-signature
+    # artifact; test_schema_compat.py asserts it there.
+    legacy = ToolIntent(intent_id="legacy", tool_name="http.post").SerializeToString()
+
+    parsed = ToolIntent()
+    parsed.ParseFromString(legacy)
+
+    assert parsed.signature_scheme == ToolIntent.SIGNATURE_SCHEME_UNSPECIFIED
+    assert parsed.signature == b""
+    assert parsed.signing_key_id == ""
+
+
+def test_a_future_field_intent_still_yields_a_stable_signing_input() -> None:
+    # Scenario: A future-field intent still yields a stable signing input.
+    #
+    # The signing input is the message with its three signature fields cleared,
+    # serialized deterministically. A verifier running older bindings sees a
+    # newer, higher-numbered field as an *unknown* field, which protobuf
+    # preserves and re-emits after the known fields — matching the signer's
+    # sorted-by-number layout. Signing the whole message therefore stays stable
+    # across schema skew, which is what makes the additive-evolution rule
+    # load-bearing for signatures rather than merely tidy.
+    future_field = _unknown_field(500, 42)
+    base = ToolIntent(intent_id="keep-me", seq=7, tool_name="t")
+    signer_input = base.SerializeToString(deterministic=True) + future_field
+
+    delivered = ToolIntent()
+    delivered.ParseFromString(
+        signer_input
+        + ToolIntent(
+            signature_scheme=ToolIntent.HMAC_SHA256,
+            signing_key_id="k1",
+            signature=b"\xaa" * 32,
+        ).SerializeToString(deterministic=True)
+    )
+
+    cleared = ToolIntent()
+    cleared.CopyFrom(delivered)
+    cleared.ClearField("signature_scheme")
+    cleared.ClearField("signing_key_id")
+    cleared.ClearField("signature")
+
+    assert cleared.SerializeToString(deterministic=True) == signer_input
+
+
 # --- Requirement: ToolResult correlates outcomes with terminal statuses ------
 
 

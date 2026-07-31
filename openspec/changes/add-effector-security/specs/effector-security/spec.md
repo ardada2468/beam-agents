@@ -124,7 +124,7 @@ Every error message that interpolates a transport or dedup URI, and every `repr`
 
 #### Scenario: A malformed credentialed URI is reported redacted
 
-- **WHEN** `EffectorConfig` is constructed with a malformed dedup URI containing `redis://user:secret@host`
+- **WHEN** `EffectorConfig` is constructed with a malformed dedup URI carrying userinfo — `redis://user:secret@`, which is all userinfo and no host, the shape a credential-carrying typo takes
 - **THEN** the raised error names the URI with its userinfo masked and the string `secret` appears nowhere in the exception or its chain
 
 #### Scenario: The config repr masks credentials

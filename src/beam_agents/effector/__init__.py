@@ -18,7 +18,12 @@ Importing this package has no side effects.
 
 from __future__ import annotations
 
-from beam_agents.effector.config import EffectorConfig, EffectorConfigError
+from beam_agents.effector.config import (
+    EffectorConfig,
+    EffectorConfigError,
+    TransportSecurity,
+    redact_uri,
+)
 from beam_agents.effector.dedup import (
     Claimed,
     ClaimOutcome,
@@ -47,4 +52,6 @@ __all__ = [
     "IntentSource",
     "ReadOnlyToolError",
     "ResultSink",
+    "TransportSecurity",
+    "redact_uri",
 ]
