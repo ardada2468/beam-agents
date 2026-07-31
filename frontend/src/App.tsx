@@ -17,6 +17,7 @@ import { Route, Switch } from 'wouter';
 import { AppShell } from '@/components/layout/AppShell';
 import { EmptyState, SkeletonRows } from '@/components/ui';
 import { useLiveStream } from '@/lib/live';
+import { LiveContext } from '@/lib/live-context';
 import { useLivePreference } from '@/pages/Settings/preferences';
 
 const Overview = lazy(() => import('@/pages/Overview'));
@@ -53,32 +54,34 @@ export default function App() {
   const live = useLiveStream(liveEnabled);
 
   return (
-    <AppShell live={live}>
-      <Suspense
-        fallback={
-          <div className="page">
-            <SkeletonRows rows={8} columns={6} />
-          </div>
-        }
-      >
-        <Switch>
-          <Route path="/" component={Overview} />
-          <Route path="/activations" component={Activations} />
-          <Route path="/activations/:entityKey/:seq" component={ActivationDetailPage} />
-          <Route path="/traces" component={Traces} />
-          <Route path="/traces/:traceId" component={TraceDetailPage} />
-          <Route path="/errors" component={Errors} />
-          <Route path="/approvals" component={Approvals} />
-          <Route path="/models" component={Models} />
-          <Route path="/tools" component={Tools} />
-          <Route path="/entities" component={Entities} />
-          <Route path="/entities/:entityKey" component={EntityDetailPage} />
-          <Route path="/search" component={Search} />
-          <Route path="/connect" component={Connect} />
-          <Route path="/settings" component={Settings} />
-          <Route component={NotFound} />
-        </Switch>
-      </Suspense>
-    </AppShell>
+    <LiveContext.Provider value={live}>
+      <AppShell live={live}>
+        <Suspense
+          fallback={
+            <div className="page">
+              <SkeletonRows rows={8} columns={6} />
+            </div>
+          }
+        >
+          <Switch>
+            <Route path="/" component={Overview} />
+            <Route path="/activations" component={Activations} />
+            <Route path="/activations/:entityKey/:seq" component={ActivationDetailPage} />
+            <Route path="/traces" component={Traces} />
+            <Route path="/traces/:traceId" component={TraceDetailPage} />
+            <Route path="/errors" component={Errors} />
+            <Route path="/approvals" component={Approvals} />
+            <Route path="/models" component={Models} />
+            <Route path="/tools" component={Tools} />
+            <Route path="/entities" component={Entities} />
+            <Route path="/entities/:entityKey" component={EntityDetailPage} />
+            <Route path="/search" component={Search} />
+            <Route path="/connect" component={Connect} />
+            <Route path="/settings" component={Settings} />
+            <Route component={NotFound} />
+          </Switch>
+        </Suspense>
+      </AppShell>
+    </LiveContext.Provider>
   );
 }

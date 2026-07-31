@@ -48,6 +48,36 @@
   margin-top: calc(-1 * var(--space-3));
 }
 
+/* The lifecycle section: this page's hero, and the only thing above the fold
+   that is not a number in a box. Its heading is deliberately quieter than the
+   diagram beneath it — the drawing is the content, the heading only labels it,
+   and a heading competing with the figures inside the diagram would undo the
+   hierarchy the display scale exists to create. */
+.ov-flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ov-flow__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.ov-flow__head h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.ov-flow__head p {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
 /* Three series across, stacked once a third of the column stops being wide
    enough to read a 48-bucket chart in. */
 .ov-charts {

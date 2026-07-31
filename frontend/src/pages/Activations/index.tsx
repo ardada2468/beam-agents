@@ -436,69 +436,67 @@ export default function ActivationsPage() {
       </div>
 
       <section className="panel" aria-label="Filters">
+        {/*
+          One row of controls, and no visible captions on them.
+
+          Every one of these already names itself: the inputs have placeholders
+          and the selects sit on "Any status", "Any model", "Any reason". The
+          captions above them repeated that word and doubled each control's
+          height, which ran seven controls to two rows and pushed the table
+          below the fold — so landing here showed the controls for finding an
+          activation and not one activation. `aria-label` carries the accessible
+          name the visible caption was providing.
+        */}
         <div className="act-filters">
-          <div className="act-filters__cell">
-            <Input
-              label="Search"
-              placeholder="entity key or trace ID"
-              value={queryDraft}
-              onChange={(event) => setQueryDraft(event.target.value)}
-            />
-          </div>
-          <div className="act-filters__cell">
-            <Input
-              label="Entity key"
-              mono
-              placeholder="hex prefix"
-              value={entityDraft}
-              onChange={(event) => setEntityDraft(event.target.value)}
-            />
-          </div>
-          <div className="act-filters__cell">
-            <Select
-              label="Status"
-              placeholder="Any status"
-              value={status}
-              onChange={(event) => setParam('status', event.target.value)}
-              options={STATUSES.map((value) => ({ value, label: STATUS_LABEL[value] }))}
-            />
-          </div>
-          <div className="act-filters__cell">
-            <Select
-              label="Kind"
-              placeholder="Any kind"
-              value={kind}
-              onChange={(event) => setParam('kind', event.target.value)}
-              options={KINDS.map((value) => ({ value, label: KIND_LABEL[value] }))}
-            />
-          </div>
-          <div className="act-filters__cell">
-            <Select
-              label="Model"
-              placeholder="Any model"
-              value={model}
-              onChange={(event) => setParam('model', event.target.value)}
-              options={modelOptions}
-            />
-          </div>
-          <div className="act-filters__cell">
-            <Select
-              label="Tool"
-              placeholder="Any tool"
-              value={tool}
-              onChange={(event) => setParam('tool', event.target.value)}
-              options={toolOptions}
-            />
-          </div>
-          <div className="act-filters__cell">
-            <Select
-              label="Reason"
-              placeholder="Any reason"
-              value={reason}
-              onChange={(event) => setParam('reason', event.target.value)}
-              options={reasonOptions}
-            />
-          </div>
+          <Input
+            aria-label="Search by entity key or trace ID"
+            className="act-filters__search"
+            placeholder="Search keys or IDs"
+            value={queryDraft}
+            onChange={(event) => setQueryDraft(event.target.value)}
+          />
+          <Input
+            aria-label="Entity key hex prefix"
+            mono
+            placeholder="Entity key prefix"
+            value={entityDraft}
+            onChange={(event) => setEntityDraft(event.target.value)}
+          />
+          <Select
+            aria-label="Status"
+            placeholder="Any status"
+            value={status}
+            onChange={(event) => setParam('status', event.target.value)}
+            options={STATUSES.map((value) => ({ value, label: STATUS_LABEL[value] }))}
+          />
+          <Select
+            aria-label="Kind"
+            placeholder="Any kind"
+            value={kind}
+            onChange={(event) => setParam('kind', event.target.value)}
+            options={KINDS.map((value) => ({ value, label: KIND_LABEL[value] }))}
+          />
+          <Select
+            aria-label="Model"
+            placeholder="Any model"
+            value={model}
+            onChange={(event) => setParam('model', event.target.value)}
+            options={modelOptions}
+          />
+          <Select
+            aria-label="Tool"
+            placeholder="Any tool"
+            value={tool}
+            onChange={(event) => setParam('tool', event.target.value)}
+            options={toolOptions}
+          />
+          <Select
+            aria-label="Reason"
+            placeholder="Any reason"
+            value={reason}
+            onChange={(event) => setParam('reason', event.target.value)}
+            options={reasonOptions}
+          />
         </div>
 
         {active.length > 0 ? (

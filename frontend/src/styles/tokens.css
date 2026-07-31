@@ -81,7 +81,15 @@
   --text-sm: 0.8125rem; /* 13px — the default. Dense tables live here. */
   --text-md: 0.9375rem; /* 15px — body prose, form controls */
   --text-lg: 1.25rem; /* 20px — section headings */
-  --text-xl: 1.75rem; /* 28px — page title, headline figures */
+  --text-xl: 1.75rem; /* 28px — page title */
+  /* Two display steps above the page title, for figures only — never prose.
+     The header above says the interface should be quiet and the data loud, but
+     a scale topping out at the page-title size cannot express that: a headline
+     figure and the word "Overview" came out identical, so every screen read as
+     uniformly important. These are the sizes a count may reach when it is the
+     thing somebody opened the page to read. */
+  --text-2xl: 2.25rem; /* 36px — a count inside the flow */
+  --text-display: 3.25rem; /* 52px — the one primary figure on a screen */
 
   --weight-regular: 400;
   --weight-medium: 500;
@@ -90,6 +98,10 @@
   --leading-tight: 1.2;
   --leading-normal: 1.5;
   --tracking-eyebrow: 0.06em;
+  /* Negative tracking is for large type only. At 13px it closes the counters
+     and costs legibility; at 36px and up, default tracking reads loose. */
+  --tracking-tight: -0.02em;
+  --tracking-display: -0.03em;
 
   /* -- Space: an 8px grid, with a 4px half-step for control interiors ------ */
   --space-1: 0.25rem;

@@ -15,21 +15,26 @@
 
 /* A grid rather than a wrapping flex row: with flex, whichever control lands
    alone on the last line stretches to the full width and reads as a different
-   kind of control. Every cell here is one column wide, wherever it wraps to. */
+   kind of control. Every cell here is one column wide, wherever it wraps to.
+
+   The controls are the grid items directly, and none of them carries a visible
+   caption — each already names itself through its placeholder. That halves the
+   row's height, which is what lets all seven sit on one line at full width
+   instead of two, and the table start the page rather than follow a form. */
 .act-filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
+  align-items: center;
 }
 
-.act-filters__cell {
+/* Search takes one column like everything else. Spanning it two columns made
+   eight units compete for the seven columns a full-width content area fits,
+   which left the last dropdown wrapping onto a line of its own — a worse trade
+   than a slightly narrower search field. */
+.act-filters__search {
   min-width: 0;
-}
-
-.act-filters__cell > .field {
-  display: flex;
-  width: 100%;
 }
 
 .act-active {

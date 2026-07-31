@@ -26,6 +26,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 
+import RuntimeFlow from '@/components/flow/RuntimeFlow';
 import type { SeriesSpec } from '@/components/ui';
 import {
   Button,
@@ -41,6 +42,7 @@ import {
 } from '@/components/ui';
 import { api, ApiError, DEFAULT_WINDOW_MS, queryKeys } from '@/lib/api';
 import type { Overview } from '@/lib/api-types';
+import { useIsLive } from '@/lib/live-context';
 import {
   formatCompact,
   formatCount,
@@ -117,6 +119,7 @@ export default function OverviewPage() {
         ) : (
           <>
             <Freshness updatedAt={dataUpdatedAt} fetching={isFetching} arrived={arrived} />
+            <FlowSection overview={data} />
             <Headline overview={data} />
             <Body
               overview={data}
@@ -128,6 +131,51 @@ export default function OverviewPage() {
         )}
       </div>
     </div>
+  );
+}
+
+/* -- The flow -------------------------------------------------------------- */
+
+/**
+ * The lifecycle diagram, and the one query this page makes beyond the overview.
+ *
+ * The approval count is fetched separately because it is the only figure on the
+ * diagram the overview payload does not carry, and it is genuinely a different
+ * question: everything else counts activations in a *window*, while intents
+ * parked at the effector are a queue with no window at all — one that has been
+ * waiting three days still blocks a resume today.
+ *
+ * A failure here is not a failure of the page. If the approvals query is down
+ * the diagram still draws with every other count intact and the effector node
+ * reads as uncounted, rather than the whole hero disappearing over one number.
+ */
+function FlowSection({ overview }: { overview: Overview }) {
+  const live = useIsLive();
+  const approvals = useQuery({
+    queryKey: queryKeys.approvals(true),
+    queryFn: () => api.approvals(true),
+  });
+
+  const awaiting = approvals.isSuccess
+    ? approvals.data.filter((item) => item.decision === 'pending').length
+    : null;
+
+  return (
+    <section className="ov-flow" aria-labelledby="ov-flow-heading">
+      <div className="ov-flow__head">
+        <h2 id="ov-flow-heading">Lifecycle</h2>
+        <p>Where the activations in this window ended up. Select a state to list them.</p>
+      </div>
+      <RuntimeFlow
+        activations={overview.activations}
+        inFlight={overview.in_flight}
+        completed={overview.completed}
+        suspended={overview.suspended}
+        errorRecords={overview.errors}
+        awaitingApproval={awaiting}
+        live={live}
+      />
+    </section>
   );
 }
 
@@ -206,15 +254,15 @@ function useArrivals(data: Overview | undefined, windowMs: number): number {
 /* -- Headline figures ------------------------------------------------------ */
 
 function Headline({ overview }: { overview: Overview }) {
+  /*
+   * No activations tile. The lifecycle diagram directly above this row already
+   * carries the total and the breakdown by state, at a size a tile cannot
+   * match — repeating it here made the first two things on the page the same
+   * sentence twice, and the second one smaller. The tiles that remain are the
+   * figures the diagram has no node for.
+   */
   return (
     <TileRow>
-      <StatTile
-        label="Activations"
-        value={formatCompact(overview.activations)}
-        meta={`${formatCount(overview.completed)} completed · ${formatCount(
-          overview.suspended,
-        )} suspended · ${formatCount(overview.in_flight)} in flight`}
-      />
       <StatTile
         label="Error rate"
         value={formatRatio(overview.error_ratio)}
