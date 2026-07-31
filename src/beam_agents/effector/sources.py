@@ -20,9 +20,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 from beam_agents._protos import ToolIntent
+
+if TYPE_CHECKING:
+    from beam_agents.effector.config import TransportSecurity
 
 # Called with a partition id when the transport takes that partition away (a
 # consumer-group rebalance). The service stops the partition's task and releases
@@ -33,11 +36,28 @@ RevocationHandler = Callable[[str], Awaitable[None]]
 
 @dataclass(frozen=True)
 class DeliveredIntent:
-    """One intent as delivered, with what the source needs to commit it."""
+    """One intent as delivered, with what the source needs to commit it.
+
+    ``payload``/``key`` are the *raw delivered bytes*, kept alongside the parsed
+    message because a delivery that fails signature verification is preserved
+    verbatim on the dead-letter channel: re-serializing the parsed message would
+    publish something subtly different from what arrived, which is the one thing
+    a forensic record must not do. They default to empty for the sources and
+    tests that predate the dead-letter path; :meth:`raw_payload` falls back to a
+    deterministic re-encode there.
+    """
 
     intent: ToolIntent
     partition: str
     handle: object = None
+    payload: bytes = b""
+    key: bytes = b""
+
+    def raw_payload(self) -> bytes:
+        return self.payload or self.intent.SerializeToString(deterministic=True)
+
+    def raw_key(self) -> bytes:
+        return self.key or self.intent.entity_key
 
 
 @runtime_checkable
@@ -132,7 +152,14 @@ class KafkaIntentSource:
     publishing.
     """
 
-    def __init__(self, brokers: str, topic: str, group_id: str) -> None:
+    def __init__(
+        self,
+        brokers: str,
+        topic: str,
+        group_id: str,
+        *,
+        security: TransportSecurity | None = None,
+    ) -> None:
         from aiokafka import AIOKafkaConsumer
 
         self._topic = topic
@@ -141,6 +168,9 @@ class KafkaIntentSource:
             group_id=group_id,
             enable_auto_commit=False,
             auto_offset_reset="earliest",
+            # Resolved here, at client construction: the secret exists only
+            # inside the client object, never on the config that named it.
+            **(security.client_kwargs() if security is not None else {}),
         )
         self._revocation_handler: RevocationHandler | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -173,6 +203,8 @@ class KafkaIntentSource:
                 intent=_parse_intent(message.value),
                 partition=f"{message.topic}:{message.partition}",
                 handle=(message.topic, message.partition, message.offset),
+                payload=message.value,
+                key=message.key or b"",
             )
 
     async def commit(self, delivered: DeliveredIntent) -> None:
@@ -187,6 +219,21 @@ class KafkaIntentSource:
 
     async def close(self) -> None:
         await self._consumer.stop()
+
+
+def _ordering_key_bytes(ordering_key: str) -> bytes:
+    """Recover the raw ``entity_key`` from a Pub/Sub ordering key.
+
+    ``WriteIntents`` publishes ``entity_key.hex()``, so the inverse is a hex
+    decode — but a message published by anything else may carry an arbitrary
+    string, and this runs on the *unverified* delivery path. Falling back to
+    empty (``DeliveredIntent.raw_key`` then uses the parsed ``entity_key``)
+    keeps a malformed ordering key from raising inside the consumer callback.
+    """
+    try:
+        return bytes.fromhex(ordering_key)
+    except ValueError:
+        return b""
 
 
 def _partition_id(topic_partition: object) -> str:
@@ -207,9 +254,14 @@ class PubSubIntentSource:
     """
 
     def __init__(self, project: str, subscription: str, *, max_queued: int = 64) -> None:
-        # google.cloud is a namespace package; mypy can't see pubsub_v1 as an
-        # attribute of it (same as actions/write_intents.py).
-        from google.cloud import pubsub_v1  # type: ignore[attr-defined]
+        # `google.cloud` is a namespace package, so mypy resolves `pubsub_v1`
+        # only when google-cloud-pubsub is actually installed in the typecheck
+        # environment. It is — the `test` group mirrors `google-adk`, which
+        # pulls it transitively — so the former `# type: ignore[attr-defined]`
+        # here now reads as an unused ignore. Same note as
+        # actions/write_intents.py: if that transitive edge goes away this line
+        # fails loudly with attr-defined and wants its ignore back.
+        from google.cloud import pubsub_v1
 
         self._client = pubsub_v1.SubscriberClient()
         self._path = self._client.subscription_path(project, subscription)
@@ -240,6 +292,8 @@ class PubSubIntentSource:
                 intent=_parse_intent(message.data),  # type: ignore[attr-defined]
                 partition=message.ordering_key or "",  # type: ignore[attr-defined]
                 handle=message,
+                payload=message.data,  # type: ignore[attr-defined]
+                key=_ordering_key_bytes(message.ordering_key or ""),  # type: ignore[attr-defined]
             )
             assert self._loop is not None
             # Blocking put from the client's thread: full queue means the
@@ -267,11 +321,20 @@ class PubSubIntentSource:
 
 
 def build_intent_source(
-    scheme: str, parts: tuple[str, ...], *, consumer_group: str
+    scheme: str,
+    parts: tuple[str, ...],
+    *,
+    consumer_group: str,
+    security: TransportSecurity | None = None,
 ) -> IntentSource:
-    """Construct the source a parsed transport URI names."""
+    """Construct the source a parsed transport URI names.
+
+    ``security`` reaches Kafka only: Pub/Sub authenticates through Application
+    Default Credentials, so there is nothing to configure — only IAM roles to
+    grant, which ``docs/security.md`` enumerates.
+    """
     if scheme == "kafka":
         brokers, topic = parts
-        return KafkaIntentSource(brokers, topic, consumer_group)
+        return KafkaIntentSource(brokers, topic, consumer_group, security=security)
     project, subscription = parts
     return PubSubIntentSource(project, subscription)

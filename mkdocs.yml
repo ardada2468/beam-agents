@@ -52,6 +52,7 @@ nav:
       - Beam YAML provider: yaml.md
       - CI workflow map: ci.md
       - Running the effector: effector.md
+      - Security: security.md
       - Errors and dead letters: errors.md
       - Runtime metrics: metrics.md
       - Trace delivery: traces.md

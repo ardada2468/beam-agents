@@ -129,11 +129,16 @@ class _FakeTopicPartition:
 
 
 class _FakeMessage:
-    def __init__(self, value: bytes, topic: str, partition: int, offset: int) -> None:
+    def __init__(
+        self, value: bytes, topic: str, partition: int, offset: int, key: bytes | None = None
+    ) -> None:
         self.value = value
         self.topic = topic
         self.partition = partition
         self.offset = offset
+        # Kafka messages carry a key; the source keeps it (with the raw value)
+        # so an unverifiable delivery can be dead-lettered exactly as it arrived.
+        self.key = key
 
 
 @pytest.fixture

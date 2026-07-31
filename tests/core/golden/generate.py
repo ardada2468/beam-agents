@@ -38,6 +38,7 @@ from beam_agents._protos import (
     TraceEvent,
 )
 from beam_agents.core.migration import CURRENT_STATE_SCHEMA_VERSION
+from beam_agents.intent_signing import sign_intent
 
 GOLDEN_DIR = Path(__file__).parent
 
@@ -183,6 +184,76 @@ def _tool_intent_traced() -> ToolIntent:
     )
 
 
+# The fixed, non-secret HMAC key the signed golden fixture is signed with. A
+# corpus fixture must be reproducible from this file alone, so the key is
+# committed here rather than read from the environment; it authenticates
+# nothing and exists only to pin the signing input's encoding.
+GOLDEN_SIGNING_KEY_ID = "golden-k1"
+GOLDEN_SIGNING_KEY = bytes(range(32))
+
+
+def _tool_intent_signed() -> ToolIntent:
+    """An intent carrying its HMAC-SHA256 signature envelope.
+
+    The signature fields were added after the v1 baseline blobs were written,
+    so this fixture (not `tool_intent`, which is deliberately left as the
+    pre-signature bytes) is what pins their encoding. Because the signature is
+    recomputed by this builder and compared against the committed bytes, the
+    fixture also pins the *signing input* — cleared-signature-fields
+    deterministic serialization — which is the definition both the signer and
+    the verifier have to agree on.
+    """
+    return sign_intent(
+        ToolIntent(
+            intent_id="dddddddd-eeee-5fff-8000-111111111111",
+            entity_key=b"entity-1",
+            seq=7,
+            step_index=5,
+            tool_name="http.post",
+            args_json='{"url":"https://example.test"}',
+            created_at_ms=_T0,
+            expires_at_ms=_T0 + 60_000,
+            attempt=0,
+            kind=ToolIntent.TOOL,
+        ),
+        key_id=GOLDEN_SIGNING_KEY_ID,
+        key=GOLDEN_SIGNING_KEY,
+    )
+
+
+def _tool_intent_future_field() -> ToolIntent:
+    """A signed intent carrying an unknown field numbered above the signature.
+
+    Stands in for a message minted by a *newer* schema generation and read by
+    these bindings: field 500 is unknown here, and protobuf preserves it and
+    re-emits it after the known fields. That placement is what keeps the
+    cleared-fields signing input stable across schema skew, so this blob is the
+    committed artifact behind the "a future-field intent still yields a stable
+    signing input" scenario.
+    """
+    unsigned = ToolIntent(
+        intent_id="eeeeeeee-ffff-5000-8111-222222222222",
+        entity_key=b"entity-1",
+        seq=7,
+        step_index=6,
+        tool_name="http.post",
+        args_json='{"url":"https://example.test"}',
+        created_at_ms=_T0,
+        expires_at_ms=_T0 + 60_000,
+        attempt=0,
+        kind=ToolIntent.TOOL,
+    )
+    # A varint field 500 (tag = 500 << 3 | 0 = 4000, value 42), appended as raw
+    # bytes and parsed back so the message genuinely carries it as an unknown
+    # field. It is added *before* signing, because the fixture stands in for a
+    # message minted by a newer schema generation: the newer signer covered the
+    # field, and these older bindings must still reproduce that signing input.
+    unknown = bytes([0xA0, 0x1F, 0x2A])
+    carrier = ToolIntent()
+    carrier.ParseFromString(unsigned.SerializeToString(deterministic=True) + unknown)
+    return sign_intent(carrier, key_id=GOLDEN_SIGNING_KEY_ID, key=GOLDEN_SIGNING_KEY)
+
+
 def _continuation() -> Continuation:
     return Continuation(
         state_schema_version=1,
@@ -238,6 +309,8 @@ GOLDEN_V1: dict[str, Message] = {
     "continuation": _continuation(),
     "continuation_escalated": _continuation_escalated(),
     "llm_cache_blob": _llm_cache_blob(),
+    "tool_intent_signed": _tool_intent_signed(),
+    "tool_intent_future_field": _tool_intent_future_field(),
 }
 
 # version -> that version's fixture builders. One entry per schema version up

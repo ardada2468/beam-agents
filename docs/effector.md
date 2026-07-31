@@ -28,6 +28,12 @@ Every flag also reads an environment variable (`EFFECTOR_REGISTRY`,
 (`module:attribute`) naming the same `ToolRegistry` your agent declares its
 tools from — the effector executes *your* tools, so it has to load them.
 
+Anything security-relevant — intent-signature verification (`--verify-intents`,
+`--signing-keys`, `--dead-letters-to`), broker SASL/TLS, and the rule that
+secrets never travel in tool arguments — lives in [Security](security.md).
+Credentials belong in environment variables rather than flags: `argv` is visible
+in process listings.
+
 ## Deployment preconditions
 
 The effector cannot enforce these; a deployment that skips them loses
@@ -120,11 +126,16 @@ pipeline, where no intent exists.
 
 ## Behavior reference
 
-**Phase order per intent** — refuse-expired → claim → execute → complete →
-publish → commit. Each edge is a crash argument: expiry is decided before the
+**Phase order per intent** — verify → refuse-expired → claim → execute →
+complete → publish → commit. Each edge is a crash argument: an unauthenticated
+message drives nothing at all, not even an `EXPIRED` result (see
+[Security](security.md#verification-failures)); expiry is decided before the
 store is touched (an outage cannot make a deadline fail open); the result is
 durable before it is published (a crash republishes rather than re-executes);
 the offset advances last (a crash redelivers rather than loses).
+
+The verify step is inert until you turn it on: `--verify-intents` defaults to
+`off`, which is byte-for-byte the pre-signing behavior.
 
 **Statuses.** `REJECTED` means the callable never ran (unknown tool, a
 `side_effect=False` tool reaching the outbox, argument validation failure).

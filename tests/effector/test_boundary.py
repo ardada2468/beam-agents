@@ -40,11 +40,14 @@ _BLOCKED = (
 )
 
 # Modules the effector may import from its own package. `core` is absent by
-# design: it is the Beam-facing half of the runtime.
+# design: it is the Beam-facing half of the runtime. `intent_signing` is
+# shared with `actions/` on purpose — the signer and the verifier are two ends
+# of one definition — and is Beam-free and stdlib-only for exactly that reason.
 _ALLOWED_INTERNAL = (
     "beam_agents._protos",
     "beam_agents.effector",
     "beam_agents.hitl",
+    "beam_agents.intent_signing",
     "beam_agents.tools",
 )
 

@@ -8,6 +8,7 @@ actionable message rather than on the first message.
 from __future__ import annotations
 
 import asyncio
+import base64
 import sys
 import types
 
@@ -20,10 +21,12 @@ from beam_agents.effector.__main__ import (
     load_registry,
     main,
     serve,
+    transport_security_from_args,
 )
 from beam_agents.effector.dedup import Claimed, InMemoryDedupStore
 from beam_agents.effector.runner import EffectorToolRunner
 from beam_agents.effector.service import EffectorService
+from beam_agents.effector.sinks import KafkaMessageSink
 from beam_agents.effector.sources import KafkaIntentSource
 from beam_agents.tools import ToolRegistry, tool
 
@@ -192,6 +195,108 @@ def test_the_service_builder_wires_every_adapter_from_the_config(
     assert isinstance(service, EffectorService)
     assert isinstance(service._source, KafkaIntentSource)
     assert isinstance(service._dedup, InMemoryDedupStore)
+
+
+def _fake_aiokafka(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = types.ModuleType("aiokafka")
+    module.AIOKafkaConsumer = _FakeConsumer  # type: ignore[attr-defined]
+    module.AIOKafkaProducer = _FakeProducer  # type: ignore[attr-defined]
+    module.TopicPartition = _FakeTopicPartition  # type: ignore[attr-defined]
+    module.ConsumerRebalanceListener = object  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiokafka", module)
+
+
+# --- effector-security: the CLI's half of the verification wiring ------------
+
+
+def test_verification_settings_reach_the_config_from_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MAIN_KEYS", f"k1={base64.b64encode(b'k' * 32).decode()}")
+    args = _args(
+        verify_intents="require",
+        signing_keys="env:TEST_MAIN_KEYS",
+        dead_letters_to="kafka://localhost:9092/dead-letters",
+    )
+
+    config = config_from_args(args)  # type: ignore[arg-type]
+
+    assert config.verify_intents == "require"
+    assert config.signing_keys == "env:TEST_MAIN_KEYS"
+    assert config.dead_letters_to == "kafka://localhost:9092/dead-letters"
+
+
+def test_the_service_builder_loads_the_keyring_and_the_dead_letter_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_aiokafka(monkeypatch)
+    monkeypatch.setenv("TEST_MAIN_KEYS", f"k1={base64.b64encode(b'k' * 32).decode()}")
+    config = config_from_args(
+        _args(
+            verify_intents="require",
+            signing_keys="env:TEST_MAIN_KEYS",
+            dead_letters_to="kafka://localhost:9092/dead-letters",
+        )  # type: ignore[arg-type]
+    )
+
+    service = build_service(config, TOOLS)
+
+    assert service._keyring == {"k1": b"k" * 32}
+    assert isinstance(service._dead_letter_sink, KafkaMessageSink)
+
+
+def test_a_verifying_mode_with_an_unresolvable_keyring_fails_before_any_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Scenario: A verifying mode without a keyring fails at startup — the
+    # *unresolvable* half. Reference syntax is fine; the secret was never
+    # materialized, which is a mis-provisioned deployment, not a typo.
+    monkeypatch.delenv("TEST_MAIN_MISSING_KEYS", raising=False)
+    config = config_from_args(
+        _args(verify_intents="permissive", signing_keys="env:TEST_MAIN_MISSING_KEYS")  # type: ignore[arg-type]
+    )
+    # aiokafka is deliberately NOT installed here: if the keyring were loaded
+    # after client construction this would raise ImportError instead.
+    with pytest.raises(ValueError, match="TEST_MAIN_MISSING_KEYS"):
+        build_service(config, TOOLS)
+
+
+def test_off_mode_builds_no_keyring_and_no_dead_letter_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_aiokafka(monkeypatch)
+
+    service = build_service(config_from_args(_args()), TOOLS)  # type: ignore[arg-type]
+
+    assert service._keyring == {}
+    assert service._dead_letter_sink is None
+
+
+def test_transport_security_is_absent_unless_a_flag_asks_for_it() -> None:
+    # An unconfigured deployment must construct exactly the clients it did
+    # before this change, so "no flags" has to mean `None`, not an empty block.
+    assert transport_security_from_args(build_parser().parse_args([])) is None
+
+
+def test_transport_security_flags_become_a_validated_block() -> None:
+    args = build_parser().parse_args(
+        [
+            "--kafka-security-protocol",
+            "SASL_SSL",
+            "--kafka-sasl-mechanism",
+            "SCRAM-SHA-512",
+            "--kafka-sasl-username-reference",
+            "env:KAFKA_USER",
+            "--kafka-sasl-password-reference",
+            "env:KAFKA_PASSWORD",
+        ]
+    )
+
+    security = transport_security_from_args(args)
+
+    assert security is not None
+    assert security.security_protocol == "SASL_SSL"
+    assert security.sasl_password_reference == "env:KAFKA_PASSWORD"
 
 
 def test_main_runs_the_service_to_completion(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -32,7 +32,13 @@ from beam_agents.core.migration import (
     VERSIONED_MESSAGE_TYPES,
     migrate_to_current,
 )
-from tests.core.golden.generate import CORPUS, write_current
+from beam_agents.intent_signing import VerificationResult, verify_intent
+from tests.core.golden.generate import (
+    CORPUS,
+    GOLDEN_SIGNING_KEY,
+    GOLDEN_SIGNING_KEY_ID,
+    write_current,
+)
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
@@ -201,6 +207,61 @@ def test_pre_v1_baseline_blobs_decode_with_fields_added_later() -> None:
     # state_schema_version = 1, so a pre-field intent reads as "no trace
     # correlation available" rather than failing.
     assert intent.trace_id == b""
+
+    # Scenario: A pre-signature intent decodes as unsigned. Same bytes again,
+    # one more schema generation later: the committed blob predates the
+    # signature envelope, so it is the real pre-signature artifact and must
+    # read as unsigned rather than as a signature that fails to verify.
+    assert intent.signature_scheme == ToolIntent.SIGNATURE_SCHEME_UNSPECIFIED
+    assert intent.signing_key_id == ""
+    assert intent.signature == b""
+
+
+def test_the_committed_signed_blob_still_verifies_against_its_key() -> None:
+    # Scenario: Signature fields round-trip — pinned against committed bytes
+    # rather than a same-process round-trip, so a change to the signing input's
+    # definition (field order, which fields are cleared, the MAC construction)
+    # goes red here instead of silently invalidating every retained intent on a
+    # deployment's outbox.
+    intent = ToolIntent()
+    intent.ParseFromString((GOLDEN_DIR / "v1" / "tool_intent_signed.bin").read_bytes())
+
+    assert intent.signature_scheme == ToolIntent.HMAC_SHA256
+    assert intent.signing_key_id == GOLDEN_SIGNING_KEY_ID
+    assert (
+        verify_intent(intent, {GOLDEN_SIGNING_KEY_ID: GOLDEN_SIGNING_KEY}) is VerificationResult.OK
+    )
+
+
+def test_a_future_field_blob_still_verifies_across_the_schema_skew() -> None:
+    # Scenario: A future-field intent still yields a stable signing input.
+    # The committed blob carries an unknown field numbered above the signature
+    # fields — a message minted by a newer schema generation. These bindings
+    # preserve it as an unknown field and re-emit it after the known ones, so
+    # the cleared-fields signing input matches what the signer computed and the
+    # signature still verifies. If a protobuf runtime ever changes unknown-field
+    # placement, this test is where it surfaces, not production.
+    intent = ToolIntent()
+    intent.ParseFromString((GOLDEN_DIR / "v1" / "tool_intent_future_field.bin").read_bytes())
+
+    # `UnknownFields()` is unavailable on the upb implementation, so the
+    # presence of a field these bindings cannot name is asserted on the bytes:
+    # discarding unknowns makes the message strictly shorter.
+    known_only = ToolIntent()
+    known_only.CopyFrom(intent)
+    known_only.DiscardUnknownFields()
+    assert len(known_only.SerializeToString(deterministic=True)) < len(
+        intent.SerializeToString(deterministic=True)
+    ), "the fixture must carry a field these bindings do not know"
+    assert (
+        verify_intent(intent, {GOLDEN_SIGNING_KEY_ID: GOLDEN_SIGNING_KEY}) is VerificationResult.OK
+    )
+    # And the skew is what makes it interesting: without the preserved unknown
+    # field the signing input differs and verification fails.
+    assert (
+        verify_intent(known_only, {GOLDEN_SIGNING_KEY_ID: GOLDEN_SIGNING_KEY})
+        is VerificationResult.BAD_SIGNATURE
+    )
 
 
 def test_trace_event_correlation_ids_round_trip_at_wire_widths() -> None:

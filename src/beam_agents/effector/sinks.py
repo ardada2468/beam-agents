@@ -17,9 +17,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from beam_agents._protos import ToolResult
+
+if TYPE_CHECKING:
+    from beam_agents.effector.config import TransportSecurity
 
 
 @runtime_checkable
@@ -116,11 +119,19 @@ class KafkaMessageSink:
     matching how ``WriteIntents`` writes the outbox.
     """
 
-    def __init__(self, brokers: str, topic: str) -> None:
+    def __init__(
+        self, brokers: str, topic: str, *, security: TransportSecurity | None = None
+    ) -> None:
         from aiokafka import AIOKafkaProducer
 
         self._topic = topic
-        self._producer = AIOKafkaProducer(bootstrap_servers=brokers, enable_idempotence=True)
+        self._producer = AIOKafkaProducer(
+            bootstrap_servers=brokers,
+            enable_idempotence=True,
+            # Resolved here, at client construction: the secret exists only
+            # inside the client object, never on the config that named it.
+            **(security.client_kwargs() if security is not None else {}),
+        )
         self._started = False
 
     async def _ensure_started(self) -> None:
@@ -149,9 +160,14 @@ class PubSubMessageSink:
     """
 
     def __init__(self, project: str, topic: str) -> None:
-        # google.cloud is a namespace package; mypy can't see pubsub_v1 as an
-        # attribute of it (same as actions/write_intents.py).
-        from google.cloud import pubsub_v1  # type: ignore[attr-defined]
+        # `google.cloud` is a namespace package, so mypy resolves `pubsub_v1`
+        # only when google-cloud-pubsub is actually installed in the typecheck
+        # environment. It is — the `test` group mirrors `google-adk`, which
+        # pulls it transitively — so the former `# type: ignore[attr-defined]`
+        # here now reads as an unused ignore. Same note as
+        # actions/write_intents.py: if that transitive edge goes away this line
+        # fails loudly with attr-defined and wants its ignore back.
+        from google.cloud import pubsub_v1
         from google.cloud.pubsub_v1.types import PublisherOptions
 
         self._client = pubsub_v1.PublisherClient(
@@ -171,15 +187,23 @@ class PubSubMessageSink:
         self._client.stop()
 
 
-def build_message_sink(scheme: str, parts: tuple[str, ...]) -> MessageSink:
-    """Construct the sink a parsed transport URI names."""
+def build_message_sink(
+    scheme: str, parts: tuple[str, ...], *, security: TransportSecurity | None = None
+) -> MessageSink:
+    """Construct the sink a parsed transport URI names.
+
+    ``security`` reaches Kafka only: Pub/Sub authenticates through Application
+    Default Credentials.
+    """
     if scheme == "kafka":
         brokers, topic = parts
-        return KafkaMessageSink(brokers, topic)
+        return KafkaMessageSink(brokers, topic, security=security)
     project, topic = parts
     return PubSubMessageSink(project, topic)
 
 
-def build_result_sink(scheme: str, parts: tuple[str, ...]) -> ResultSink:
+def build_result_sink(
+    scheme: str, parts: tuple[str, ...], *, security: TransportSecurity | None = None
+) -> ResultSink:
     """Construct a `ResultSink` over the transport a parsed URI names."""
-    return ProtoResultSink(build_message_sink(scheme, parts))
+    return ProtoResultSink(build_message_sink(scheme, parts, security=security))

@@ -66,4 +66,8 @@
 #
 # add-yaml-provider: 0.9028 (the YAML provider's reference grammar, config
 # mapping, and row conversion are fully exercised by offline unit tests).
-branch_rate = 0.9028
+#
+# add-effector-security: 0.9090 (intent_signing.py lands fully branch-covered,
+# and the verification phase, transport-security block, and redaction paths are
+# all reachable from the offline lane).
+branch_rate = 0.9090
