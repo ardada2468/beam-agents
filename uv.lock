@@ -395,6 +395,15 @@ dependencies = [
 adk = [
     { name = "google-adk" },
 ]
+console = [
+    { name = "fastapi" },
+    { name = "sse-starlette" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+console-ingest = [
+    { name = "aiokafka" },
+    { name = "google-cloud-bigquery" },
+]
 effector = [
     { name = "aiokafka" },
     { name = "google-cloud-bigtable" },
@@ -428,6 +437,7 @@ bench = [
 dev = [
     { name = "aiokafka" },
     { name = "aiosqlite" },
+    { name = "fastapi" },
     { name = "google-adk" },
     { name = "google-cloud-bigtable" },
     { name = "google-cloud-firestore" },
@@ -450,9 +460,11 @@ dev = [
     { name = "redis" },
     { name = "ruff" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "sse-starlette" },
     { name = "testcontainers", extra = ["redis"] },
     { name = "towncrier" },
     { name = "types-protobuf" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 docs = [
     { name = "mkdocs-material" },
@@ -477,6 +489,7 @@ release = [
 ]
 test = [
     { name = "aiosqlite" },
+    { name = "fastapi" },
     { name = "google-adk" },
     { name = "hypothesis" },
     { name = "langchain-core" },
@@ -489,6 +502,8 @@ test = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "sse-starlette" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 typecheck = [
     { name = "mypy" },
@@ -497,9 +512,12 @@ typecheck = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiokafka", marker = "extra == 'console-ingest'" },
     { name = "aiokafka", marker = "extra == 'effector'" },
     { name = "apache-beam", extras = ["gcp"], specifier = ">=2.60" },
+    { name = "fastapi", marker = "extra == 'console'", specifier = ">=0.115" },
     { name = "google-adk", marker = "extra == 'adk'", specifier = ">=2.6,<3" },
+    { name = "google-cloud-bigquery", marker = "extra == 'console-ingest'" },
     { name = "google-cloud-bigtable", marker = "extra == 'effector'" },
     { name = "google-cloud-bigtable", marker = "extra == 'memory-stores'" },
     { name = "google-cloud-firestore", marker = "extra == 'memory-stores'" },
@@ -514,15 +532,18 @@ requires-dist = [
     { name = "redis", marker = "extra == 'effector'" },
     { name = "redis", marker = "extra == 'memory-stores'" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'memory-stores'" },
+    { name = "sse-starlette", marker = "extra == 'console'", specifier = ">=2.1" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'console'", specifier = ">=0.30" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = ">=0.6" },
 ]
-provides-extras = ["effector", "langgraph", "pydantic-ai", "adk", "otlp", "vllm", "memory-stores"]
+provides-extras = ["effector", "langgraph", "pydantic-ai", "adk", "otlp", "vllm", "memory-stores", "console", "console-ingest"]
 
 [package.metadata.requires-dev]
 bench = [{ name = "pyperf" }]
 dev = [
     { name = "aiokafka" },
     { name = "aiosqlite" },
+    { name = "fastapi", specifier = ">=0.115" },
     { name = "google-adk", specifier = ">=2.6,<3" },
     { name = "google-cloud-bigtable" },
     { name = "google-cloud-firestore" },
@@ -545,9 +566,11 @@ dev = [
     { name = "redis" },
     { name = "ruff" },
     { name = "sqlalchemy", extras = ["asyncio"] },
+    { name = "sse-starlette", specifier = ">=2.1" },
     { name = "testcontainers", extras = ["kafka", "redis"] },
     { name = "towncrier", specifier = ">=23.11" },
     { name = "types-protobuf" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 docs = [{ name = "mkdocs-material", specifier = ">=9,<10" }]
 integration = [
@@ -566,6 +589,7 @@ precommit = [
 release = [{ name = "towncrier", specifier = ">=23.11" }]
 test = [
     { name = "aiosqlite" },
+    { name = "fastapi", specifier = ">=0.115" },
     { name = "google-adk", specifier = ">=2.6,<3" },
     { name = "hypothesis" },
     { name = "langchain-core", specifier = ">=1.0,<2" },
@@ -578,6 +602,8 @@ test = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "sqlalchemy", extras = ["asyncio"] },
+    { name = "sse-starlette", specifier = ">=2.1" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 typecheck = [
     { name = "mypy" },

@@ -45,3 +45,13 @@ bench-report.md
 # runners and the host-side harness cannot write the run spool.
 docker/e2e-spool/*
 !docker/e2e-spool/.gitkeep
+
+# The console UI bundle: built from frontend/ into the package by the Docker
+# build or `make console-build`, and force-included in the wheel when present.
+src/beam_agents/console/static/
+
+# The console frontend toolchain.
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/screenshots/

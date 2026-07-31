@@ -1,0 +1,204 @@
+/* The shell's own styles. Nothing page-specific belongs here. */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  min-height: 100dvh;
+}
+
+.shell__skip {
+  position: absolute;
+  inset-inline-start: var(--space-3);
+  inset-block-start: calc(-1 * var(--space-8));
+  z-index: var(--z-toast);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-ink);
+  transition: inset-block-start var(--duration) var(--ease);
+}
+
+.shell__skip:focus {
+  inset-block-start: var(--space-3);
+}
+
+.shell__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.shell__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.shell__scrim {
+  display: none;
+}
+
+/* -- Rail ------------------------------------------------------------------ */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-4) 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface-2);
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  overflow-y: auto;
+}
+
+.rail__brand {
+  padding: 0 var(--space-4);
+}
+
+.rail__brand-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.rail__brand-link:hover {
+  text-decoration: none;
+}
+
+/* Three stacked rules — the same mark as the favicon. A trace is a sequence of
+   events at different depths, and that is literally what this draws. */
+.rail__mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  background:
+    linear-gradient(var(--ink), var(--ink)) 0 2px / 18px 2px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 0 8px / 12px 2px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 0 14px / 15px 2px no-repeat;
+}
+
+.rail__title {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: 1.2;
+}
+
+.rail__subtitle {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+.rail__nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.rail__group {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail__group-label {
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+/* The active state is a rule and a weight change. No fill, no color, no icon —
+   navigation should be findable, not attention-getting. */
+.rail__link {
+  position: relative;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  border-left: 2px solid transparent;
+}
+
+.rail__link:hover {
+  color: var(--ink);
+  background: var(--surface-3);
+  text-decoration: none;
+}
+
+.rail__link--active {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+  border-left-color: var(--ink);
+  background: var(--surface-3);
+}
+
+.rail__notice {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) 0;
+  font-size: var(--text-xs);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-3);
+}
+
+/* -- Top bar --------------------------------------------------------------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--topbar-height);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.topbar__spacer {
+  flex: 1;
+}
+
+.topbar__menu {
+  display: none;
+}
+
+.topbar__live {
+  display: inline-flex;
+}
+
+/* -- Narrow viewports ------------------------------------------------------ */
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rail {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: var(--z-drawer);
+    width: var(--rail-width);
+    translate: -100% 0;
+    transition: translate var(--duration-slow) var(--ease);
+    box-shadow: var(--shadow-float);
+  }
+
+  .rail--open {
+    translate: 0 0;
+  }
+
+  .topbar__menu {
+    display: inline-flex;
+  }
+
+  .shell__scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--z-drawer) - 1);
+    background: var(--overlay);
+  }
+}

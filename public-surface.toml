@@ -191,6 +191,28 @@ all = [
 ["beam_agents/adapters/pydantic_ai/transport.py"]
 names = []
 
+["beam_agents/console/__init__.py"]
+names = []
+all = [
+  "ConsoleSinkResolver",
+  "ConsoleStore",
+  "WriteToConsole",
+  "create_app",
+  "serve",
+]
+
+["beam_agents/console/__main__.py"]
+names = [
+  "DEFAULT_DATABASE",
+  "build_parser",
+  "main",
+]
+all = [
+  "DEFAULT_DATABASE",
+  "build_parser",
+  "main",
+]
+
 ["beam_agents/core/__init__.py"]
 names = []
 all = [

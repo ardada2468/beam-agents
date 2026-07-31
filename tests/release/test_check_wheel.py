@@ -46,6 +46,8 @@ Version: {VERSION}
 Requires-Python: <3.13,>=3.11
 Requires-Dist: apache-beam[gcp]>=2.60
 Provides-Extra: adk
+Provides-Extra: console
+Provides-Extra: console-ingest
 Provides-Extra: effector
 Provides-Extra: langgraph
 Provides-Extra: memory-stores
@@ -74,6 +76,8 @@ EXPECTED = Expected(
     extras=frozenset(
         {
             "adk",
+            "console",
+            "console-ingest",
             "effector",
             "langgraph",
             "memory-stores",
@@ -288,7 +292,8 @@ class TestExpectedFromPyproject:
         text = (
             '[project]\nname = "beam-agents"\nrequires-python = ">=3.11,<3.13"\n\n'
             "[project.optional-dependencies]\n"
-            'adk = ["google-adk"]\neffector = ["aiokafka"]\n'
+            'adk = ["google-adk"]\nconsole = ["fastapi"]\n'
+            'console-ingest = ["aiokafka"]\neffector = ["aiokafka"]\n'
             'langgraph = ["langgraph"]\nmemory-stores = ["redis"]\n'
             'otlp = ["opentelemetry-proto"]\npydantic-ai = ["pydantic-ai-slim"]\n'
             'vllm = ["vllm"]\n'
