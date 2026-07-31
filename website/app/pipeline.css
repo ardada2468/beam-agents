@@ -7,6 +7,18 @@
  * and the caption describing the effector can never drift apart — there is one
  * timeline, not eight.
  *
+ * The windows, in percent of the cycle, and the caption each one belongs to:
+ *
+ *   00–12  step 1  event travels to RunAgent
+ *   13–21  step 2  activation running, first trace on the wire
+ *   22–39  step 3  suspended; the intent travels to the outbox
+ *   40–63  step 4  outbox to effector, result back in on the same key
+ *   64–81  step 5  activation resumes; `.output` and a second trace leave
+ *   82–100 step 6  commit; `.errors` drains
+ *
+ * Change one window and the neighbours have to move with it — the captions
+ * below are keyed to exactly these numbers.
+ *
  * The motion is pure CSS, so the diagram runs with JavaScript disabled, like
  * the rest of the site. The pause control is a checkbox, for the same reason:
  * an animation that loops forever needs a stop, and a stop that needs
@@ -14,6 +26,13 @@
  */
 
 .pipe-pause-scope {
+  /*
+   * `position: relative` is load-bearing: `.pipe-pause-input` below is taken
+   * out of flow to hide it, and without a positioned ancestor here it would
+   * anchor to whichever ancestor happens to be positioned — which on this page
+   * is the whole section.
+   */
+  position: relative;
   --cycle: 12s;
   --packet: 9px;
 }
@@ -86,8 +105,24 @@
   fill: var(--rule-2);
 }
 
-.pipe-arrow--loop {
+/*
+ * One arrowhead per stream. The rails are stroked in their stream colour, so
+ * a single shared marker ended every coloured rail in the neutral rule grey —
+ * four rails apparently changing colour in their last eight units. The
+ * one-declaration version of this is `fill: context-stroke`, which is still
+ * not safe to rely on across browsers.
+ */
+.pipe-arrow--output {
+  fill: var(--s-output);
+}
+.pipe-arrow--intents {
   fill: var(--s-intents);
+}
+.pipe-arrow--traces {
+  fill: var(--s-traces);
+}
+.pipe-arrow--errors {
+  fill: var(--s-errors);
 }
 
 /* Where the return merges into the tool-results rail. */
@@ -137,6 +172,18 @@
 /* --- packets --------------------------------------------------------------- */
 
 .packet {
+  /*
+   * `transform-box` is the difference between a packet on its rail and a
+   * packet next to it. An SVG element's default reference box is the view-box,
+   * so `transform-origin: 50% 50%` — which is what `offset-anchor: auto`
+   * resolves to — is measured against the whole canvas rather than the 9x9
+   * rect, and the packet ends up anchored by its top-left corner: half a
+   * packet down and to the right of the line it is supposed to be riding.
+   * `fill-box` makes the reference box the rect itself, so the anchor is the
+   * packet's own centre and the rail runs through it.
+   */
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
   width: var(--packet);
   height: var(--packet);
   offset-rotate: 0deg;
@@ -148,20 +195,14 @@
 
 .packet--event {
   fill: var(--ink);
-  offset-path: path('M140,78 H198 Q214,78 214,94 V134 Q214,150 230,150 H430');
+  offset-path: path('M140,78 H190 Q206,78 206,94 V134 Q206,150 222,150 H430');
   animation-name: pkt-event;
 }
 
 .packet--output {
   fill: var(--s-output);
   offset-path: path('M620,114 H872');
-  animation-name: pkt-output-a;
-}
-
-.packet--output-2 {
-  fill: var(--s-output);
-  offset-path: path('M620,114 H872');
-  animation-name: pkt-output-b;
+  animation-name: pkt-output;
 }
 
 .packet--intent {
@@ -198,6 +239,19 @@
  * One keyframe set per packet, each a window on the shared clock. Verbose, but
  * exact: the alternative — per-packet durations with delays — desynchronises
  * from the captions after the first loop.
+ *
+ * Every keyframe states `offset-distance` explicitly, including the ones that
+ * only fade. A keyframe timing function applies to the interval that *starts*
+ * at that keyframe, so leaving the distance out would have split one journey
+ * into three eased sub-intervals and made the packet stutter. As written, each
+ * journey is a single interval carrying the glide curve, bracketed by two
+ * stationary frames that do nothing but fade — the packet eases away from its
+ * source and settles at its destination instead of snapping into motion.
+ *
+ * The curve is spelled out rather than held in a custom property because
+ * `var()` inside a keyframe's `animation-timing-function` is the kind of thing
+ * that works in three browsers and silently falls back to `linear` in the
+ * fourth.
  */
 
 @keyframes pkt-event {
@@ -206,53 +260,60 @@
     opacity: 0;
   }
   1% {
+    offset-distance: 0%;
     opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
   }
   12% {
+    offset-distance: 100%;
     opacity: 1;
   }
+  13%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/*
+ * The activation emits a trace on the way in and another on the way out — the
+ * two lit windows of `.pipe-active`, and the only stream that runs twice.
+ */
+@keyframes pkt-trace {
+  0%,
   13% {
-    offset-distance: 100%;
-    opacity: 0;
-  }
-  100% {
-    offset-distance: 100%;
-    opacity: 0;
-  }
-}
-
-@keyframes pkt-output-a {
-  0%,
-  19% {
     offset-distance: 0%;
     opacity: 0;
   }
-  20% {
+  14% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  25% {
+    offset-distance: 100%;
     opacity: 1;
   }
-  29% {
-    opacity: 1;
-  }
-  30%,
-  100% {
+  26%,
+  64% {
     offset-distance: 100%;
     opacity: 0;
   }
-}
-
-@keyframes pkt-output-b {
-  0%,
-  70% {
+  /* Rewound to the start while invisible, ready for the second pass. */
+  65% {
     offset-distance: 0%;
     opacity: 0;
   }
-  71% {
+  66% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  77% {
+    offset-distance: 100%;
     opacity: 1;
   }
-  81% {
-    opacity: 1;
-  }
-  82%,
+  78%,
   100% {
     offset-distance: 100%;
     opacity: 0;
@@ -261,14 +322,17 @@
 
 @keyframes pkt-intent {
   0%,
-  21% {
+  22% {
     offset-distance: 0%;
     opacity: 0;
   }
-  22% {
+  23% {
+    offset-distance: 0%;
     opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
   }
   37% {
+    offset-distance: 100%;
     opacity: 1;
   }
   38%,
@@ -280,14 +344,17 @@
 
 @keyframes pkt-outbox {
   0%,
-  39% {
+  40% {
     offset-distance: 0%;
     opacity: 0;
   }
-  40% {
+  41% {
+    offset-distance: 0%;
     opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
   }
   45% {
+    offset-distance: 100%;
     opacity: 1;
   }
   46%,
@@ -304,43 +371,43 @@
     opacity: 0;
   }
   48% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  62% {
+    offset-distance: 100%;
     opacity: 1;
   }
-  63% {
-    opacity: 1;
-  }
-  64%,
+  63%,
   100% {
     offset-distance: 100%;
     opacity: 0;
   }
 }
 
-@keyframes pkt-trace {
+/*
+ * `.output` is terminal agent output, so exactly one packet leaves per pass and
+ * it leaves *after* the resume at 64% — never while the continuation chip is
+ * lit. The earlier version sent one at 20–30%, two percent before the very
+ * suspension the caption was describing.
+ */
+@keyframes pkt-output {
   0%,
-  14% {
+  67% {
     offset-distance: 0%;
     opacity: 0;
   }
-  15% {
+  68% {
+    offset-distance: 0%;
     opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
   }
-  25% {
-    opacity: 1;
-  }
-  26%,
-  65% {
+  80% {
     offset-distance: 100%;
-    opacity: 0;
-  }
-  66% {
-    offset-distance: 0%;
     opacity: 1;
   }
-  76% {
-    opacity: 1;
-  }
-  77%,
+  81%,
   100% {
     offset-distance: 100%;
     opacity: 0;
@@ -349,14 +416,17 @@
 
 @keyframes pkt-error {
   0%,
-  85% {
+  86% {
     offset-distance: 0%;
     opacity: 0;
   }
-  86% {
+  87% {
+    offset-distance: 0%;
     opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
   }
   95% {
+    offset-distance: 100%;
     opacity: 1;
   }
   96%,
@@ -366,7 +436,17 @@
   }
 }
 
-/* The RunAgent node thickens while an activation is running. */
+/*
+ * The empty socket both chips sit in, so their unlit state is a visible hole
+ * rather than nothing at all.
+ */
+.pipe-slot {
+  fill: none;
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+
+/* The RunAgent node lights while an activation is running: steps 2 and 5. */
 .pipe-active {
   fill: var(--ink);
   opacity: 0;
@@ -387,16 +467,21 @@
     opacity: 0;
   }
   64%,
-  72% {
+  81% {
     opacity: 1;
   }
-  73%,
+  82%,
   100% {
     opacity: 0;
   }
 }
 
-/* The continuation chip is lit only while the activation is suspended. */
+/*
+ * The continuation chip is lit only while the activation is suspended: from
+ * one percent after `.pipe-active` goes dark until the return packet lands.
+ * The one-percent gap is the handoff, and it is deliberate — two chips lit at
+ * once would say the activation is running and suspended simultaneously.
+ */
 .pipe-suspended {
   fill: var(--s-intents);
   opacity: 0;
@@ -420,15 +505,21 @@
 
 /* --- captions -------------------------------------------------------------- */
 
+/*
+ * Six captions in one grid cell. They used to be absolutely positioned inside
+ * a container clamped to `min-height: 3.4rem`, which is two lines — and the
+ * longest caption wraps to four on a phone, so it spilled out of the figure
+ * and over the section below. Stacking them with `grid-area: 1 / 1` keeps the
+ * cross-fade (they still overlap exactly) while letting the container size
+ * itself to the tallest caption at whatever width it is given.
+ */
 .pipe-steps {
-  position: relative;
-  min-height: 3.4rem;
+  display: grid;
   margin-top: 0.5rem;
 }
 
 .pipe-step {
-  position: absolute;
-  inset: 0;
+  grid-area: 1 / 1;
   opacity: 0;
   display: flex;
   gap: 0.7rem;
@@ -627,20 +718,23 @@
     opacity: 1;
   }
 
-  .pipe-pause-wrap {
+  /*
+   * The label goes, and so must the input. Visually hiding the checkbox alone
+   * left it in the tab order, so a keyboard reader still landed on an unlabelled
+   * control that pauses an animation that is not running.
+   */
+  .pipe-pause-wrap,
+  .pipe-pause-input {
     display: none;
   }
 
   .pipe-steps {
-    min-height: 0;
-    display: grid;
     gap: 0.55rem;
     margin-top: 1.1rem;
   }
 
   .pipe-step {
-    position: static;
-    inset: auto;
+    grid-area: auto;
     opacity: 1;
     animation: none;
   }
