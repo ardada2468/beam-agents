@@ -12,6 +12,11 @@ import type { SearchDoc } from '@/lib/search';
  * answers. When JavaScript is available the same input additionally shows
  * instant results from the pre-built index, which is fetched lazily on first
  * focus — no reader pays for the index who never searches.
+ *
+ * The field and its dropdown are styled like everything else on this site:
+ * flat, hairline-bordered, square. The dropdown in particular is separated
+ * from the page by a stronger rule (`--rule-2`) and an opaque ground rather
+ * than by a drop shadow, because this site has no shadows anywhere.
  */
 export function SearchBox() {
   const [query, setQuery] = useState('');
@@ -71,20 +76,43 @@ export function SearchBox() {
           setOpen(true);
         }}
         onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+        // Escape dismisses the dropdown first and clears the field second, which
+        // is the order a reader expects from an overlay. The default action has
+        // to be suppressed for the first press: Chrome empties a
+        // `type="search"` input on Escape, so without this the query would
+        // vanish along with the results the reader was trying to look past.
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && open) {
+            event.preventDefault();
+            setOpen(false);
+          }
+        }}
         onChange={(event) => setQuery(event.target.value)}
-        className="w-36 rounded border px-2 py-1 text-sm sm:w-48"
-        style={{ borderColor: 'var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}
+        className="field w-36 sm:w-48"
       />
       {open && results.length > 0 ? (
+        // Two positionings, because the field sits in a different place at each
+        // width. On a wide header there is room to hang a fixed-width panel off
+        // the field's right edge. On a narrow one the field is only a few
+        // centimetres from the left margin, so a 20rem panel anchored to its
+        // right edge starts off-screen and `overflow-x: hidden` on the body
+        // silently shears the titles off. There it is pinned to the viewport
+        // instead: `top` is left auto, so a fixed box keeps the static vertical
+        // position it would have had — directly under the field — while left
+        // and right take the viewport's margins.
         <ul
-          className="absolute right-0 z-30 mt-1 max-h-80 w-80 overflow-y-auto rounded border py-1 text-sm shadow-lg"
-          style={{ borderColor: 'var(--border)', background: 'var(--bg)' }}
+          className="fixed inset-x-3 z-30 mt-1 max-h-80 overflow-y-auto border py-1 sm:absolute sm:inset-x-auto sm:right-0 sm:w-80"
+          style={{ borderColor: 'var(--rule-2)', background: 'var(--paper)', borderRadius: 2 }}
         >
           {results.map((result) => (
             <li key={result.href}>
-              <a href={result.href} className="block px-3 py-1.5 no-underline hover:underline">
-                <span style={{ color: 'var(--fg)' }}>{result.title}</span>
-                <span className="ml-2 text-xs" style={{ color: 'var(--fg-faint)' }}>
+              <a
+                href={result.href}
+                className="block px-3 py-1.5 text-[0.88rem] no-underline hover:underline"
+                style={{ color: 'var(--ink)' }}
+              >
+                {result.title}
+                <span className="mono ml-2 text-[0.7rem]" style={{ color: 'var(--ink-3)' }}>
                   {result.section}
                 </span>
               </a>
