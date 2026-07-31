@@ -139,6 +139,12 @@ class ScenarioSpec:
     #: External events the scenario feeds (per key).
     events: int = 1
     legs: dict[str, LegDecl] = field(default_factory=dict)
+    #: Adapters for which this scenario's *construction* is not expressible,
+    #: by adapter name -> reason. Reserved for framework semantics that make the
+    #: scenario's premise unreachable (never for an adapter that merely fails
+    #: it): a declared adapter skip is still a collected, counted matrix cell,
+    #: reported as a skip carrying the reason, exactly like a per-leg `Skip`.
+    adapter_skips: dict[str, str] = field(default_factory=dict)
 
     def flink_variant(self) -> ScenarioSpec:
         """The spec as built for the Flink leg (real-time HITL deadline)."""
@@ -279,6 +285,19 @@ BUNDLE_RETRY_CACHE = ScenarioSpec(
             "the beam-sdk-harness container; real replay on Flink is exercised by "
             "the restart-mid-suspension cell"
         ),
+    },
+    adapter_skips={
+        "adk": (
+            "this scenario's premise is a resume that issues NO novel model request "
+            "(so the retried resume is served entirely from the suspend-committed "
+            "replay cache). ADK's resume semantics make that unreachable: delivering "
+            "a function response always drives one summarization turn, which is a "
+            "novel request, so a discarded attempt legitimately repeats it. The "
+            "adapter's replay-cache guarantee is covered by its own "
+            "recognized-client-replay-cached test and by the restart-mid-suspension "
+            "cell; its intent-byte determinism by bundle-replay tests in "
+            "tests/adapters/adk/test_shim_suspension.py"
+        )
     },
 )
 

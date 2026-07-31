@@ -101,14 +101,20 @@ ships only when every cell is green.
   transport module (hoisted, not rewritten).
 - **New code:** `src/beam_agents/adapters/adk/` (`__init__.py`, `agent.py` — `AdkAgent`,
   `session.py` — `BeamSessionService`, `tools.py` — the tagging shim, `events.py` — the
-  trace tee), `src/beam_agents/adapters/_transport.py` (hoisted shared transport hook),
-  `tests/adapters/adk/` unit suite, `tests/conformance/_adapters/adk.py` conformance
-  factory.
+  trace tee, `transport.py` — the adapter-local httpx hook carrying the google-genai
+  recognition table), `tests/adapters/adk/` unit suite,
+  `tests/conformance/_adapters/adk.py` conformance factory,
+  `tests/conformance/test_adk_registration.py`.
 - **Modified code:** `src/beam_agents/__init__.py` (lazy `AdkAgent` export),
-  `src/beam_agents/adapters/langgraph/transport.py` (move-only delegation to the hoisted
-  module; public names re-exported), `tests/conformance/_registry.py` (the `adk`
-  `ConformanceAdapter` entry), the conformance Flink-leg pipeline builder (one
-  additional per-adapter job, same multiplexing pattern).
+  `tests/conformance/_registry.py` (the `adk` `ConformanceAdapter` entry),
+  `tests/conformance/_spec.py` + `_cells.py` (the per-adapter skip declaration),
+  `tests/conformance/_flink/pipeline.py` (one additional per-adapter job, same
+  multiplexing pattern), `tests/conformance/test_harness_unit.py` and
+  `tests/test_import.py` (adapter-count/public-surface assertions),
+  `docker/sdk-harness.Dockerfile` (ADK importable worker-side).
+  **Not modified:** `src/beam_agents/adapters/langgraph/transport.py` — hoisting the
+  shared `_ReplayTransport` is a separate, parallel change (see tasks 2.3 / 1.7); this
+  adapter ships its own local seam meanwhile.
 - **CI/build:** new `adk` extra in `pyproject.toml` next to the `langgraph` extra
   ([pyproject.toml:30](../../../pyproject.toml:30)); the unit/integration lanes install
   it so the adapter and conformance cells actually run; no new workflow steps — the

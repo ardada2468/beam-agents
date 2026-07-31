@@ -14,3 +14,11 @@ The conformance suite SHALL define each lifecycle scenario exactly once, against
 
 - **WHEN** the suite is collected in an environment where a registered adapter's framework package (e.g. `langgraph` or `google.adk`) is not installed
 - **THEN** that adapter's cells are reported as skipped with the missing-package reason, and all other adapters' cells still run
+
+### Requirement: A scenario may declare a per-adapter skip for an inexpressible construction
+A `ScenarioSpec` SHALL be able to declare, per adapter, that the scenario's *construction* is not expressible in that framework's semantics, carrying the reason. This is reserved for a premise the framework makes unreachable — never for an adapter that merely fails the scenario, and never as a way to weaken an assertion. A declared per-adapter skip SHALL remain a collected, counted matrix cell reported as a skip carrying its reason, exactly like the existing per-leg skip declarations, so the meta-test's registry × scenario × leg accounting is unchanged and the matrix cannot silently shrink.
+
+#### Scenario: A declared per-adapter skip is still a counted cell
+
+- **WHEN** a scenario declares a per-adapter skip for one registered adapter and the suite is collected
+- **THEN** that cell is collected and reported as a skip carrying the declared reason, the meta-test's expected-cell count is unchanged, and every other adapter's cell for that scenario still runs

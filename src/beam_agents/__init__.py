@@ -22,6 +22,7 @@ from beam_agents.core.transform import AgentConfig, RunAgent, RunAgentOutputs
 from beam_agents.hitl import Deny, Drop, Escalate, HitlPolicy
 
 __all__ = [
+    "AdkAgent",
     "AgentConfig",
     "Deny",
     "Drop",
@@ -39,6 +40,10 @@ __all__ = [
 # and absence surfaces as an ImportError naming the extra to install.
 _LANGGRAPH_DISTRIBUTIONS = ("langgraph", "langchain", "langchain_core")
 _PYDANTIC_AI_DISTRIBUTIONS = ("pydantic_ai", "pydantic_graph")
+# ADK imports under the `google` namespace package, which core installs already
+# provide (google-cloud dependencies), so the top-level-name check the LangGraph
+# branch uses would never match: match the full dotted prefixes instead.
+_ADK_MODULE_PREFIXES = ("google.adk", "google.genai")
 
 
 def __getattr__(name: str) -> object:
@@ -64,4 +69,18 @@ def __getattr__(name: str) -> object:
                 ) from exc
             raise
         return PydanticAIAgent
+    if name == "AdkAgent":
+        try:
+            from beam_agents.adapters.adk import AdkAgent
+        except ModuleNotFoundError as exc:
+            if exc.name and any(
+                exc.name == prefix or exc.name.startswith(f"{prefix}.")
+                for prefix in _ADK_MODULE_PREFIXES
+            ):
+                raise ImportError(
+                    "beam_agents.AdkAgent requires the Google ADK adapter extra; "
+                    "install it with `pip install 'beam-agents[adk]'`"
+                ) from exc
+            raise
+        return AdkAgent
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

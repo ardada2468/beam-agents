@@ -20,6 +20,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING
 
 from beam_agents.model.fake import FakeLLM
+from tests.conformance._adapters.adk import build_adk_agent, build_adk_provider
 from tests.conformance._adapters.langgraph import build_langgraph_agent, build_langgraph_provider
 from tests.conformance._adapters.pydantic_ai import (
     build_pydantic_ai_agent,
@@ -80,6 +81,13 @@ ADAPTERS: tuple[ConformanceAdapter, ...] = (
         adapters_subpackage="pydantic_ai",
         build_agent=build_pydantic_ai_agent,
         build_provider=build_pydantic_ai_provider,
+    ),
+    ConformanceAdapter(
+        name="adk",
+        requires="google.adk",
+        adapters_subpackage="adk",
+        build_agent=build_adk_agent,
+        build_provider=build_adk_provider,
     ),
 )
 

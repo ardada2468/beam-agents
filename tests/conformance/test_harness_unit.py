@@ -123,7 +123,14 @@ def _run_single_shot_without(blocked: tuple[str, ...]) -> str:
             _blocked = {blocked!r}
 
             def find_spec(self, fullname, path=None, target=None):
-                if fullname.partition(".")[0] in self._blocked:
+                # Exact-or-dotted-prefix match, not a top-level-name match:
+                # ADK lives under the `google` namespace package that core
+                # installs already populate, so blocking "google" wholesale
+                # would take out google-cloud too.
+                if any(
+                    fullname == blocked or fullname.startswith(f"{blocked}.")
+                    for blocked in self._blocked
+                ):
                     raise ModuleNotFoundError(
                         f"import of {{fullname!r}} blocked for test", name=fullname
                     )
@@ -171,6 +178,15 @@ def test_pydantic_ai_cells_skip_cleanly_when_the_framework_is_absent() -> None:
     assert f"{_passing_cells()} passed" in stdout, stdout
     assert "1 skipped" in stdout, stdout
     assert "optional framework 'pydantic_ai' is not installed" in stdout, stdout
+
+
+def test_adk_cells_skip_cleanly_when_the_framework_is_absent() -> None:
+    # Scenario: Missing extra skips cells without shrinking the matrix silently
+    # (adk-adapter) — the same clean-skip contract for the ADK axis entry.
+    stdout = _run_single_shot_without(("google.adk", "google.genai"))
+    assert f"{_passing_cells()} passed" in stdout, stdout
+    assert "1 skipped" in stdout, stdout
+    assert "optional framework 'google.adk' is not installed" in stdout, stdout
 
 
 def test_every_scenario_declares_every_leg() -> None:

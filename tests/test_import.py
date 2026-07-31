@@ -17,6 +17,7 @@ def test_public_surface_is_run_agent_config_outputs_and_hitl_policy() -> None:
     assert beam_agents.AgentConfig is not None
     assert beam_agents.RunAgentOutputs is not None
     assert set(beam_agents.__all__) == {
+        "AdkAgent",
         "AgentConfig",
         "Deny",
         "Drop",

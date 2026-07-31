@@ -13,15 +13,21 @@ from tests.conformance._spec import ScenarioSpec
 
 
 def adapter_params(scenario: ScenarioSpec, leg: str) -> list[object]:
-    """Parametrize a scenario's cell test over the registered adapter axis."""
-    return [
-        pytest.param(
-            adapter.name,
-            id=adapter.name,
-            marks=pytest.mark.conformance_cell(adapter.name, scenario.name, leg),
-        )
-        for adapter in ADAPTERS
-    ]
+    """Parametrize a scenario's cell test over the registered adapter axis.
+
+    A scenario-declared adapter skip becomes a ``skip`` mark on that adapter's
+    param: the cell is still collected (so the inventory hook counts it and the
+    meta-test's accounting is unchanged) and reports the declared reason,
+    exactly like a per-leg ``Skip``.
+    """
+    params: list[object] = []
+    for adapter in ADAPTERS:
+        marks = [pytest.mark.conformance_cell(adapter.name, scenario.name, leg)]
+        declared = scenario.adapter_skips.get(adapter.name)
+        if declared is not None:
+            marks.append(pytest.mark.skip(reason=declared))
+        params.append(pytest.param(adapter.name, id=adapter.name, marks=marks))
+    return params
 
 
 def require_framework(adapter_name: str) -> None:

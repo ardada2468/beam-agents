@@ -41,6 +41,14 @@ langgraph = [
 pydantic-ai = [
   "pydantic-ai-slim>=2.21,<3",
 ]
+# The Google ADK adapter (`beam_agents.adapters.adk`). Core never imports ADK:
+# `import beam_agents` must succeed without this extra, and the adapter package
+# is the only module allowed to import google.adk at top level. Floor set at the
+# release this adapter was implemented and verified against (2.6.0); the major
+# ceiling is the API-drift guard called out in the change's risks.
+adk = [
+  "google-adk>=2.6,<3",
+]
 # The OTLP trace exporter (`otlp://` traces sink) builds ExportTraceServiceRequest
 # messages from opentelemetry-proto's generated classes and POSTs them over the
 # core httpx dependency. Pure generated protos — no OTel SDK, no grpc — but still
@@ -107,6 +115,11 @@ test = [
   # import boundary is proven by tests/adapters/pydantic_ai/test_import_isolation
   # blocking the import, not by the package's absence from the environment.
   "pydantic-ai-slim>=2.21,<3",
+  # The ADK adapter's unit tests and conformance cells need the framework
+  # itself. Mirrored from the `adk` extra, exactly as `langgraph` is above; the
+  # offline import boundary is proven by tests/adapters/adk/test_import_isolation
+  # blocking the import, not by the package's absence from the environment.
+  "google-adk>=2.6,<3",
   # The OTLP exporter's mapping/DoFn tests are plain offline unit tests (they
   # exercise generated proto classes and httpx.MockTransport, no network), so
   # they run — and are coverage-counted — in the required ci unit lane. This
@@ -429,9 +442,13 @@ module = "beam_agents.adapters.langgraph.transport"
 disable_error_code = ["no-untyped-call"]
 
 # Same Beam-untyped-metrics relaxation for the shared adapter transport core
-# and the Pydantic AI adapter's transport module.
+# and the Pydantic AI / ADK adapters' transport modules.
 [[tool.mypy.overrides]]
-module = ["beam_agents.adapters._transport", "beam_agents.adapters.pydantic_ai.transport"]
+module = [
+    "beam_agents.adapters._transport",
+    "beam_agents.adapters.pydantic_ai.transport",
+    "beam_agents.adapters.adk.transport",
+]
 disable_error_code = ["no-untyped-call"]
 
 # The LangGraph adapter tests drive LangGraph's four-parameter generics
