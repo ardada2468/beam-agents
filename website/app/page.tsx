@@ -82,18 +82,17 @@ const BUILT = [
   'The RunAgent transform, keyed state, timers, and the async bridge',
   'Effectively-once side effects via the outbox and reference effector',
   'Human-in-the-loop approvals with fail-closed timeouts at both layers',
-  'Anthropic and OpenAI-compatible providers, plus the replay cache',
-  'The LangGraph adapter, on the conformance matrix',
+  'Anthropic, OpenAI-compatible, and vLLM providers, plus the replay cache',
+  'LangGraph, Google ADK, and Pydantic AI adapters, on the conformance matrix',
   'Traces to OTLP or BigQuery; errors and intents to Kafka or Pub/Sub',
+  'Long-term memory stores: Bigtable, Redis, Firestore, and SQL',
+  'The YAML pipeline provider, and a pyperf benchmark harness with a gated baseline',
 ] as const;
 
 const NOT_BUILT = [
-  'Any published release — the declared version is 0.0.0',
-  'Long-term memory stores (Bigtable, Redis, Firestore, SQL)',
-  'Adapters for Google ADK and Pydantic AI',
-  'Vertex and vLLM providers, and the YAML pipeline provider',
-  'A benchmark harness, so no performance figure is published',
-  'Spark, which no test in the repository exercises',
+  'Any published release — 1.0.0 is declared, but no tag has been pushed to PyPI',
+  'A Vertex AI provider',
+  'Spark beyond the weekly conformance leg — no per-PR job exercises it',
 ] as const;
 
 /*

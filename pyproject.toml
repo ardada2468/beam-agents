@@ -256,6 +256,13 @@ ignore = [
 "tests/*" = ["PLR2004", "D1"]
 "benchmarks/*" = ["D1"]
 "scripts/*" = ["D1"]
+# The site's example programs are published by file reference — the rendered
+# page embeds the bytes on disk — so their prose lives in the surrounding page
+# and in the `# region:` commentary the site shows, not in docstrings on the
+# `main()`/`build_pipeline()` scaffolding. They are documentation, not public
+# API: nothing imports them. (`examples/` proper is NOT exempt; it ships as the
+# runnable reference and is held to the src bar.)
+"website/examples/*" = ["D1"]
 # The benchmark modules import pyperf inside `main()`, on purpose: pyperf is
 # the `bench` dependency group, which the required `ci` lane does not sync, and
 # the unit-tier smoke tests must still import every module and run its timed
@@ -412,9 +419,11 @@ ignore_missing_imports = true
 module = "slack_sdk.*"
 ignore_missing_imports = true
 
-# PyYAML ships no type stubs and `types-PyYAML` is not in the locked typecheck
-# environment; the yaml-provider suites use it only to parse the documents they
-# assert on. Same relaxation as the other unstubbed dev-surface dependencies.
+# PyYAML ships no inline types. `types-PyYAML` IS in the locked typecheck
+# environment (the site's frontmatter parser in `scripts/` needs it), and mypy
+# prefers those stubs where they resolve; this stays for the environments that
+# sync without the typecheck group, where the yaml-provider suites use PyYAML
+# only to parse the documents they assert on.
 [[tool.mypy.overrides]]
 module = "yaml"
 ignore_missing_imports = true

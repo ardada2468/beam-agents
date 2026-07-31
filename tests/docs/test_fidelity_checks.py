@@ -160,20 +160,45 @@ def test_status_outside_the_closed_set_fails(tmp_path: Path) -> None:
 # --- Requirement: distribution claims match the package's real state ----------
 
 
-def test_unqualified_registry_install_fails_while_unreleased(tmp_path: Path) -> None:
+@pytest.fixture
+def unreleased(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the checker's view of `project.version` to the pre-release value.
+
+    The rule is *conditional on* the declared version, so the tests state that
+    version rather than reading it. Asserting the repository's real one instead
+    made these cases silently stop exercising the rule the moment a version was
+    declared — which is exactly when a registry install starts being a claim
+    worth checking.
+    """
+    monkeypatch.setattr(verify_docs_claims, "package_version", lambda: "0.0.0")
+
+
+def test_unqualified_registry_install_fails_while_unreleased(
+    tmp_path: Path, unreleased: None
+) -> None:
     # Scenario: unqualified registry install fails while unreleased.
-    assert verify_docs_claims.package_version() == "0.0.0", (
-        "this test encodes the current pre-release state; update it when a release exists"
-    )
     page = make_page("\nInstall it:\n\n    pip install beam-agents\n", tmp_path)
     findings = verify_docs_claims.check_release_state(page)
     assert len(findings) == 1
     assert "not published" in findings[0].message
 
 
-def test_registry_install_under_a_when_released_heading_passes(tmp_path: Path) -> None:
+def test_registry_install_under_a_when_released_heading_passes(
+    tmp_path: Path, unreleased: None
+) -> None:
     body = "\n## When released\n\nOnce published:\n\n    pip install beam-agents\n"
     page = make_page(body, tmp_path)
+    assert verify_docs_claims.check_release_state(page) == []
+
+
+def test_registry_install_passes_once_a_version_is_declared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other side of the same rule: the check exists to stop a page claiming
+    # a distribution that does not exist, so a declared version retires it
+    # rather than leaving `pip install beam-agents` permanently forbidden.
+    monkeypatch.setattr(verify_docs_claims, "package_version", lambda: "1.0.0")
+    page = make_page("\nInstall it:\n\n    pip install beam-agents\n", tmp_path)
     assert verify_docs_claims.check_release_state(page) == []
 
 

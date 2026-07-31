@@ -1,8 +1,9 @@
 {
   "generated_by": "scripts/gen_api_reference.py",
   "package": "beam_agents",
-  "package_version": "0.0.0",
+  "package_version": "1.0.0",
   "public_surface": [
+    "AdkAgent",
     "AgentConfig",
     "Deny",
     "Drop",
@@ -10,19 +11,38 @@
     "FallbackContext",
     "HitlPolicy",
     "LangGraphAgent",
+    "PydanticAIAgent",
     "RunAgent",
-    "RunAgentOutputs"
+    "RunAgentOutputs",
+    "ShardKeys",
+    "StreamAgent",
+    "shard_key",
+    "tool",
+    "unshard_key"
   ],
   "symbols": [
+    {
+      "name": "AdkAgent",
+      "qualname": "beam_agents.adapters.adk.agent.AdkAgent",
+      "kind": "class",
+      "signature": "(agent: 'BaseAgent', *, decode_event: 'Callable[[bytes], types.Content]' = <function _default_decode>, encode_output: 'Callable[[_RunResult], bytes]' = <function _default_encode>, hitl_timeout_ms: 'int | None' = None, chat_models: 'Sequence[object]' = (), max_events: 'int | None' = None) -> 'None'",
+      "doc": "Wraps a Google ADK agent (an ``LlmAgent``/``BaseAgent`` tree) as a runtime\nagent. The user's agent object is never mutated: the per-activation session\nservice lives on a freshly constructed ``Runner``.",
+      "source": {
+        "path": "src/beam_agents/adapters/adk/agent.py",
+        "line": 101
+      },
+      "requires_extra": null,
+      "members": []
+    },
     {
       "name": "AgentConfig",
       "qualname": "beam_agents.core.transform.AgentConfig",
       "kind": "dataclass",
-      "signature": "(provider_factory: 'Callable[[], LLMClient]', *, decode: 'Decode | None' = None, activation_timeout_s: 'float' = 30.0, ttl_ms: 'int' = 3600000, cancel_grace_s: 'float' = 5.0, hitl_policy: 'HitlPolicy' = <factory>, tool_registry: 'ToolRegistry' = <factory>, intents_to: 'str | None' = None, traces_to: 'str | None' = None, errors_to: 'str | None' = None, sink_resolver: 'SinkResolver' = <factory>) -> None",
+      "signature": "(provider_factory: 'Callable[[], LLMClient]', *, decode: 'Decode | None' = None, activation_timeout_s: 'float' = 30.0, ttl_ms: 'int' = 3600000, cancel_grace_s: 'float' = 5.0, hitl_policy: 'HitlPolicy' = <factory>, tool_registry: 'ToolRegistry' = <factory>, intents_to: 'str | None' = None, traces_to: 'str | None' = None, errors_to: 'str | None' = None, snapshots_to: 'str | None' = None, sink_resolver: 'SinkResolver' = <factory>, longterm_memory: 'str | None' = None, compactor: 'Compactor | None' = <factory>, summarizer: 'Summarizer | None' = None, on_expire: 'ExpireHook | None' = None, batch_policy: 'BatchPolicy' = <BatchPolicy.NONE: 'none'>, max_batch_size: 'int | None' = None, max_wait_ms: 'int | None' = None, max_buffered_events: 'int | None' = None, max_tokens_per_activation: 'int | None' = None) -> None",
       "doc": "Immutable, self-validating ``RunAgent`` configuration.\n\nBundles the provider factory, the runtime knobs, and the optional sink\nURIs. Validation runs in ``__post_init__``, so a misconfigured value raises\n``ValueError`` at the construction site \u2014 before any pipeline exists.",
       "source": {
         "path": "src/beam_agents/core/transform.py",
-        "line": 394
+        "line": 476
       },
       "requires_extra": null,
       "members": [
@@ -34,9 +54,23 @@
           "source": null
         },
         {
+          "name": "batch_policy",
+          "kind": "field",
+          "signature": "batch_policy: BatchPolicy",
+          "doc": null,
+          "source": null
+        },
+        {
           "name": "cancel_grace_s",
           "kind": "field",
           "signature": "cancel_grace_s: float",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "compactor",
+          "kind": "field",
+          "signature": "compactor: Compactor | None",
           "doc": null,
           "source": null
         },
@@ -69,6 +103,48 @@
           "source": null
         },
         {
+          "name": "longterm_memory",
+          "kind": "field",
+          "signature": "longterm_memory: str | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "max_batch_size",
+          "kind": "field",
+          "signature": "max_batch_size: int | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "max_buffered_events",
+          "kind": "field",
+          "signature": "max_buffered_events: int | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "max_tokens_per_activation",
+          "kind": "field",
+          "signature": "max_tokens_per_activation: int | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "max_wait_ms",
+          "kind": "field",
+          "signature": "max_wait_ms: int | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "on_expire",
+          "kind": "field",
+          "signature": "on_expire: ExpireHook | None",
+          "doc": null,
+          "source": null
+        },
+        {
           "name": "provider_factory",
           "kind": "field",
           "signature": "provider_factory: Callable[[], LLMClient]",
@@ -79,6 +155,20 @@
           "name": "sink_resolver",
           "kind": "field",
           "signature": "sink_resolver: SinkResolver",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "snapshots_to",
+          "kind": "field",
+          "signature": "snapshots_to: str | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "summarizer",
+          "kind": "field",
+          "signature": "summarizer: Summarizer | None",
           "doc": null,
           "source": null
         },
@@ -102,6 +192,16 @@
           "signature": "ttl_ms: int",
           "doc": null,
           "source": null
+        },
+        {
+          "name": "batch_settings",
+          "kind": "method",
+          "signature": "(self) -> 'BatchSettings | None'",
+          "doc": "The resolved batching bounds, or ``None`` under `BatchPolicy.NONE`.\n\nRecomputed rather than cached: the dataclass is frozen with slots, and\nthe resolution is three comparisons over integers on a path that runs\nat pipeline construction, not per element.",
+          "source": {
+            "path": "src/beam_agents/core/transform.py",
+            "line": 548
+          }
         }
       ]
     },
@@ -113,7 +213,7 @@
       "doc": "Emit deterministic bytes on the main output and end the suspension.",
       "source": {
         "path": "src/beam_agents/hitl.py",
-        "line": 97
+        "line": 113
       },
       "requires_extra": null,
       "members": [
@@ -134,7 +234,7 @@
       "doc": "Emit nothing on the main output; record the timeout on ``.errors``.",
       "source": {
         "path": "src/beam_agents/hitl.py",
-        "line": 104
+        "line": 120
       },
       "requires_extra": null,
       "members": [
@@ -155,7 +255,7 @@
       "doc": "Ask again, louder: stage a fresh approval intent and extend the deadline.\n\n``tool_name`` is the escalation channel (a pager, a second approver queue).\n``timeout_ms`` is how much longer to wait, measured from the timer's fire\ntime. Bounded by ``HitlPolicy.max_escalations`` \u2014 an unbounded escalate\nloop would be a fail-*open* hole, since the point of the timer is that the\nwait ends.",
       "source": {
         "path": "src/beam_agents/hitl.py",
-        "line": 111
+        "line": 127
       },
       "requires_extra": null,
       "members": [
@@ -190,7 +290,7 @@
       "doc": "Passed to the HITL policy when a pending approval/result times out.\n\nCarries the *expired continuation handle* \u2014 the suspended activation's\n``seq``, the ``snapshot`` the agent persisted, the ``deadline_ms`` that\nelapsed, and the ``pending_intent_ids`` nothing ever answered \u2014 plus\n``fired_at_ms``, the timer's fire timestamp. ``kind`` says why the fallback\nran; only ``\"timer\"`` exists today.\n\nEvery time value the policy could need is carried here so the policy never\nreads a clock: it runs inside a timer callback whose bundle can be retried,\nand a retry must reach the same decision.",
       "source": {
         "path": "src/beam_agents/core/agent.py",
-        "line": 107
+        "line": 128
       },
       "requires_extra": null,
       "members": [
@@ -253,7 +353,7 @@
       "doc": "Configuration for suspensions, approvals, and what a timeout does.\n\n``on_timeout`` must be **pure and synchronous** (see the module docstring)\nand picklable \u2014 the DoFn holds the policy and serializes for the runner, so\nit must be a module-level function or another picklable callable, never a\nlambda or a closure.",
       "source": {
         "path": "src/beam_agents/hitl.py",
-        "line": 135
+        "line": 151
       },
       "requires_extra": null,
       "members": [
@@ -299,7 +399,7 @@
           "doc": "Raise ``ValueError`` naming the offending field, before any pipeline.",
           "source": {
             "path": "src/beam_agents/hitl.py",
-            "line": 154
+            "line": 170
           }
         }
       ]
@@ -312,9 +412,22 @@
       "doc": "Wraps a LangGraph graph (a `StateGraph` builder or an already-compiled\ngraph) as a runtime agent. A user-compiled graph is never mutated: the\nper-activation checkpointer is injected into a copy.",
       "source": {
         "path": "src/beam_agents/adapters/langgraph/agent.py",
-        "line": 73
+        "line": 77
       },
       "requires_extra": "langgraph",
+      "members": []
+    },
+    {
+      "name": "PydanticAIAgent",
+      "qualname": "beam_agents.adapters.pydantic_ai.agent.PydanticAIAgent",
+      "kind": "class",
+      "signature": "(agent: 'PydanticAgent[Any, Any]', *, tools: 'Sequence[Tool]' = (), approval_required: 'Collection[str]' = (), decode_event: 'Callable[[bytes], str]' = <function _default_decode>, encode_output: 'Callable[[AgentRunResult[Any]], bytes]' = <function _default_encode>, hitl_timeout_ms: 'int | None' = None, models: 'Sequence[object]' = ()) -> 'None'",
+      "doc": "Wraps a user-constructed ``pydantic_ai.Agent`` as a runtime agent.\n\nThe wrapped agent is never mutated: the adapter's toolset and output-type\nunion are per-run arguments, and transport instrumentation touches only\nthe model object's httpx client. ``tools`` are runtime ``@tool`` objects\n(re-tag side-effectful tools with ``side_effect=True`` and list\napproval-gated ones in ``approval_required`` \u2014 that is the whole adoption\ncost). ``models`` may name additional model objects to instrument (e.g.\ndelegated sub-agents' models); the wrapped agent's own model is always\nprobed.",
+      "source": {
+        "path": "src/beam_agents/adapters/pydantic_ai/agent.py",
+        "line": 86
+      },
+      "requires_extra": null,
       "members": []
     },
     {
@@ -325,7 +438,7 @@
       "doc": "Run ``agent`` as a keyed stateful transform over a pre-keyed envelope stream.",
       "source": {
         "path": "src/beam_agents/core/transform.py",
-        "line": 471
+        "line": 638
       },
       "requires_extra": null,
       "members": [
@@ -333,10 +446,10 @@
           "name": "expand",
           "kind": "method",
           "signature": "(self, pcoll: 'beam.pvalue.PCollection') -> 'RunAgentOutputs'",
-          "doc": null,
+          "doc": "Wire the stateful agent DoFn and its four tagged outputs.\n\nRaises ``ValueError`` on non-KV input: Beam's stateful DoFn requires\na keyed ``PCollection``, and failing here beats failing on a worker.",
           "source": {
             "path": "src/beam_agents/core/transform.py",
-            "line": 479
+            "line": 646
           }
         }
       ]
@@ -345,11 +458,11 @@
       "name": "RunAgentOutputs",
       "qualname": "beam_agents.core.transform.RunAgentOutputs",
       "kind": "dataclass",
-      "signature": "(output: 'beam.pvalue.PCollection', intents: 'beam.pvalue.PCollection', traces: 'beam.pvalue.PCollection', errors: 'beam.pvalue.PCollection', dead_letter: 'beam.pvalue.PCollection | None' = None) -> None",
+      "signature": "(output: 'beam.pvalue.PCollection', intents: 'beam.pvalue.PCollection', traces: 'beam.pvalue.PCollection', errors: 'beam.pvalue.PCollection', snapshots: 'beam.pvalue.PCollection', dead_letter: 'beam.pvalue.PCollection | None' = None) -> None",
       "doc": "``RunAgent``'s named outputs: main, the three tagged streams, and the\nintents dead-letter branch.\n\n``dead_letter`` is ``None`` unless ``intents_to`` resolved to a\n``WriteIntents`` outbox writer (a ``kafka://``/``pubsub://`` scheme). It is\nalways exposed here, whether or not ``errors_to`` is also set, so a caller\ncan consume it directly instead of it being silently dropped by Beam as an\nunconsumed ``PCollection`` when ``errors_to`` is unset.",
       "source": {
         "path": "src/beam_agents/core/transform.py",
-        "line": 437
+        "line": 601
       },
       "requires_extra": null,
       "members": [
@@ -382,6 +495,13 @@
           "source": null
         },
         {
+          "name": "snapshots",
+          "kind": "field",
+          "signature": "snapshots: beam.pvalue.PCollection",
+          "doc": null,
+          "source": null
+        },
+        {
           "name": "traces",
           "kind": "field",
           "signature": "traces: beam.pvalue.PCollection",
@@ -389,6 +509,93 @@
           "source": null
         }
       ]
+    },
+    {
+      "name": "ShardKeys",
+      "qualname": "beam_agents.keys.ShardKeys",
+      "kind": "class",
+      "signature": "(n: 'int', *, assignment: 'Assignment' = 'hash') -> 'None'",
+      "doc": "Fan a hot logical key across ``n`` physical shards, upstream of ``RunAgent``.\n\n**Memory-free agents only.** Every shard gets its own ``MEMORY``,\n``CONTINUATION``, ``LLM_CACHE``, ``PENDING`` and ``SEQ`` cells, so an agent\nthat carries state between events, depends on per-key ordering, or takes\nHITL approvals keyed by the logical entity is broken \u2014 silently \u2014 by\nsharding. The module docstring and ``docs/sharding.md`` state the contract\nin full; the runtime performs no detection.\n\nPlacement: the **events branch only**, after ``WithKeys(entity_key)`` and\nbefore any ``Flatten`` with the tool-results and approvals streams. Those\nstreams already carry the physical shard key (the effector echoes\n``ToolIntent.entity_key``), so re-sharding them would either double-suffix\nthe key or route a result to the wrong shard, where it finds no\ncontinuation and dead-letters as ``orphaned_result``.\n\nConsumes and produces ``PCollection[KV[bytes, AgentEnvelope]]``, rewriting\nthe KV key and the envelope's own ``entity_key`` to the same physical key so\nthe state layout and the envelope can never disagree. Input shape is\nvalidated at pipeline-construction time.\n\n``assignment``:\n\n- ``\"hash\"`` (default) \u2014 SHA-256 of the element payload modulo ``n``. Pure,\n  so a bundle retry reproduces the same physical keys, the same ``(key,\n  seq)`` cache hits, and byte-identical ``intent_id``s. Its failure mode is\n  skew: low-entropy payloads (many identical events) land on one shard and\n  the fan-out collapses, so verify the spread before trusting ``n``.\n- ``\"round_robin\"`` \u2014 an explicit opt-in for exactly that skew case, using a\n  worker-local counter. **It forfeits deterministic shard assignment under\n  bundle retries:** a retry's counter state differs, so the element lands on\n  a different shard, mints different ``intent_id``s (the effector's dedup no\n  longer suppresses the duplicate side effect) and misses the replay cache\n  (extra provider calls on every retry). Use it only for agents that emit no\n  intents \u2014 or whose effects are idempotent independently of ``intent_id`` \u2014\n  and only where duplicate provider calls on a retry are an accepted cost.",
+      "source": {
+        "path": "src/beam_agents/keys.py",
+        "line": 182
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "expand",
+          "kind": "method",
+          "signature": "(self, pcoll: 'beam.pvalue.PCollection') -> 'beam.pvalue.PCollection'",
+          "doc": "Fan each logical entity across ``shards`` physical keys.\n\nRaises ``ValueError`` at pipeline-construction time on non-KV input,\nnaming the ``beam.WithKeys`` call the caller is missing. Safe for\nmemory-free agents only \u2014 see ``docs/sharding.md``.",
+          "source": {
+            "path": "src/beam_agents/keys.py",
+            "line": 232
+          }
+        }
+      ]
+    },
+    {
+      "name": "StreamAgent",
+      "qualname": "beam_agents.core.agent.StreamAgent",
+      "kind": "class",
+      "signature": "(*args, **kwargs)",
+      "doc": "The agent-authoring runtime contract: one async entry point.\n\nAn activation performs all of its work through `ctx` \u2014 reading and\nwriting memory, calling the model, running read-only tools, staging side\neffects via `ctx.act(...)`, and emitting outputs via `ctx.emit(...)`.\nThis is a runtime contract only; it defines no prompt templating or\norchestration DSL.",
+      "source": {
+        "path": "src/beam_agents/core/agent.py",
+        "line": 66
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "activate",
+          "kind": "method",
+          "signature": "(self, ctx: 'AgentContext') -> 'None'",
+          "doc": "Run one activation against ``ctx``.\n\nEverything the agent does \u2014 memory writes, staged intents, model\ncalls, the emitted output \u2014 goes through ``ctx`` and is *staged*,\nnot applied: the runtime commits it atomically with the Beam bundle\nonly if this coroutine returns normally (correctness invariant 1).\nRaising mutates nothing and routes the element to ``.errors``.",
+          "source": {
+            "path": "src/beam_agents/core/agent.py",
+            "line": 77
+          }
+        }
+      ]
+    },
+    {
+      "name": "shard_key",
+      "qualname": "beam_agents.keys.shard_key",
+      "kind": "function",
+      "signature": "(key: 'bytes', n: 'int', *, payload: 'bytes') -> 'bytes'",
+      "doc": "Return the physical shard key ``key + b\"#\" + <index>`` for ``payload``.\n\nThe index is ``int.from_bytes(sha256(payload).digest()[:8]) % n`` \u2014 a pure\nfunction of ``(payload, n)``. It depends on nothing else: not process or\nworker identity, not element order, not the wall clock, and never on\nPython's ``hash()``, which is salted per process by ``PYTHONHASHSEED`` and\nwould hand the same element to different shards on different workers. That\ndeterminism is what preserves ``(key, seq)`` replay-cache identity and\nbyte-identical ``intent_id``s across a bundle retry.\n\n``n = 1`` still appends ``#0``: the shape of a sharded key never depends on\nthe shard count, so ``unshard_key`` works uniformly. ``n < 1`` raises\n``ValueError``.\n\nNote the convention's one ambiguity (mirrored in :func:`unshard_key`): a\nlogical ``key`` that itself ends in ``#<digits>`` is indistinguishable from\nan already-sharded key, so such keys should not be sharded.",
+      "source": {
+        "path": "src/beam_agents/keys.py",
+        "line": 90
+      },
+      "requires_extra": null,
+      "members": []
+    },
+    {
+      "name": "tool",
+      "qualname": "beam_agents.tools.registry.tool",
+      "kind": "function",
+      "signature": "(func: 'Callable[..., object] | None' = None, *, name: 'str | None' = None, description: 'str | None' = None, side_effect: 'bool' = False) -> 'Tool | Callable[[Callable[..., object]], Tool]'",
+      "doc": "Register a callable as a `Tool`. Usable bare (`@tool`) or parameterized\n(`@tool(name=..., side_effect=True)`). `name` defaults to `func.__name__`;\n`description` defaults to `func.__doc__` (or `\"\"` if there is none).",
+      "source": {
+        "path": "src/beam_agents/tools/registry.py",
+        "line": 189
+      },
+      "requires_extra": null,
+      "members": []
+    },
+    {
+      "name": "unshard_key",
+      "qualname": "beam_agents.keys.unshard_key",
+      "kind": "function",
+      "signature": "(key: 'bytes') -> 'bytes'",
+      "doc": "Return the logical key behind a physical shard key.\n\nStrips exactly one trailing ``#<digits>`` group, so\n``unshard_key(shard_key(k, n, payload=p)) == k`` for every valid input.\n\nDefined only over keys produced by :func:`shard_key`: a key with no trailing\n``#<digits>`` raises ``ValueError`` rather than passing through, so a\nmis-wired regroup fails loudly instead of silently merging outputs under the\nwrong key. The inverse cannot resolve the residual ambiguity \u2014 ``b\"user#7\"``\nis both a plausible logical key and shard 7 of ``b\"user\"`` \u2014 so it resolves\nit in favour of the sharded reading; do not shard keys that already end in\n``#<digits>``.",
+      "source": {
+        "path": "src/beam_agents/keys.py",
+        "line": 115
+      },
+      "requires_extra": null,
+      "members": []
     }
   ],
   "modules": [
