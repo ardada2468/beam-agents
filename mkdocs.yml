@@ -54,3 +54,4 @@ nav:
       - Errors and dead letters: errors.md
       - Runtime metrics: metrics.md
       - Trace delivery: traces.md
+      - Releasing: releasing.md

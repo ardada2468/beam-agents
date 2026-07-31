@@ -44,7 +44,7 @@ The repository SHALL provide a release workflow triggered by pushing a `v*` tag.
 
 ### Requirement: Distribution contents are verified before publishing
 
-Release verification SHALL inspect the built wheel and sdist without installing them and MUST fail if any of the following does not hold: the wheel contains `beam_agents/py.typed`; the wheel contains the generated `_protos` bindings; the wheel contains no test, docker, or CI content; the `beam-agents-effector` console-script entry point is declared; the metadata declares `Requires-Python >=3.11,<3.13`; and the metadata declares exactly the published extras (`effector`, `langgraph`, `otlp`). The verification logic SHALL live in a standalone script exercised by offline unit tests, so a defect in the verification itself is caught in the unit lane rather than at release time.
+Release verification SHALL inspect the built wheel and sdist without installing them and MUST fail if any of the following does not hold: the wheel contains `beam_agents/py.typed`; the wheel contains the generated `_protos` bindings; the wheel contains no test, docker, or CI content; the `beam-agents-effector` console-script entry point is declared and points at its declared target; the metadata's `Requires-Python` matches `[project].requires-python`; and the metadata declares exactly the extras declared in `[project.optional-dependencies]`. The expected `Requires-Python` and extra names SHALL be derived from `pyproject.toml` rather than restated in the verification script, so the check compares the built artifact against the source declaration and cannot go stale when an extra is added. Comparison MUST be insensitive to the specifier reordering and normalization build backends perform. The verification logic SHALL live in a standalone script exercised by offline unit tests, so a defect in the verification itself is caught in the unit lane rather than at release time.
 
 #### Scenario: Wheel missing the typing marker fails verification
 
@@ -58,8 +58,13 @@ Release verification SHALL inspect the built wheel and sdist without installing 
 
 #### Scenario: Metadata drift fails verification
 
-- **WHEN** the built wheel's metadata omits one of the published extras or declares a different `Requires-Python` range
-- **THEN** verification exits non-zero reporting the drifted field
+- **WHEN** the built wheel's metadata omits one of the extras declared in `pyproject.toml`, declares an extra that is not, or declares a different `Requires-Python` range
+- **THEN** verification exits non-zero reporting the drifted field and naming both the declared and expected values
+
+#### Scenario: Specifier reordering is not drift
+
+- **WHEN** the build backend emits `Requires-Python: <3.13,>=3.11` for a `pyproject.toml` declaring `>=3.11,<3.13`
+- **THEN** verification passes, because the check compares specifier sets rather than literal strings
 
 #### Scenario: Verification logic is unit-tested offline
 

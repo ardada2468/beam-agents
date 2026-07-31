@@ -36,3 +36,15 @@ repos:
         language: script
         pass_filenames: false
         always_run: true
+
+      # Same shape and same always_run rationale as the hook above: the check
+      # inspects the staged diff (or, in CI, the PR base) itself, so it must
+      # run even when no file it would name is passed to it. Riding the
+      # existing `pre-commit run --all-files` step in quality.yml means no new
+      # required status check.
+      - id: changelog-fragment-required
+        name: Changelog fragment required for src/ edits
+        entry: scripts/check_changelog_fragment.sh
+        language: script
+        pass_filenames: false
+        always_run: true

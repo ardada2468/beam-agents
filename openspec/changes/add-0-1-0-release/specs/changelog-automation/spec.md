@@ -39,12 +39,12 @@ The changelog configuration SHALL register exactly the fragment types `breaking`
 
 ### Requirement: CHANGELOG.md is assembled from fragments at release time
 
-The repository SHALL provide a `make changelog` target that assembles all pending fragments into a new dated version section prepended to `CHANGELOG.md` and consumes (deletes) the assembled fragments in the same operation, so a fragment is rendered in exactly one release. A draft mode SHALL render the pending section without modifying `CHANGELOG.md` or deleting fragments. The `CHANGELOG.md` SHALL begin with a hand-curated `0.1.0` section summarizing the pre-changelog history; mechanical assembly applies from the first release after fragments exist.
+The repository SHALL provide a `make changelog` target that assembles all pending fragments into a new dated version section prepended to `CHANGELOG.md` and consumes (deletes) every pending fragment in the same operation — including `internal` fragments, which are consumed without being rendered — so a fragment is published in exactly one release and `changelog.d/` never accumulates. A draft mode SHALL render the pending section without modifying `CHANGELOG.md` or deleting fragments. The `CHANGELOG.md` SHALL begin with a hand-curated `0.1.0` section summarizing the pre-changelog history; mechanical assembly applies from the first release after fragments exist.
 
 #### Scenario: Assembly consumes fragments exactly once
 
 - **WHEN** `make changelog` runs for version `X.Y.Z` with pending fragments
-- **THEN** `CHANGELOG.md` gains a dated `X.Y.Z` section containing every non-internal fragment's text, `changelog.d/` retains no consumed fragment, and running assembly again for the next version does not re-render them
+- **THEN** `CHANGELOG.md` gains a dated `X.Y.Z` section containing every non-internal fragment's text, `changelog.d/` retains no fragment of any type, and running assembly again for the next version does not re-render them
 
 #### Scenario: Draft mode is side-effect free
 
