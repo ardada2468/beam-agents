@@ -96,6 +96,7 @@ from beam_agents.hitl import (
 )
 from beam_agents.memory.compaction import ExpiringMemory
 from beam_agents.memory.stores import MemoryStore, build_memory_store, parse_memory_store_uri
+from beam_agents.model.facade import BudgetExceeded
 from beam_agents.observability import ROLE_TIMER, ActivationTrace
 from beam_agents.observability.metrics import (
     COUNTER_ACTIVATIONS,
@@ -111,10 +112,12 @@ from beam_agents.observability.metrics import (
     COUNTER_TOOL_CALLS,
     DISTRIBUTION_ACTIVATION_MS,
     DISTRIBUTION_BATCH_SIZE,
+    DISTRIBUTION_COMPLETION_TOKENS,
     DISTRIBUTION_ITERATIONS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_MEMORY_BYTES,
     DISTRIBUTION_OVERHEAD_MS,
+    DISTRIBUTION_PROMPT_TOKENS,
     DISTRIBUTION_TOKENS,
     MetricsSink,
     RuntimeMetrics,
@@ -165,6 +168,11 @@ REASON_TTL_WIPED_BATCH = "ttl_wiped_batch"
 # `max_buffered_events`. Dropping is explicit, counted, and triageable; growing
 # keyed state silently toward the 1 MiB cap is none of those.
 REASON_BATCH_OVERFLOW = "batch_buffer_overflow"
+# An activation crossed `max_tokens_per_activation`. Distinct from
+# `activation_error` because the triage is different: not "the agent is broken"
+# but "this activation was too expensive", which is a budget question, not a
+# stack-trace one. The activation commits nothing, exactly as any other failure.
+REASON_BUDGET_EXCEEDED = "budget_exceeded"
 # An intent that could not be serialized for the outbox. Not produced by this
 # DoFn -- `WriteIntents` dead-letters it downstream and `RunAgent` maps it onto
 # the same `ActivationError` shape, so one schema covers the whole errors sink.
@@ -180,6 +188,7 @@ DETAIL_INTENT_EXPIRED = "intent_expired"
 __all__ = [
     "HITL_TIMEOUT_OUTPUT",
     "REASON_BATCH_OVERFLOW",
+    "REASON_BUDGET_EXCEEDED",
     "REASON_ERROR",
     "REASON_HITL_TIMEOUT",
     "REASON_INTENT_DEAD_LETTER",
@@ -291,6 +300,7 @@ class _AgentDoFn(beam.DoFn):
         on_expire: ExpireHook | None = None,
         batch: BatchSettings | None = None,
         time_fn: Callable[[], float] | None = None,
+        max_tokens_per_activation: int | None = None,
     ) -> None:
         self._agent = agent
         self._provider_factory = provider_factory
@@ -344,6 +354,10 @@ class _AgentDoFn(beam.DoFn):
         # determinism is scoped to bundle retry, and a retried bundle's batch
         # composition comes from committed bag state, not from this.
         self._time_fn: Callable[[], float] = time_fn if time_fn is not None else time.time
+        # The per-attempt token bound, forwarded to each `run_activation`.
+        # `None` is unlimited; `AgentConfig` has already refused to pair a set
+        # value with a missing `decode`.
+        self._max_tokens_per_activation = max_tokens_per_activation
         self._bridge: AsyncBridge | None = None
         self._provider: LLMClient | None = None
         self._longterm_store: MemoryStore | None = None
@@ -908,6 +922,7 @@ class _AgentDoFn(beam.DoFn):
                     monotonic_ns=monotonic_ns,
                     tool_registry=self._tool_registry,
                     longterm_store=longterm_store,
+                    max_tokens_per_activation=self._max_tokens_per_activation,
                 ),
                 self._activation_timeout_s,
             )
@@ -1061,8 +1076,12 @@ class _AgentDoFn(beam.DoFn):
         metrics.observe(DISTRIBUTION_ITERATIONS, tally.iterations)
         if tally.usage_observed:
             # Only when a provider response was actually decoded: a zero sample
-            # from a path that never decodes would deflate the distribution.
+            # from a path that never decodes would deflate the distribution. The
+            # cost pair rides the same guard, so all three sample counts mean
+            # "activations with known usage" and stay directly comparable.
             metrics.observe(DISTRIBUTION_TOKENS, tally.total_tokens)
+            metrics.observe(DISTRIBUTION_PROMPT_TOKENS, tally.prompt_tokens)
+            metrics.observe(DISTRIBUTION_COMPLETION_TOKENS, tally.completion_tokens)
         for duration_ms in tally.llm_ms:
             metrics.observe(DISTRIBUTION_LLM_MS, duration_ms)
         # The release-gate figure: the activation's wall time with its model
@@ -1407,17 +1426,24 @@ class _AgentDoFn(beam.DoFn):
         trace attributes are built from the same :class:`FailureContext`, so
         the two records cannot disagree. Still counted through `_dead_letter`,
         the single chokepoint.
+
+        The reason is selected from the cause's class: a tripped token budget is
+        `budget_exceeded`, everything else stays `activation_error`
+        byte-identically. Dispatching here rather than catching `BudgetExceeded`
+        in `_start`/`_resume` keeps one handler building both records — a second
+        catch clause would be a second place for them to drift apart.
         """
         cause = failed.__cause__ if failed.__cause__ is not None else failed
         context = failed.context
+        reason = REASON_BUDGET_EXCEEDED if isinstance(cause, BudgetExceeded) else REASON_ERROR
         yield self._dead_letter(
-            key, REASON_ERROR, f"{cause!r}{context.detail_suffix()}", event_time_ms=now_ms
+            key, reason, f"{cause!r}{context.detail_suffix()}", event_time_ms=now_ms
         )
         yield _error_trace(
             key,
             seq,
             now_ms,
-            REASON_ERROR,
+            reason,
             error_type=type(cause).__name__,
             failure=context,
         )

@@ -24,6 +24,7 @@ from beam_agents.core.loop import (
     run_activation,
 )
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
+from beam_agents.model import BudgetExceeded
 from beam_agents.observability import (
     ROLE_ACTIVATION,
     ActivationTrace,
@@ -424,6 +425,119 @@ async def test_a_cache_hit_does_not_count_toward_the_failure_llm_calls() -> None
     )
 
 
+async def test_a_budget_trip_propagates_as_an_activation_failure() -> None:
+    # Scenario: The budget kill produces both enriched records (the loop half).
+    # `BudgetExceeded` is an ordinary agent-path raise, so the existing wrap
+    # delivers it as `ActivationFailed` with its position -- no new machinery,
+    # and the cause is preserved for the DoFn's reason dispatch.
+    async def agent(ctx: ActivationContext) -> Complete:
+        await ctx.call_model(request())
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=60_000)
+        await ctx.call_model(request("second"))
+        return Complete(output=b"unreachable")
+
+    with pytest.raises(ActivationFailed) as excinfo:
+        await run_activation(
+            agent,
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=make_pong_provider(),
+            memory_blob=None,
+            cache_blob=None,
+            decode=decode_len_based,
+            max_tokens_per_activation=10,
+        )
+
+    failure = excinfo.value
+    assert isinstance(failure.__cause__, BudgetExceeded)
+    # b"pong" decodes to 2 * 4 = 8 tokens; the second call crosses 10 at 16.
+    assert failure.__cause__.limit == 10
+    assert failure.__cause__.consumed == 16
+    assert failure.context == FailureContext(
+        step_index=3, last_event="LLM_CALL", staged_intents=1, llm_calls=2
+    )
+
+
+async def test_an_activation_within_its_budget_completes_normally() -> None:
+    # The knob only fails what crosses it: an agent that stays inside its bound
+    # commits exactly what it would with no budget configured.
+    result = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        decode=decode_len_based,
+        max_tokens_per_activation=1_000,
+    )
+
+    assert result.status == "completed"
+    assert result.outputs == [b"pong"]
+
+
+async def test_an_unbudgeted_run_activation_is_unchanged() -> None:
+    # Scenario: Unset means unlimited. The parameter defaults to `None`, so
+    # every historical call site still builds and behaves identically.
+    unbudgeted = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        decode=decode_len_based,
+    )
+    budgeted = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        decode=decode_len_based,
+        max_tokens_per_activation=1_000,
+    )
+
+    assert unbudgeted.memory_blob.SerializeToString(
+        deterministic=True
+    ) == budgeted.memory_blob.SerializeToString(deterministic=True)
+    assert unbudgeted.cache_blob.SerializeToString(
+        deterministic=True
+    ) == budgeted.cache_blob.SerializeToString(deterministic=True)
+
+
+async def test_a_budgeted_suspension_persists_an_unchanged_continuation() -> None:
+    # Scenario: The continuation is unchanged by budgeting. The meter is
+    # worker-local and per-attempt: no `Continuation` field, no state-schema
+    # implication, no golden blob moved.
+    async def agent(ctx: ActivationContext) -> Suspend:
+        await ctx.call_model(request())
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=60_000)
+        return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=1_000)
+
+    async def run(limit: int | None) -> bytes:
+        result = await run_activation(
+            agent,
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=make_pong_provider(),
+            memory_blob=None,
+            cache_blob=None,
+            decode=decode_len_based,
+            max_tokens_per_activation=limit,
+        )
+        assert result.continuation is not None
+        return result.continuation.SerializeToString(deterministic=True)
+
+    assert await run(None) == await run(10_000)
+
+
 async def test_cancellation_is_never_wrapped() -> None:
     # Scenario: Cancellation is never wrapped. `CancelledError` is how the
     # bridge's timeout cancellation completes; wrapping it would corrupt the
@@ -605,6 +719,9 @@ async def test_loop_forwards_every_activation_context_input(
         # Forwarded like every other injected dependency; `None` here, so the
         # context builds no long-term handle and the commit tail flushes nothing.
         "longterm_store": None,
+        # `None` is unlimited: an unconfigured pipeline builds no meter and
+        # behaves byte-identically to the pre-budget runtime.
+        "max_tokens_per_activation": None,
     }
     assert result.memory_blob is memory_blob
     assert result.cache_blob is cache_blob

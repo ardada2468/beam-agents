@@ -34,6 +34,29 @@ async def suspend_then_recall_agent(ctx: ActivationContext) -> Complete | Suspen
     return Complete(output=b"resumed:" + resp.response)
 
 
+async def budgeted_suspend_then_recall_agent(ctx: ActivationContext) -> Complete | Suspend:
+    """:func:`suspend_then_recall_agent` under a configured token budget.
+
+    Reports the meter's running total on the output, so the gate can compare
+    the budget decision the original walk made against the one the retried,
+    cache-served walk makes. A trip would fail the activation instead; the
+    scenario is an activation that committed *within* budget, so the claim
+    under test is that the retry charges identically rather than by luck.
+    """
+    resp = await ctx.call_model(repeated_request())
+    if not ctx.is_resume:
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+        return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=_TTL_MS)
+    return Complete(output=b"resumed:" + resp.response + b"#" + str(_consumed(ctx)).encode())
+
+
+def _consumed(ctx: ActivationContext) -> int:
+    """This attempt's charged total, read off the context's meter."""
+    budget = ctx._budget
+    assert budget is not None, "the scenario configures a budget"
+    return budget.consumed
+
+
 async def batch_act_agent(ctx: ActivationContext) -> Complete:
     """Stage one intent and complete with the joined batch.
 

@@ -29,7 +29,16 @@ from beam_agents.core.context import (
     AgentResult,
 )
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
-from beam_agents.model import FakeLLM, LlmRequest, StagingSink, TokenUsage, match_any, respond_with
+from beam_agents.model import (
+    BudgetExceeded,
+    DecodedResponse,
+    FakeLLM,
+    LlmRequest,
+    StagingSink,
+    TokenUsage,
+    match_any,
+    respond_with,
+)
 from beam_agents.model.replay_cache import compute_cache_key as real_compute_cache_key
 from beam_agents.observability import ROLE_ACTIVATION, span_id_for, trace_id_for
 from beam_agents.tools import SideEffectToolError, ToolNotFoundError, ToolRegistry, tool
@@ -652,6 +661,9 @@ def test_agent_context_wires_every_model_facade_dependency(
         "retry_policy": retry_policy,
         "decode": decode,
         "staging": ctx,
+        # `None` unless `max_tokens_per_activation` is set: the facade is this
+        # surface's only model path, so the budget reaches enforcement here.
+        "budget": None,
     }
 
 
@@ -1509,3 +1521,192 @@ async def test_agent_result_carries_the_tally() -> None:
     assert result.tally.usage_observed is True
     # One staged intent, so one step consumed.
     assert result.tally.iterations == 1
+
+
+# --- Requirement: The budget charges every consumed model response ------------
+# (`token-budgets`, on the raw `ActivationContext.call_model` surface: it
+# bypasses the facade and awaits the provider directly, so it enforces itself.)
+
+
+def _budgeted_context(limit: int, **kwargs: object) -> ActivationContext:
+    defaults: dict[str, object] = {
+        "decode": decode_len_based,
+        "max_tokens_per_activation": limit,
+        "monotonic_ns": lambda: 0,
+    }
+    defaults.update(kwargs)
+    return _activation_context(**defaults)
+
+
+async def test_the_raw_path_charges_the_decoded_total_of_a_provider_reached_call() -> None:
+    # Scenario: Enforcement holds on both surfaces. `decode_len_based` reports
+    # `2 * len(response)`, so the 8-byte b"response" costs 16.
+    ctx = _budgeted_context(100)
+
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+    )
+
+    assert ctx._budget is not None
+    assert ctx._budget.consumed == 16
+
+
+async def test_the_raw_path_charges_a_cache_hit_the_same_as_its_miss() -> None:
+    # Scenario: A cache hit charges the same as the miss that stored it. The
+    # provider is reached once; the budget is charged twice. Billed accounting
+    # disagrees on purpose -- that disagreement IS the replay cache working.
+    fake = FakeLLM([(match_any(), respond_with(b"0123456789"))])
+    ctx = _budgeted_context(1_000, provider=fake)
+    request = LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+
+    await ctx.call_model(request)
+    await ctx.call_model(request)
+
+    assert fake.call_count == 1
+    assert ctx._budget is not None
+    assert ctx._budget.consumed == 40
+
+
+async def test_the_raw_path_decodes_each_response_exactly_once() -> None:
+    # The charge and the trace's usage attributes come from ONE decode: the two
+    # branches were refactored to decode once and pass the usage down, so a
+    # counting decoder sees exactly one call per response -- hit branch included.
+    calls: list[bytes] = []
+
+    def counting_decode(response: bytes) -> DecodedResponse:
+        calls.append(response)
+        return decode_len_based(response)
+
+    fake = FakeLLM([(match_any(), respond_with(b"resp"))])
+    ctx = _budgeted_context(1_000, provider=fake, decode=counting_decode)
+    request = LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+
+    await ctx.call_model(request)
+    await ctx.call_model(request)
+
+    assert calls == [b"resp", b"resp"]
+
+
+async def test_the_raw_paths_crossing_call_trips_and_stages_its_trace() -> None:
+    # Scenario: The crossing call fails fast, on the surface with no facade
+    # between it and the provider. The call's own LLM_CALL event is staged
+    # before the raise, so a swallowing agent's committed trace shows the trip.
+    ctx = _budgeted_context(20)
+
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+    )
+    with pytest.raises(BudgetExceeded) as excinfo:
+        await ctx.call_model(
+            LlmRequest(model_id="m", messages=["b"], tools_schema=None, sampling_params=None)
+        )
+
+    assert excinfo.value.limit == 20
+    assert excinfo.value.consumed == 32
+    llm_events = [e for e in ctx.staged_traces if e.event_type == TraceEvent.LLM_CALL]
+    assert len(llm_events) == 2
+
+
+async def test_the_raw_path_refuses_a_post_trip_call_at_entry() -> None:
+    # Scenario: A swallowed trip cannot spend again. The entry check precedes
+    # the cache lookup and the provider, and does not advance the step cursor --
+    # a refused call is not a step, so the intent IDs an agent mints after
+    # swallowing the trip stay where the deterministic walk put them.
+    fake = FakeLLM([(match_any(), respond_with(b"0123456789"))])
+    ctx = _budgeted_context(10, provider=fake)
+    request = LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+
+    with pytest.raises(BudgetExceeded):
+        await ctx.call_model(request)
+    step_after_trip = ctx.step_index
+    traces_after_trip = len(ctx.staged_traces)
+
+    with pytest.raises(BudgetExceeded):
+        await ctx.call_model(request)
+
+    assert fake.call_count == 1
+    assert ctx.step_index == step_after_trip
+    assert len(ctx.staged_traces) == traces_after_trip
+
+
+async def test_an_unbudgeted_raw_path_is_unlimited() -> None:
+    # Scenario: Unset means unlimited. The default is `None`, and under it no
+    # meter exists at all.
+    ctx = _activation_context(decode=decode_len_based, monotonic_ns=lambda: 0)
+
+    for index in range(5):
+        await ctx.call_model(
+            LlmRequest(model_id="m", messages=[str(index)], tools_schema=None, sampling_params=None)
+        )
+
+    assert ctx._budget is None
+
+
+def test_a_budget_without_a_decoder_is_refused_at_context_construction() -> None:
+    # Scenario: A budget without a decoder fails at construction. `AgentConfig`
+    # rejects the pair first, but `ActivationContext` is buildable without one
+    # (the loop driver's own tests do), so it re-checks defensively: unknown
+    # usage must not silently mean free.
+    with pytest.raises(ValueError, match="decode"):
+        _activation_context(max_tokens_per_activation=100)
+
+
+def test_a_non_positive_budget_is_refused_at_context_construction() -> None:
+    with pytest.raises(ValueError, match="max_tokens_per_activation"):
+        _activation_context(max_tokens_per_activation=0, decode=decode_len_based)
+
+
+def test_the_budget_meter_is_fresh_per_activation_attempt() -> None:
+    # Scenario: A resume starts a fresh budget. The meter is built in the
+    # constructor and never persisted, so a resumed attempt -- a new context
+    # over the same seq, seeded at the suspension's step cursor -- starts at
+    # zero.
+    first = _budgeted_context(100)
+    assert first._budget is not None
+    first._budget.charge(90)
+
+    resumed = _budgeted_context(100, step_index=4)
+
+    assert resumed._budget is not None
+    assert resumed._budget.consumed == 0
+
+
+# --- Requirement: `tokens` is sampled only from decoded provider usage --------
+
+
+def test_activation_context_accumulates_the_prompt_completion_split() -> None:
+    # Scenario: Decoded usage is sampled. The input/output split is what a
+    # provider price sheet multiplies, and the tally kept only the total before
+    # this capability.
+    ctx = _activation_context()
+
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7))
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2))
+
+    tally = ctx.tally()
+    assert (tally.prompt_tokens, tally.completion_tokens, tally.total_tokens) == (4, 5, 9)
+
+
+def test_agent_context_accumulates_the_prompt_completion_split() -> None:
+    ctx = make_context()
+
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3))
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=4, completion_tokens=6, total_tokens=10))
+
+    tally = ctx.drain().tally
+    assert (tally.prompt_tokens, tally.completion_tokens, tally.total_tokens) == (5, 8, 13)
+
+
+async def test_agent_context_hands_its_budget_to_the_facade_it_builds() -> None:
+    # The facade is this surface's only model path, so handing it the budget is
+    # the whole of the enforcement here.
+    fake = FakeLLM([(match_any(), respond_with(b"0123456789"))])
+    ctx = make_context(provider=fake, max_tokens_per_activation=10)
+
+    with pytest.raises(BudgetExceeded):
+        await ctx.model.complete(
+            LlmRequest(model_id="m-1", messages=[], tools_schema=[], sampling_params={}),
+            entity_key=ctx.entity_key,
+            seq=ctx.seq,
+            step_index=0,
+        )

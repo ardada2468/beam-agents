@@ -78,4 +78,7 @@
 # standing rule above — each was measured against its own tree, so the combined
 # tree is re-measured rather than having a side picked. Measured on the
 # combined tree: 0.9103.
+#
+# add-token-budgets: the budget meter, BudgetExceeded routing, and the two new
+# usage distributions are fully exercised by offline unit tests.
 branch_rate = 0.9103

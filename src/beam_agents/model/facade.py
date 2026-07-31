@@ -107,6 +107,91 @@ class OutputSchemaError(Exception):
     """
 
 
+class BudgetExceeded(Exception):
+    """Raised when an activation's token consumption crosses its budget.
+
+    Deliberately not a `ProviderError`, for the same reason `CircuitOpenError`
+    and `OutputSchemaError` are not: `_call_with_retry` classifies retryability
+    **by class**, and re-calling the provider because the budget tripped would
+    be the exact opposite of the feature.
+
+    `limit` and `consumed` are both pure functions of the activation's
+    deterministic walk (the charging rule reads decoded response bytes, never
+    provider-reached-ness), so `repr` — which the dead-letter detail leads with
+    — is byte-identical under replay and the errors sink's encoding stays
+    deterministic.
+    """
+
+    def __init__(self, *, limit: int, consumed: int) -> None:
+        super().__init__(f"token budget exceeded: consumed {consumed} of {limit}")
+        self.limit = limit
+        self.consumed = consumed
+
+    def __repr__(self) -> str:
+        return f"BudgetExceeded(limit={self.limit}, consumed={self.consumed})"
+
+
+class TokenBudget:
+    """The per-activation-attempt token meter behind `max_tokens_per_activation`.
+
+    Charged the decoded `total_tokens` of **every model-call response the agent
+    receives**, replay-cache hits included (design D2). That is the load-bearing
+    decision: provider-reached-ness is exactly the property a bundle retry does
+    not preserve, so a billed-only meter would feed a *branch* from a value the
+    retry-determinism gate does not hold fixed. Response bytes are held fixed —
+    the cache stores them and `compute_cache_key` pins them to the call sequence
+    — and decoded counts are a pure function of them.
+
+    The trip is strictly greater (an activation landing exactly on its budget is
+    within it) and one-way: once `exhausted`, `check` raises at every later
+    call's entry, so an agent that swallows the trip cannot spend again — not
+    even from the cache, because served context is still consumption.
+
+    Worker-local and never persisted: no `Continuation` field, no wire message,
+    no state blob (design D6).
+    """
+
+    __slots__ = ("_consumed", "_exhausted", "_limit")
+
+    def __init__(self, limit: int) -> None:
+        if limit <= 0:
+            raise ValueError(f"max_tokens_per_activation must be positive, got {limit!r}")
+        self._limit = limit
+        self._consumed = 0
+        self._exhausted = False
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    @property
+    def consumed(self) -> int:
+        """Tokens charged so far. Frozen at the crossing total once tripped."""
+        return self._consumed
+
+    @property
+    def exhausted(self) -> bool:
+        return self._exhausted
+
+    def check(self) -> None:
+        """The entry guard: raise if this budget has already tripped."""
+        if self._exhausted:
+            raise BudgetExceeded(limit=self._limit, consumed=self._consumed)
+
+    def charge(self, total_tokens: int) -> None:
+        """Charge one consumed response, raising if it crosses the limit.
+
+        The crossing call's own charge is what raises: a call's cost is
+        unknowable until its response exists, so the guarantee is
+        ``consumed < limit + one call's worth``, not ``consumed <= limit``.
+        """
+        self.check()
+        self._consumed += total_tokens
+        if self._consumed > self._limit:
+            self._exhausted = True
+            raise BudgetExceeded(limit=self._limit, consumed=self._consumed)
+
+
 class CircuitState(enum.Enum):
     """Breaker states: `CLOSED` (pass-through), `OPEN` (fail fast), `HALF_OPEN` (one trial)."""
 
@@ -228,6 +313,7 @@ class LlmFacade:
         retry_policy: RetryPolicy,
         decode: Decode,
         staging: StagingSink,
+        budget: TokenBudget | None = None,
     ) -> None:
         self._provider = provider
         self._replay_cache = replay_cache
@@ -238,6 +324,10 @@ class LlmFacade:
         self._retry_policy = retry_policy
         self._decode = decode
         self._staging = staging
+        # `None` is unlimited, and the historical construction sites keep
+        # building unchanged. Activation-scoped like everything else here except
+        # the breaker: the meter bounds one attempt (design D6).
+        self._budget = budget
 
     async def complete(
         self,
@@ -248,6 +338,13 @@ class LlmFacade:
         step_index: int,
         output_schema: type[BaseModel] | None = None,
     ) -> FacadeResult:
+        # Entry check first: before the cache lookup and before the breaker. A
+        # spent budget must serve nothing, not even a free hit (served context
+        # is still consumption), and budget state — like cache state — must not
+        # depend on endpoint health (design D3).
+        if self._budget is not None:
+            self._budget.check()
+
         effective_request = _fold_output_schema(request, output_schema)
         cache_key = compute_cache_key(
             effective_request.model_id,
@@ -363,6 +460,30 @@ class LlmFacade:
         decoded = self._decode(response_bytes)
         if not cache_hit:
             self._staging.accumulate_usage(decoded.usage)
+
+        # The charge lands here, where the cache-hit and provider paths converge
+        # and the response is decoded exactly once — and *before* the
+        # output-schema parse, so a call that busted the budget fails as a
+        # budget failure rather than as whatever its JSON looked like. The trip
+        # stages this call's own LLM_CALL event first, exactly as
+        # `OutputSchemaError` does: on the normal fail-fast path it is discarded
+        # with everything else, and it becomes visible only if the agent
+        # swallows the trip and completes.
+        if self._budget is not None:
+            try:
+                self._budget.charge(decoded.usage.total_tokens)
+            except BudgetExceeded as exc:
+                self._stage_trace(
+                    model_id=model_id,
+                    entity_key=entity_key,
+                    seq=seq,
+                    step_index=step_index,
+                    cache_hit=cache_hit,
+                    attempts=attempts,
+                    usage=decoded.usage,
+                    error=exc,
+                )
+                raise
 
         parsed: BaseModel | None = None
         if output_schema is not None:
