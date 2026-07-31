@@ -61,8 +61,8 @@ async def exact_replay_agent(ctx: ActivationContext) -> Complete:
     """
     response = await ctx.call_model(request())
     ctx.act("http.post", '{"url":"x"}', ttl_ms=TTL_MS)
-    ctx.memory.append("log", ctx.event, max_items=64)
-    return Complete(output=response.response + b":" + ctx.event)
+    ctx.memory.append("log", ctx.single_event, max_items=64)
+    return Complete(output=response.response + b":" + ctx.single_event)
 
 
 async def failing_agent(ctx: ActivationContext) -> Complete:

@@ -76,5 +76,6 @@
 #
 # Merge resolution (add-adaptive-batching 0.9066 vs add-replay-cli 0.9070): the
 # standing rule above — each was measured against its own tree, so the combined
-# tree is re-measured rather than having a side picked.
-branch_rate = 0.9070
+# tree is re-measured rather than having a side picked. Measured on the
+# combined tree: 0.9103.
+branch_rate = 0.9103
