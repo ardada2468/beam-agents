@@ -1,0 +1,130 @@
+/*
+ * Static diagrams.
+ *
+ * The vocabulary here deliberately mirrors `pipeline.css`: a diagram on the
+ * architecture page and the animated diagram on the landing page should look
+ * like they were drawn by the same hand, because they describe the same system.
+ * The difference is only that these do not move.
+ *
+ * Every value is a design token. Nothing here carries a literal colour, which
+ * is what lets both themes and `scripts/check_a11y.mjs`'s token contrast pass
+ * stay true without a second set of numbers to keep in sync.
+ */
+
+.dg-figure {
+  margin: 1.6rem 0;
+}
+
+.dg-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  padding: 0.9rem 1rem;
+}
+
+.dg-figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.dg-caption {
+  margin-top: 0.55rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--ink-3);
+  max-width: 62ch;
+}
+
+/* --- geometry -------------------------------------------------------------- */
+
+.dg-line {
+  fill: none;
+  stroke: var(--rule-2);
+  stroke-width: 1.25;
+  marker-end: var(--dg-marker);
+}
+
+/* A path with no arrowhead: a bracket, a rail, a grouping stroke. */
+.dg-line--open {
+  marker-end: none;
+}
+
+/* Leaves the pipeline and comes back — the message-bus convention. */
+.dg-line--dashed {
+  stroke-dasharray: 4 3;
+}
+
+.dg-node {
+  fill: var(--paper);
+  stroke: var(--ink);
+  stroke-width: 1.25;
+}
+
+.dg-node--soft {
+  fill: var(--paper-2);
+  stroke: var(--rule-2);
+  stroke-width: 1;
+}
+
+.dg-arrow {
+  fill: var(--rule-2);
+}
+
+.dg-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  fill: var(--ink-2);
+  letter-spacing: 0.01em;
+}
+
+.dg-label--title {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  fill: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.dg-label--faint {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  fill: var(--ink-3);
+  letter-spacing: 0.06em;
+}
+
+/* --- the stream key -------------------------------------------------------- */
+
+/*
+ * These four colours mean the same thing here as they do in the pipeline
+ * diagram, the landing page legend, and each stream's own docs page. Colour on
+ * this site is a key, so a diagram may only use one of them when it is actually
+ * talking about that stream.
+ */
+
+.dg-line--output {
+  stroke: var(--s-output);
+}
+.dg-line--intents {
+  stroke: var(--s-intents);
+}
+.dg-line--traces {
+  stroke: var(--s-traces);
+}
+.dg-line--errors {
+  stroke: var(--s-errors);
+}
+
+.dg-label--output {
+  fill: var(--s-output);
+}
+.dg-label--intents {
+  fill: var(--s-intents);
+}
+.dg-label--traces {
+  fill: var(--s-traces);
+}
+.dg-label--errors {
+  fill: var(--s-errors);
+}

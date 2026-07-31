@@ -11,6 +11,10 @@ governing principles.
 ([`examples/`](examples/)), built strictly by the `docs` workflow. Build it
 locally with `make docs` or browse it live with `make docs-serve`.
 
+Documentation site: [`website/`](website/) — run it with `make site-dev`. Its
+content is verified against this repository on every change; see
+[`website/README.md`](website/README.md).
+
 ## Bootstrap
 
 ```sh
@@ -82,8 +86,10 @@ with three changes — no topology edits:
    `beam_agents.adapters.langgraph.BeamToolNode(tools)`.
 3. Wrap the graph: `RunAgent(LangGraphAgent(graph, chat_models=[model]))`.
 
+The adapter lives behind the `langgraph` extra. From a source checkout:
+
 ```sh
-uv pip install 'beam-agents[langgraph]'
+uv sync --extra langgraph
 ```
 
 Checkpoints persist latest-only inside working memory (the 1 MiB cap applies —
@@ -134,8 +140,8 @@ Side effects execute outside the pipeline, in the reference effector service:
 lease/TTL budgets, and what is (and is not) guaranteed.
 
 ```sh
-uv pip install 'beam-agents[effector]'
-beam-agents-effector --registry myapp.agent:TOOLS ...
+uv sync --extra effector
+uv run beam-agents-effector --registry myapp.agent:TOOLS ...
 ```
 
 ## Contributing

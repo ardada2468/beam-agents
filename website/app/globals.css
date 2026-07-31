@@ -1,0 +1,628 @@
+@import 'tailwindcss';
+@import './chrome.css';
+@import './diagram.css';
+@import './pipeline.css';
+
+/*
+ * Design tokens.
+ *
+ * Monochrome first. The only saturated colours on this site name the four
+ * outputs of `RunAgent` — `.output`, `.intents`, `.traces`, `.errors` — and
+ * they mean the same thing everywhere they appear: in the pipeline diagram, in
+ * the legend, and on the docs page for each stream. Colour here is a key, not
+ * decoration, which is why there is no accent for accent's sake.
+ *
+ * Every foreground/background pair is checked for WCAG 2.1 AA contrast by
+ * `scripts/check_a11y.mjs`, in both themes, from these values.
+ */
+
+@theme {
+  --font-sans:
+    'Instrument Sans Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: light;
+
+  --paper: #ffffff;
+  --paper-2: #f6f6f4;
+  --paper-3: #edede9;
+  --ink: #0b0c0e;
+  --ink-2: #4a4e54;
+  --ink-3: #63676d;
+  --rule: #e2e2dd;
+  --rule-2: #8e8e87;
+  --link: #14448f;
+  --focus: #0f62d6;
+
+  /* Stream key. Used only where the stream is the subject. */
+  --s-output: #0b0c0e;
+  --s-intents: #8a5205;
+  --s-traces: #3c5c78;
+  --s-errors: #9e2a18;
+
+  --measure: 72ch;
+
+  /*
+   * The page gutter, named because two things need to agree on it: `.shell`,
+   * which spends it as padding, and `.rule-grid`, which spends it in reverse to
+   * pull its cell padding back out to the shell's content edge.
+   */
+  --gutter: clamp(1.15rem, 4vw, 3rem);
+
+  /* Aliases kept so existing content components need no rewrite. */
+  --bg: var(--paper);
+  --bg-subtle: var(--paper-2);
+  --bg-inset: var(--paper-3);
+  --fg: var(--ink);
+  --fg-muted: var(--ink-2);
+  --fg-faint: var(--ink-3);
+  --border: var(--rule);
+  --border-strong: var(--rule-2);
+  --accent: var(--link);
+  --accent-fg: #ffffff;
+  --accent-subtle: var(--paper-2);
+  --status-stable: #1f5c38;
+  --status-experimental: #8a5205;
+  --status-partial: #8a5205;
+  --status-planned: #5c5f66;
+  --warn-bg: #fbf6ea;
+  --warn-border: #cbab63;
+  --warn-fg: #5f4508;
+  --note-bg: #f0f3f8;
+  --note-border: #9aafc9;
+  --note-fg: #143a6b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --paper: #0c0d0f;
+    --paper-2: #141618;
+    --paper-3: #1c1f22;
+    --ink: #ededea;
+    --ink-2: #a7abb0;
+    --ink-3: #8f949a;
+    --rule: #262a2e;
+    --rule-2: #5f666d;
+    --link: #9dbef2;
+    --focus: #6ea4f5;
+
+    --s-output: #ededea;
+    --s-intents: #e0a458;
+    --s-traces: #9bbcdd;
+    --s-errors: #ee9683;
+
+    --accent-fg: #0c0d0f;
+    --status-stable: #74d49f;
+    --status-experimental: #e0a458;
+    --status-partial: #e0a458;
+    --status-planned: #a0a7b4;
+    --warn-bg: #1f1a0d;
+    --warn-border: #6b5520;
+    --warn-fg: #e6c98d;
+    --note-bg: #101820;
+    --note-border: #2f4a66;
+    --note-fg: #a9c8ee;
+  }
+}
+
+/* The explicit toggle must beat the media query in both directions. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-2: #f6f6f4;
+  --paper-3: #edede9;
+  --ink: #0b0c0e;
+  --ink-2: #4a4e54;
+  --ink-3: #63676d;
+  --rule: #e2e2dd;
+  --rule-2: #8e8e87;
+  --link: #14448f;
+  --focus: #0f62d6;
+  --s-output: #0b0c0e;
+  --s-intents: #8a5205;
+  --s-traces: #3c5c78;
+  --s-errors: #9e2a18;
+  --accent-fg: #ffffff;
+  --status-stable: #1f5c38;
+  --status-experimental: #8a5205;
+  --status-partial: #8a5205;
+  --status-planned: #5c5f66;
+  --warn-bg: #fbf6ea;
+  --warn-border: #cbab63;
+  --warn-fg: #5f4508;
+  --note-bg: #f0f3f8;
+  --note-border: #9aafc9;
+  --note-fg: #143a6b;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --paper: #0c0d0f;
+  --paper-2: #141618;
+  --paper-3: #1c1f22;
+  --ink: #ededea;
+  --ink-2: #a7abb0;
+  --ink-3: #8f949a;
+  --rule: #262a2e;
+  --rule-2: #5f666d;
+  --link: #9dbef2;
+  --focus: #6ea4f5;
+  --s-output: #ededea;
+  --s-intents: #e0a458;
+  --s-traces: #9bbcdd;
+  --s-errors: #ee9683;
+  --accent-fg: #0c0d0f;
+  --status-stable: #74d49f;
+  --status-experimental: #e0a458;
+  --status-partial: #e0a458;
+  --status-planned: #a0a7b4;
+  --warn-bg: #1f1a0d;
+  --warn-border: #6b5520;
+  --warn-fg: #e6c98d;
+  --note-bg: #101820;
+  --note-border: #2f4a66;
+  --note-fg: #a9c8ee;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16.5px;
+  line-height: 1.6;
+  font-feature-settings: 'cv05' 1;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/*
+ * ...except a button, which is a box, not a run of text.
+ *
+ * The rule above is unlayered, so it beats the Tailwind `no-underline` utility
+ * a call site would otherwise reach for, and it was drawing a line through the
+ * filled button in the hero. `.btn` itself lives in `chrome.css`; the exception
+ * lives here, next to the rule it has to beat.
+ */
+.btn:hover {
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* --- Structural type ------------------------------------------------------- */
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.display {
+  font-size: clamp(2.6rem, 6.6vw, 4.9rem);
+  line-height: 0.98;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.h-section {
+  font-size: clamp(1.35rem, 2.2vw, 1.7rem);
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  font-size: clamp(1.02rem, 1.35vw, 1.16rem);
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 56ch;
+  text-wrap: pretty;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+/* Hairline rules do the dividing. No cards, no shadows. */
+.rule-top {
+  border-top: 1px solid var(--rule);
+}
+
+.shell {
+  max-width: 78rem;
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+/* --- Vertical rhythm ------------------------------------------------------- */
+
+/*
+ * Section bands.
+ *
+ * Two weights, not one. A page where every section is padded identically reads
+ * as a list of equal claims; this one has an argument, and the hero and the
+ * pipeline diagram are the two parts of it that have to land. They get
+ * `.band--lead`; the sections that support them share the narrower `.band`, so
+ * the difference in air is what tells a reader which is which.
+ */
+.band {
+  padding-block: 3.25rem;
+}
+
+.band--lead {
+  padding-block: 4.25rem;
+}
+
+@media (min-width: 40rem) {
+  .band {
+    padding-block: 4.5rem;
+  }
+
+  .band--lead {
+    padding-block: 6rem;
+  }
+}
+
+/* --- Hairline layouts ------------------------------------------------------ */
+
+/*
+ * Cells divided by hairlines instead of boxed as cards.
+ *
+ * The grid paints itself `--rule` and every cell paints itself `--paper`, so
+ * the 1px gaps are the only rule colour that shows through — one declaration
+ * instead of a border per edge, and no doubled lines where cells meet.
+ *
+ * Two things this depends on. The item count must fill every row at every
+ * column count, or the empty cell shows as a solid block of rule colour rather
+ * than as a line; the four outputs divide exactly by 1, 2, and 4. And the cell
+ * padding is pulled back out with a negative inline margin, so the first cell's
+ * label starts on the same vertical as the heading above it instead of being
+ * indented by a card's worth of padding. That pull-back is capped at the page
+ * gutter with `min()`, so it can never drag the grid off the side of a narrow
+ * screen.
+ */
+.rule-grid {
+  --cell-pad-x: min(1.25rem, var(--gutter));
+  display: grid;
+  gap: 1px;
+  background: var(--rule);
+}
+
+.rule-grid > * {
+  background: var(--paper);
+  padding-block: 1.25rem;
+}
+
+@media (min-width: 40rem) {
+  .rule-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-inline: calc(var(--cell-pad-x) * -1);
+  }
+
+  .rule-grid > * {
+    padding-inline: var(--cell-pad-x);
+  }
+}
+
+@media (min-width: 64rem) {
+  .rule-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/*
+ * Two lists that have to stay level with each other.
+ *
+ * The built and not-built columns are read across as much as down, so their
+ * hairlines have to line up. Two independent lists cannot manage that: one item
+ * that wraps to a second line in either column pushes every rule below it out
+ * of step with its neighbour, which is what happened to the right-hand column
+ * everywhere between the two-column breakpoint and about 1100px. A subgrid
+ * makes both columns share the parent's rows, so a wrapped item grows the row
+ * on both sides at once and the rules stay level.
+ *
+ * `--ledger-rows` is the item count, set by the call site: a subgrid can only
+ * borrow rows the parent has declared explicitly.
+ */
+.ledger {
+  /*
+   * The call site overrides this with the real item count. The fallback is here
+   * because `repeat(var(--ledger-rows), auto)` with the variable unset makes
+   * the whole `grid-template-rows` declaration invalid, which would leave the
+   * subgrids with no rows to borrow and collapse both columns into one.
+   */
+  --ledger-rows: 6;
+  display: grid;
+  row-gap: 2.5rem;
+}
+
+.ledger__list {
+  display: grid;
+  row-gap: 0.65rem;
+}
+
+.ledger__head {
+  margin-bottom: 1rem;
+}
+
+.ledger__note {
+  margin-top: 1rem;
+}
+
+@media (min-width: 40rem) {
+  .ledger {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 3rem;
+    row-gap: 0;
+  }
+
+  /*
+   * Everything that declares rows is behind the support query, including the
+   * rows themselves: without subgrid the two columns are the only grid items,
+   * and a row track per item would leave six empty rows of gutter hanging under
+   * them. A browser that cannot do this falls back to two plain columns, which
+   * is what the page looked like before.
+   */
+  @supports (grid-template-rows: subgrid) {
+    .ledger {
+      /* The heading, one row per item, then the trailing link. */
+      grid-template-rows: auto repeat(var(--ledger-rows), auto) auto;
+      row-gap: 0.65rem;
+    }
+
+    .ledger > * {
+      display: grid;
+      grid-row: 1 / -1;
+      grid-template-rows: subgrid;
+    }
+
+    .ledger__list {
+      grid-row: 2 / span var(--ledger-rows);
+      grid-template-rows: subgrid;
+    }
+
+    /* The shared row gap already supplies 0.65rem of the step below each. */
+    .ledger__head {
+      margin-bottom: 0.35rem;
+    }
+
+    .ledger__note {
+      margin-top: 0.35rem;
+    }
+  }
+}
+
+/* --- Shiki dual-theme ------------------------------------------------------ */
+
+.shiki {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+.shiki span {
+  color: var(--shiki-light);
+}
+
+@media (prefers-color-scheme: dark) {
+  .shiki {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg);
+  }
+
+  .shiki span {
+    color: var(--shiki-dark);
+  }
+}
+
+:root[data-theme='dark'] .shiki {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+
+:root[data-theme='dark'] .shiki span {
+  color: var(--shiki-dark);
+}
+
+:root[data-theme='light'] .shiki {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+:root[data-theme='light'] .shiki span {
+  color: var(--shiki-light);
+}
+
+/* --- Prose ----------------------------------------------------------------- */
+
+.prose {
+  max-width: var(--measure);
+}
+
+.prose > * + * {
+  margin-top: 1.05em;
+}
+
+.prose h2 {
+  font-size: 1.42rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin-top: 2.6rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--rule);
+}
+
+.prose h3 {
+  font-size: 1.12rem;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  margin-top: 1.9rem;
+}
+
+.prose h4 {
+  font-size: 0.97rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  color: var(--ink-2);
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.3rem;
+}
+
+.prose ul {
+  list-style: disc;
+}
+
+.prose ol {
+  list-style: decimal;
+}
+
+.prose li + li {
+  margin-top: 0.32rem;
+}
+
+.prose a {
+  text-decoration: underline;
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.855em;
+  background: var(--paper-3);
+  padding: 0.1em 0.32em;
+  border-radius: 2px;
+  overflow-wrap: break-word;
+}
+
+.prose pre {
+  font-family: var(--font-mono);
+  font-size: 0.83rem;
+  line-height: 1.6;
+  padding: 0.95rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow-x: auto;
+}
+
+.prose pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.prose blockquote {
+  border-left: 2px solid var(--rule-2);
+  padding-left: 1rem;
+  color: var(--ink-2);
+}
+
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 2rem 0;
+}
+
+/*
+ * Tables.
+ *
+ * Two shapes arrive here. A component-built table (`ClaimTable`, the API index)
+ * comes wrapped in `.table-scroll`, which owns the frame and the scrolling. A
+ * pipe table written in markdown arrives bare, as a direct child of `.prose`,
+ * so `.prose > table` has to carry both itself — hence the `display: block`,
+ * which is what lets a table scroll at all.
+ */
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.prose > table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+
+.prose th,
+.prose td {
+  text-align: left;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+  /* Keeps a many-column table scrolling rather than crushing every column to a
+     word per line. Narrow enough that a two- or three-column table still fits a
+     390px screen without a scrollbar. */
+  min-width: 6.5rem;
+}
+
+.prose th {
+  background: var(--paper-2);
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+/* The header is a different kind of row, so it gets the stronger rule. */
+.prose thead th {
+  border-bottom-color: var(--rule-2);
+}
+
+/* Row headers are cells too: `td` alone left a stub of rule under column one. */
+.prose tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.prose table :where(code) {
+  white-space: nowrap;
+}

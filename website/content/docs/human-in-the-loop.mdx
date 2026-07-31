@@ -1,0 +1,94 @@
+---
+title: Human in the loop
+summary: Approval channels, timeout routing with Deny/Drop/Escalate, and the two layers that make timeouts fail closed.
+status: stable
+order: 6
+verifies:
+  - symbol: beam_agents.HitlPolicy
+  - symbol: beam_agents.Deny
+  - symbol: beam_agents.Drop
+  - symbol: beam_agents.Escalate
+  - symbol: beam_agents.FallbackContext
+  - module: src/beam_agents/hitl.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/test_hitl.py
+  - test: tests/core/test_dofn_hitl_timer.py
+  - test: tests/semantics/test_hitl_fail_closed.py
+  - example: human_in_the_loop.py
+---
+
+An agent asks a person by staging an approval intent and suspending. The
+interesting part is not the asking — it is what happens when nobody answers.
+
+<HitlApprovalSequence />
+
+Nothing is blocked while the wait runs. The activation returns, the bundle
+commits, and the only thing that outlives it is a `Continuation` in keyed state
+holding the suspended `seq`, the snapshot the agent handed to `Suspend`, and the
+intent ids nothing has answered yet. The answer, whenever it comes, is an
+ordinary keyed element on the approvals topic — the same shape as any other
+input.
+
+## Requesting an approval
+
+<Example file="human_in_the_loop.py" region="agent" />
+
+`ctx.request_approval` stages an intent on the policy's approval channel. The
+`tool_name` it carries is the channel the effector routes to, not a registered
+tool. `Suspend(timeout_ms=...)` sets the real-time deadline; omitting it falls
+back to `HitlPolicy.timeout_ms`, which defaults to 24 hours.
+
+## Deciding what a timeout means
+
+`HitlPolicy.on_timeout` is a pure function from `FallbackContext` to a route.
+
+<Example file="human_in_the_loop.py" region="policy" />
+
+| Route | Effect |
+|---|---|
+| `Deny(output=...)` | Emit deterministic bytes on `.output` and end the suspension. The default emits `b"__hitl_timeout__"`. |
+| `Drop(reason=...)` | Emit nothing; record the timeout on `.errors` as `hitl_timeout`. |
+| `Escalate(tool_name=..., timeout_ms=...)` | Stage a fresh approval intent on another channel and extend the deadline. |
+
+`Escalate` is bounded by `HitlPolicy.max_escalations`, which defaults to `0`.
+An unbounded escalate loop would be a fail-*open* hole — the entire point of
+the timer is that the wait ends.
+
+## Why the policy must be pure
+
+The policy runs inside a timer callback, and a timer callback re-executes when
+its bundle is retried. A policy that read a clock, called the model, or
+generated unseeded randomness would reach a different decision on the retry
+than it did the first time.
+
+So every value the policy could need is carried on the `FallbackContext`: the
+suspended `seq`, the persisted snapshot, the `deadline_ms` that elapsed, the
+timer's `fired_at_ms`, and the `pending_intent_ids` nothing ever answered. It
+must also be picklable — a module-level function, never a lambda or a closure —
+because the DoFn holds the policy and serializes it for the runner.
+
+## Failing closed at both layers
+
+Layer 1 is the timer above. Layer 2 is the effector refusing any intent past
+its `expires_at_ms`, so a late approval cannot cause an effect after the
+runtime has already given up. `refuse_expired` treats a non-positive expiry as
+**expired**, never as unbounded.
+
+<HitlFailClosed />
+
+The two guards run in different processes and read different fields, which is
+what makes them two layers rather than one rule applied twice. Layer 1 decides
+whether a suspension may resume; layer 2 decides whether an effect may happen at
+all, and it decides it *before* the dedup store is touched, so an outage there
+cannot turn a deadline into an unbounded wait.
+
+A result or approval that arrives with no live continuation is dropped to
+`.errors` as `orphaned_result`, with a detail naming why: `no_continuation`,
+`unknown_intent`, `deadline_passed`, or `intent_expired`.
+
+## Related
+
+- [Human in the loop](/examples/human-in-the-loop) — the runnable program whose
+  regions are embedded above.
+- [Correctness invariant 6](/learn/correctness-invariants) — the fail-closed rule.
+- [The errors output](/docs/errors) — where timeouts and orphans land.

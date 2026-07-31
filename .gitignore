@@ -46,9 +46,26 @@ bench-report.md
 # is named here; a custom one is the caller's to manage.
 compose-diagnostics/
 
+# Documentation site (Node). `website/pnpm-lock.yaml` and
+# `website/generated/` stay tracked: the lockfile pins the toolchain and the
+# generated API reference is drift-checked against the package in CI.
+website/node_modules/
+website/.next/
+website/.next-build/
+website/out/
+website/next-env.d.ts
+website/.search-index.json
+website/tsconfig.tsbuildinfo
+
 # e2e gate runtime artifacts (spool segments, worker logs, thread dumps).
 # The directory itself is committed (.gitkeep): the compose bind mount must
 # exist in a fresh checkout, or docker creates it root-owned on Linux CI
 # runners and the host-side harness cannot write the run spool.
 docker/e2e-spool/*
 !docker/e2e-spool/.gitkeep
+
+# Scratch worktrees created by the agent harness when it runs work in
+# isolation. Transient by construction — each one is a checkout of a branch
+# that already lives in .git, so committing them would vendor the repository
+# into itself.
+.claude/worktrees/

@@ -1,0 +1,59 @@
+---
+title: LLM replay cache
+summary: Keyed-state memoization of model calls — what makes a bundle retry cost zero additional provider calls.
+status: stable
+order: 7
+verifies:
+  - spec: openspec/specs/llm-replay-cache/spec.md
+  - test: tests/model/test_replay_cache_hits.py
+---
+
+Beam retries bundles. That is how it recovers from a worker dying, and it is
+not optional. Without a cache, every retry re-issues every model call the
+activation had already made: the same work is paid for twice, and — worse — the
+second run can take a different path, because a model asked the same question
+twice does not have to answer it the same way.
+
+The replay cache removes both problems by memoizing model responses in keyed
+state, scoped to the activation that made them.
+
+## The key
+
+`compute_cache_key(model_id, messages, tools_schema, sampling_params, entity_key, seq)`
+is the sha256 of a canonical JSON encoding of all six components: sorted keys,
+compact separators, `entity_key` hex-encoded, NaN and Infinity rejected.
+
+Two properties follow, and both are specified rather than incidental. Logically
+equal requests hash identically regardless of the dict insertion order they were
+built with — otherwise a cache hit would depend on the order a caller happened
+to populate a dictionary. And changing any single component changes the key, so
+a cache entry can never serve a request that differs from the one that produced
+it.
+
+Including `entity_key` and `seq` scopes each entry to one activation of one key.
+The cache is a replay mechanism, not a cross-user response store: two entities
+asking the same question get two provider calls, which is the correct and the
+private answer.
+
+## The bounds
+
+Per-key state that grows without limit is a production incident waiting for
+enough traffic, so every dimension is capped:
+
+- entries expire six hours after creation;
+- the cache holds at most 64 entries, evicted in LRU order;
+- the serialized blob never exceeds 100 KiB — an oversized response degrades to
+  a digest-only entry rather than being stored or silently dropped.
+
+Degrading to digest-only is the interesting case: the entry still proves *what*
+the provider returned, so a replay can detect divergence, even when the payload
+was too large to keep.
+
+## Related
+
+- [Model facade](/specs/model-facade) — where the lookup happens, before the breaker.
+- [Correctness invariants](/learn/correctness-invariants) — invariant 3, stated in full.
+- [State and memory](/learn/state-and-memory) — the other keyed-state blob.
+- [Wire schemas](/specs/wire-schemas) — `LlmCacheBlob`, the stored form.
+
+<Spec capability="llm-replay-cache" />

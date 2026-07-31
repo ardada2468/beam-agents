@@ -453,6 +453,7 @@ dev = [
     { name = "testcontainers", extra = ["redis"] },
     { name = "towncrier" },
     { name = "types-protobuf" },
+    { name = "types-pyyaml" },
 ]
 docs = [
     { name = "mkdocs-material" },
@@ -493,6 +494,7 @@ test = [
 typecheck = [
     { name = "mypy" },
     { name = "types-protobuf" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
@@ -548,6 +550,7 @@ dev = [
     { name = "testcontainers", extras = ["kafka", "redis"] },
     { name = "towncrier", specifier = ">=23.11" },
     { name = "types-protobuf" },
+    { name = "types-pyyaml" },
 ]
 docs = [{ name = "mkdocs-material", specifier = ">=9,<10" }]
 integration = [
@@ -582,6 +585,7 @@ test = [
 typecheck = [
     { name = "mypy" },
     { name = "types-protobuf" },
+    { name = "types-pyyaml" },
 ]
 
 [[package]]
@@ -5578,6 +5582,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/29/59/e2b13b499d15e6720150c4b1a8d91e31fcacf716b432397475b3151ff7e4/types_protobuf-7.34.1.20260518.tar.gz", hash = "sha256:28cfaded25889cb83ebfb63cfb0a43628f0b6f3785767bec17287dc6468795f2", size = 68936, upload-time = "2026-05-18T06:01:47.332Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/1f/ec5caf72c2e3b688ca3927e0979a04ddad19e1afc4bf1c199bd743e0f419/types_protobuf-7.34.1.20260518-py3-none-any.whl", hash = "sha256:a0a5337413347166439c0e07cbc26c6164d091401c6f01b1dfd8cdb966c4dd8f", size = 85992, upload-time = "2026-05-18T06:01:45.696Z" },
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20260724"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/6f/a28f44bcd56bebed42b028a2894c79853e2f5e6b5279e633cb3f287a05e7/types_pyyaml-6.0.12.20260724.tar.gz", hash = "sha256:3c1ce1bb73cd5ec02e90390c2b1f00e810d241d8825fd73ff359696839271b6b", size = 17893, upload-time = "2026-07-24T04:58:43.453Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8b/42/0337fefc615e20ee55d1c8f71b774a9b2b734a04669139c20753b27a2a3a/types_pyyaml-6.0.12.20260724-py3-none-any.whl", hash = "sha256:d57db930a4b2efbc57cf430ec8882765d246929432fa253092f383902329a453", size = 20312, upload-time = "2026-07-24T04:58:42.486Z" },
 ]
 
 [[package]]

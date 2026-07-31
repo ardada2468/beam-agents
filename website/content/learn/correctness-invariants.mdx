@@ -1,0 +1,365 @@
+---
+title: Correctness invariants
+summary: The seven rules the implementation is held to, what each one buys, and where each is tested.
+status: stable
+order: 4
+verifies:
+  - symbol: beam_agents.RunAgent
+  - module: src/beam_agents/core/dofn.py
+  - module: src/beam_agents/core/agent.py
+  - module: src/beam_agents/model/replay_cache.py
+  - module: src/beam_agents/hitl.py
+  - spec: openspec/specs/llm-replay-cache/spec.md
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/semantics/test_retry_determinism.py
+  - test: tests/semantics/test_effectively_once_e2e.py
+  - test: tests/semantics/test_hitl_fail_closed.py
+  - test: tests/core/test_dofn_commit.py
+  - test: tests/core/test_schema_compat.py
+  - example: four_outputs.py
+---
+
+These seven rules are treated as blocking defects when violated, not as design
+preferences. Each one is stated here with what it buys you and where it is
+tested, so you can check the claim rather than take it.
+
+## 1. Atomic commit
+
+State mutations and emitted outputs commit atomically with the Beam bundle.
+Every effect an agent produces — memory writes, cache inserts, intents, traces,
+outputs — is **staged** in the activation context and applied only on success.
+A failed or timed-out activation mutates nothing.
+
+{/*
+  The asymmetry between the two branches is the whole invariant, and prose
+  states it badly: a sentence can say "or none of it does", but only the
+  picture shows that the failure branch is not a smaller version of the success
+  branch — it writes nothing at all and emits two synthesized records that the
+  activation never staged. The two outcome boxes are drawn side by side at the
+  same width so the eye compares them directly.
+*/}
+
+<Diagram
+  title="How an activation commits"
+  desc="Five kinds of effect — memory writes, replay-cache inserts, intents, traces and outputs — are staged inside the activation context rather than written as the agent produces them. All five meet one all-or-nothing gate. If the activation returns, the runtime writes keyed state in a fixed order — memory, LLM cache, continuation, pending intents, then seq plus one — and emits on .output, .intents and .traces, including the activation's full set of trace spans. If it raises or times out, every staged effect is discarded: no keyed state is written, seq does not advance, and nothing reaches .output or .intents. The only two records that leave are one ActivationError on .errors and one ERROR event on .traces, both synthesized by the runtime from the key, the sequence number and the failure reason."
+  caption="Nothing is written as the agent produces it. Either everything the activation did lands together, or none of it does and the failure is visible only as the two records on the bottom row — never as a partial write."
+  viewBox="0 0 640 372"
+  minWidth={560}
+>
+  <DgText x={320} y={26} anchor="middle" variant="faint">{'STAGED IN THE ACTIVATION CONTEXT'}</DgText>
+  <DgNode x={56} y={36} w={104} h={28} label="memory writes" soft />
+  <DgNode x={172} y={36} w={150} h={28} label="replay-cache inserts" soft />
+  <DgNode x={334} y={36} w={76} h={28} label="intents" soft />
+  <DgNode x={422} y={36} w={70} h={28} label="traces" soft />
+  <DgNode x={504} y={36} w={80} h={28} label="outputs" soft />
+
+  {/* The collector rail carries no arrowhead: it groups, it does not flow. */}
+  <DgEdge
+    arrow={false}
+    d="M108,64 V80 M247,64 V80 M372,64 V80 M457,64 V80 M544,64 V80 M108,80 H544"
+  />
+  <DgEdge d="M320,80 V104" />
+
+  <DgNode x={230} y={104} w={180} h={56} label="commit gate" sub="ALL OR NOTHING" />
+
+  {/* Both branches leave the same point, so the split reads as one decision. */}
+  <DgEdge d="M320,160 V180 Q320,196 304,196 H180 Q164,196 164,212 V236" />
+  <DgText x={180} y={190} variant="faint">{'IF IT RETURNS'}</DgText>
+  <DgEdge d="M320,160 V180 Q320,196 336,196 H468 Q484,196 484,212 V236" />
+  <DgText x={340} y={190} variant="faint">{'IF IT RAISES OR TIMES OUT'}</DgText>
+
+  <DgNode
+    x={16}
+    y={236}
+    w={296}
+    h={48}
+    label="commit to keyed state"
+    sub="MEMORY LLM_CACHE CONTINUATION PENDING SEQ+1"
+  />
+  <DgEdge stream="output" d="M60,284 V308" />
+  <DgText x={60} y={322} anchor="middle" stream="output">{'.output'}</DgText>
+  <DgEdge stream="intents" d="M164,284 V308" />
+  <DgText x={164} y={322} anchor="middle" stream="intents">{'.intents'}</DgText>
+  <DgEdge stream="traces" d="M268,284 V308" />
+  <DgText x={268} y={322} anchor="middle" stream="traces">{'.traces'}</DgText>
+  <DgText x={268} y={336} anchor="middle" variant="faint">{'A FULL SPAN SET'}</DgText>
+
+  <DgNode
+    x={336}
+    y={236}
+    w={296}
+    h={48}
+    label="discard everything"
+    sub="NO STATE WRITTEN — SEQ DOES NOT ADVANCE"
+  />
+  <DgEdge stream="errors" d="M410,284 V308" />
+  <DgText x={410} y={322} anchor="middle" stream="errors">{'.errors'}</DgText>
+  <DgText x={410} y={336} anchor="middle" variant="faint">{'ONE ActivationError'}</DgText>
+  <DgEdge stream="traces" d="M558,284 V308" />
+  <DgText x={558} y={322} anchor="middle" stream="traces">{'.traces'}</DgText>
+  <DgText x={558} y={336} anchor="middle" variant="faint">{'ONE ERROR EVENT'}</DgText>
+  <DgText x={484} y={358} anchor="middle" variant="faint">{'NOTHING REACHES .output OR .intents'}</DgText>
+</Diagram>
+
+You can watch this from outside. In the four-outputs example one key raises
+after writing memory; that write never lands, and the activation's staged
+traces are discarded with it, leaving a single `ERROR` trace where a successful
+activation emits a full span set:
+
+<Example file="four_outputs.py" region="agent" />
+
+*Tested by* `tests/core/test_dofn_commit.py`.
+
+## 2. Deterministic intent IDs
+
+```
+intent_id = uuid5(NAMESPACE, f"{entity_key.hex()}|{seq}|{step_index}")
+```
+
+A pure function of the activation's position. Never a clock, never a counter,
+never randomness. A replayed bundle that walks the same path produces
+byte-identical intents, and the effector deduplicates on `intent_id`.
+
+**This is the entire effectively-once argument.** Not an at-least-once delivery
+guarantee plus hope — a deterministic identity that makes duplicate suppression
+a lookup.
+
+{/*
+  Two halves have to sit in one picture for the argument to close: the pipeline
+  re-mints the same id (the derivation, above), and the effector turns that id
+  into a claim with three outcomes (below). Drawn apart, a reader has to hold
+  the first half in their head while reading the second, and the usual failure
+  is to read "deterministic" as "unique" — which is the opposite of the point.
+  The retried-bundle box arrives at the derivation rather than branching off
+  `intent_id`, because a replay does not remember the id; it recomputes it from
+  the same three inputs.
+*/}
+
+<Diagram
+  title="Where an intent id comes from"
+  desc="An intent id is derived from three values that describe where the activation is, not when it ran: the entity key, seq (how many activations have committed for that key), and step_index (the position of this step inside the activation). They are formatted into the name entity_key.hex() pipe seq pipe step_index and hashed with uuid5 against a fixed namespace — a pure function with no clock, no counter and no randomness. A retried bundle for the same key, seq and step re-derives rather than remembers, so it produces byte-identical intents. The intent leaves on .intents through the outbox topic to the effector, which claims on the intent id and gets exactly one of three answers: Claimed, meaning it owns the execution and runs it once; InFlight, meaning another worker holds a live lease and it must wait; or Done, meaning a terminal record already exists, so it republishes the stored result and does not execute."
+  caption="Determinism is what makes duplicate suppression a lookup. Because the id is a function of position rather than time, the second delivery of the same work asks the same question and gets Done."
+  viewBox="0 0 640 472"
+  minWidth={560}
+>
+  <DgText x={320} y={26} anchor="middle" variant="faint">{'PURE INPUTS — WHERE THE ACTIVATION IS, NOT WHEN'}</DgText>
+  <DgNode x={73} y={36} w={130} h={40} label="entity_key.hex()" sub="THE BEAM KEY" soft />
+  <DgNode x={223} y={36} w={156} h={40} label="seq" sub="COMMITTED ACTIVATIONS" soft />
+  <DgNode x={399} y={36} w={168} h={40} label="step_index" sub="STEP IN THIS ACTIVATION" soft />
+  <DgEdge arrow={false} d="M138,76 V92 M301,76 V92 M483,76 V92 M138,92 H483" />
+  <DgEdge d="M320,92 V112" />
+
+  <DgNode
+    x={175}
+    y={112}
+    w={290}
+    h={40}
+    label={'"{entity_key.hex()}|{seq}|{step_index}"'}
+    sub="THE UUID5 NAME"
+    soft
+  />
+  <DgEdge d="M320,152 V176" />
+  <DgNode
+    x={175}
+    y={176}
+    w={290}
+    h={52}
+    label="uuid5(NAMESPACE, name)"
+    sub="NO CLOCK · NO COUNTER · NO RNG"
+  />
+
+  {/*
+    The retry arrives at the derivation, not at the id: a replayed bundle does
+    not carry the previous id forward, it recomputes one from the same three
+    inputs. Drawing it as a branch off `intent_id` would say the opposite.
+  */}
+  <DgText x={636} y={172} anchor="end" variant="faint">{'RE-DERIVED, NOT RECALLED'}</DgText>
+  <DgNode x={490} y={182} w={142} h={40} label="a retried bundle" sub="SAME KEY, SEQ, STEP" soft />
+  <DgEdge d="M490,202 H465" />
+
+  <DgEdge d="M320,228 V252" />
+  <DgNode x={175} y={252} w={290} h={52} label="intent_id" sub="BYTE-IDENTICAL ON A REPLAY" />
+
+  {/* Dashed: intents leave the pipeline through the bus, as on the landing page. */}
+  <DgEdge stream="intents" dashed d="M320,304 V344" />
+  <DgText x={332} y={320} stream="intents">{'.intents'}</DgText>
+  <DgText x={332} y={334} variant="faint">{'OUTBOX TOPIC'}</DgText>
+  <DgNode x={175} y={344} w={290} h={52} label="effector" sub="DEDUP BY INTENT_ID" />
+
+  <DgEdge arrow={false} d="M320,396 V410 M114,410 H526" />
+  <DgEdge d="M114,410 V420" />
+  <DgEdge d="M320,410 V420" />
+  <DgEdge d="M526,410 V420" />
+  <DgNode x={16} y={420} w={196} h={40} label="Claimed" sub="EXECUTES ONCE" soft />
+  <DgNode x={222} y={420} w={196} h={40} label="InFlight" sub="WAITS FOR THE OWNER" soft />
+  <DgNode x={428} y={420} w={196} h={40} label="Done" sub="REPUBLISHES, NO EXECUTION" soft />
+</Diagram>
+
+The id is computable ahead of time, which is how the re-injection example can
+name the intent it is about to receive a result for:
+
+<Example file="intents_and_resume.py" region="result" />
+
+*Tested by* `tests/semantics/test_retry_determinism.py` and
+`tests/semantics/test_effectively_once_e2e.py`.
+
+## 3. Replay cache
+
+Every model call is keyed by
+`sha256(model_id, canonical_json(messages), tools_schema, sampling_params, key, seq)`
+and cached in keyed state — LRU, 64 entries maximum, 6-hour TTL, 100 KiB blob
+cap.
+
+The property that matters: **a bundle retry incurs zero additional provider
+calls on the cached path.** Without it, a retried bundle would re-bill every
+model call in the activation and — worse — could take a different path if the
+model answered differently the second time.
+
+{/*
+  The claim only holds because the retry re-enters at the *key* computation, not
+  at the provider, so drawing the retry as an arrow back into the sha256 box is
+  what makes it legible: same six components in, same key out.
+
+  It has to stop there, though. A retry does not hit unconditionally — the
+  failed attempt's own cache insert was discarded with it (invariant 1), so the
+  hit exists only where an *earlier* activation with the same seq committed the
+  entry, which is why `tests/semantics/test_retry_determinism.py` builds the
+  scenario as a suspend/resume pair. The hit branch is annotated with that
+  precondition rather than left to read as "a retry never calls the provider",
+  which is the false version of this claim.
+*/}
+
+<Diagram
+  title="What a bundle retry costs on the cached path"
+  desc="A model call from inside the activation is turned into a cache key first: the sha256 of one canonical JSON document holding the model id, the messages, the tools schema, the sampling parameters, the entity key and seq. That key is looked up in the replay cache, which lives in keyed state and is bounded to 64 entries, a 6-hour TTL and a 100 KiB blob. A miss calls the provider and stages the response, which is committed to keyed state with the rest of the activation. A hit returns the stored response and makes no provider call. A retried bundle issues the same request for the same key and seq, so it recomputes the same cache key. Where that entry was already committed — by an earlier activation at the same seq, which is the cached path — the lookup hits and the provider is not called again."
+  caption="The retry re-enters at the key computation, not at the provider: same six components, same sha256. Where the entry was already committed, that second pass is a lookup rather than a call."
+  viewBox="0 0 640 404"
+  minWidth={560}
+>
+  <DgNode x={190} y={24} w={260} h={44} label="ctx.call_model(...)" sub="INSIDE THE ACTIVATION" />
+  <DgEdge d="M320,68 V92" />
+  <DgNode
+    x={170}
+    y={92}
+    w={300}
+    h={52}
+    label="sha256(canonical json)"
+    sub="MODEL MESSAGES TOOLS PARAMS KEY SEQ"
+  />
+
+  <DgText x={632} y={90} anchor="end" variant="faint">{'SAME REQUEST'}</DgText>
+  <DgNode x={486} y={98} w={146} h={40} label="the bundle retries" sub="SAME KEY, SAME SEQ" soft />
+  <DgEdge d="M486,118 H470" />
+
+  <DgEdge d="M320,144 V168" />
+  <DgNode x={170} y={168} w={300} h={52} label="replay cache" sub="IN KEYED STATE" />
+  <DgText x={480} y={190} variant="faint">{'LRU · 64 ENTRIES'}</DgText>
+  <DgText x={480} y={204} variant="faint">{'6h TTL · 100 KiB CAP'}</DgText>
+
+  <DgEdge d="M320,220 V240 Q320,256 304,256 H181 Q165,256 165,272 V280" />
+  <DgText x={190} y={250} variant="faint">{'HIT'}</DgText>
+  <DgNode x={40} y={280} w={250} h={44} label="cached response" sub="NO PROVIDER CALL" />
+  <DgText x={165} y={342} anchor="middle" variant="faint">{'WHERE A RETRY LANDS —'}</DgText>
+  <DgText x={165} y={356} anchor="middle" variant="faint">{'IF THE ENTRY ALREADY COMMITTED'}</DgText>
+
+  <DgEdge d="M320,220 V240 Q320,256 336,256 H459 Q475,256 475,272 V280" />
+  <DgText x={350} y={250} variant="faint">{'MISS'}</DgText>
+  <DgNode x={350} y={280} w={250} h={44} label="call the provider" sub="THEN STAGE THE RESULT" />
+
+  {/*
+    The return runs down the far-left margin rather than straight up: a vertical
+    at the cache's own x would cut through the hit node, and a line crossing a
+    box reads as passing through it.
+  */}
+  <DgEdge d="M475,324 V374 Q475,390 459,390 H36 Q20,390 20,374 V210 Q20,194 36,194 H170" />
+  <DgText x={40} y={384} variant="faint">{'STAGED — COMMITTED WITH THE BUNDLE'}</DgText>
+</Diagram>
+
+*Tested by* `tests/model/test_replay_cache_hits.py` and the retry-determinism
+gate, which asserts zero extra `FakeLLM` calls under forced bundle retries.
+
+## 4. Per-key serialization
+
+Beam stateful DoFns process one element at a time per key. Memory is race-free
+by construction — not by locking, and not by careful ordering in the agent
+code. Cross-key parallelism comes from the runner.
+
+The consequence for you: never introduce cross-key shared mutable state. The
+only sanctioned exceptions are documented worker-local singletons (circuit
+breakers, the vLLM sidecar via `beam.utils.shared.Shared`).
+
+## 5. Side effects only via intents
+
+Calling a `side_effect=True` tool directly raises. `ctx.act(...)` is the only
+effect path. External writes never execute inside the pipeline.
+
+<Example file="read_only_tools.py" region="refusal" />
+
+There is one documented exception: idempotent upserts to the long-term
+`MemoryStore`, keyed by `(key, seq)`.
+
+*Tested by* `tests/tools/test_side_effect_guard.py`.
+
+## 6. Timeouts fail closed at both layers
+
+A pending approval that never arrives has to end, and it has to end without
+letting a late answer cause an effect afterwards. Two independent guards:
+
+- **Layer 1, in-pipeline.** The `HITL_TIMER` fires and the policy's route runs
+  — `Deny`, `Drop`, or `Escalate`.
+- **Layer 2, in the effector.** An intent past its `expires_at_ms` is refused
+  rather than executed. A non-positive expiry reads as *expired*, never as
+  unbounded: the safe reading of "no expiry recorded" is "do not execute".
+
+Late results that find no live continuation are dropped to `.errors` as
+`orphaned_result`.
+
+<Example file="human_in_the_loop.py" region="policy" />
+
+The routing function must be pure, synchronous, and picklable. That is a
+correctness requirement: a timer callback re-executes when its bundle is
+retried, and a fallback that read a clock or called the model would make the
+retry diverge from the original. Every value the policy could need is carried
+on the `FallbackContext`.
+
+*Tested by* `tests/semantics/test_hitl_fail_closed.py`.
+
+## 7. State is protobuf, never pickle
+
+All keyed state is protobuf with deterministic encoding. Pickle would make
+pipeline `--update` compatibility impossible to reason about and would tie the
+wire format to a Python version.
+
+The upgrade rule follows from it: **additive proto changes only**. A breaking
+change requires a `state_schema_version` bump, lazy migration, and a
+golden-blob compatibility test.
+
+*Tested by* `tests/core/test_schema_compat.py` and
+`tests/core/test_coders.py`.
+
+## How these are gated
+
+The invariants are not checked by review alone. The repository runs a
+`semantics` test tier specifically for them — retry determinism under a chaos
+wrapper that forces bundle retries, effectively-once end to end against real
+Kafka/Redis/Flink with SIGKILLed effector workers and a killed TaskManager, and
+state compatibility against golden blobs. That tier gates every release and is
+never skipped or marked flaky.
+
+See [testing and CI](/docs/testing-and-ci) for how the tiers are split and what
+runs where.
+
+## Watch them hold
+
+Each invariant above is illustrated with a region of a real program. Those
+programs run offline on the DirectRunner, so the quickest way to check a claim
+is to run the one that demonstrates it:
+
+- [The four outputs](/examples/four-outputs) — invariant 1, with one key that
+  raises so you can watch the discard.
+- [Intents and resume](/examples/intents-and-resume) — invariant 2, naming an
+  intent id before the pipeline runs.
+- [The fast path](/examples/fast-path) — invariants 3 and 4 on the simplest
+  possible activation.
+- [Human in the loop](/examples/human-in-the-loop) — invariant 6, fail-closed
+  at both layers.

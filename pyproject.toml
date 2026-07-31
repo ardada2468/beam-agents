@@ -165,6 +165,8 @@ lint = [
 typecheck = [
   "mypy",
   "types-protobuf",
+  # `scripts/_docs_content.py` parses page frontmatter with PyYAML.
+  "types-PyYAML",
 ]
 integration = [
   "testcontainers[kafka,redis]",
@@ -367,6 +369,10 @@ python_version = "3.11"
 # `examples` and `benchmarks` are held to the same strict bar as `src` (see the
 # slack-approval change, tasks 8.1) even though they ship outside the wheel.
 files = ["src", "tests", "examples", "benchmarks"]
+# The documentation-site fidelity checks live in `scripts/` (they import
+# `beam_agents`, so they cannot live under `website/`). `tests/docs/` imports
+# them, so mypy has to be able to resolve them.
+mypy_path = "scripts"
 enable_error_code = ["ignore-without-code"]
 warn_unreachable = true
 

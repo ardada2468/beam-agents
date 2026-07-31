@@ -1,0 +1,141 @@
+/*
+ * Page chrome.
+ *
+ * The landing page established this site's visual language — a full-width
+ * `.shell`, hairline rules doing the dividing, small mono eyebrows, and no
+ * cards or shadows anywhere. Every other page was built before that language
+ * existed and reached for the generic docs-site idiom instead: rounded bordered
+ * cards, a narrower centred column, filled pills, a drop-shadowed popover.
+ * Walking from the landing page into the docs looked like walking into a
+ * different site.
+ *
+ * These classes are that language, named, so the rest of the site can use it
+ * rather than re-deriving it inline. Everything is token-driven and radius is
+ * capped at 2px, which is the landing page's own limit.
+ */
+
+/* The reading column. `.shell` is the full page width; this is the measure. */
+.shell-narrow {
+  max-width: 54rem;
+  margin-inline: auto;
+  padding-inline: clamp(1.15rem, 4vw, 3rem);
+}
+
+/* A page's own <h1>. One step below the landing page's `.display`. */
+.h-page {
+  font-size: clamp(1.85rem, 3.4vw, 2.5rem);
+  line-height: 1.06;
+  font-weight: 600;
+  letter-spacing: -0.028em;
+  text-wrap: balance;
+}
+
+/*
+ * A list of links where a card list used to be.
+ *
+ * A bordered card says "these items are separate objects". A hairline says
+ * "these are rows of one thing", which is what a section index actually is.
+ */
+.list-rule {
+  border-top: 1px solid var(--rule);
+}
+
+.list-rule > li {
+  border-bottom: 1px solid var(--rule);
+  padding-block: 0.95rem;
+}
+
+/*
+ * A flat block for content that genuinely needs a container — a provenance
+ * footer, a note. Distinguished by ground colour and a hairline, never by a
+ * radius or a shadow.
+ */
+.panel {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 1rem 1.15rem;
+}
+
+/* The same thing, but attached to the content above it by a single rule. */
+.panel--flush {
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 1.1rem 0 0;
+}
+
+/*
+ * A small standing token: a status, a kind, a count. Flat and outlined, so it
+ * reads as a label rather than as a button someone forgot to wire up.
+ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 0.28rem 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* Text inputs, matching the flat bordered controls in the header. */
+.field {
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule-2);
+  border-radius: 2px;
+  padding: 0.4rem 0.6rem;
+}
+
+.field::placeholder {
+  color: var(--ink-3);
+}
+
+.field:hover {
+  border-color: var(--ink-3);
+}
+
+/*
+ * The two button weights the landing page uses, named so they stop being
+ * retyped as inline styles on every call site.
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.93rem;
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 0.68rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn--primary {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.btn--secondary {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--rule-2);
+}
+
+.btn--secondary:hover {
+  border-color: var(--ink);
+}

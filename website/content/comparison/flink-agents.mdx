@@ -1,0 +1,238 @@
+---
+title: Compared with Apache Flink Agents
+summary: A sourced comparison with the closest comparable project — including the several rows where nothing is established.
+status: stable
+order: 1
+verifies:
+  - symbol: beam_agents.RunAgent
+  - module: src/beam_agents/core/dofn.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/semantics/test_effectively_once_e2e.py
+  - test: tests/core/test_transform.py
+sources:
+  - claim: Apache Flink Agents is an Agentic AI framework based on Apache Flink, licensed Apache-2.0, supporting Java and Python 3.10-3.12.
+    url: https://github.com/apache/flink-agents
+    retrieved: 2026-07-30
+  - claim: Flink Agents attaches an agent to a stream via AgentsExecutionEnvironment.from_datastream(input, key_selector).apply(agent).to_datastream(), and the input DataStream must be a KeyedStream or a KeySelector must be provided.
+    url: https://nightlies.apache.org/flink/flink-agents-docs-main/docs/development/integrate_with_flink/
+    retrieved: 2026-07-30
+  - claim: The Flink Agents documentation organizes memory into Sensory & Short-Term Memory and Long-Term Memory sections, and documents Tool Use and MCP. The current development version is v0.3-SNAPSHOT, with v0.2 and v0.3 released.
+    url: https://nightlies.apache.org/flink/flink-agents-docs-main/
+    retrieved: 2026-07-30
+  - claim: Apache Flink Agents announced its 0.1.0 release on 15 October 2025.
+    url: https://flink.apache.org/2025/10/15/apache-flink-agents-0.1.0-release-announcement/
+    retrieved: 2026-07-30
+---
+
+Apache Flink Agents is the closest comparable project, and `beam-agents`'
+own project context names it as the direct competitor. This page compares the
+two as carefully as the available evidence allows — which means several rows
+below read **Not established**.
+
+<Callout title="How to read this page">
+Every claim about Flink Agents carries a dated citation, listed at the bottom.
+Every claim about `beam-agents` names a spec or a test you can run. A cell with
+neither reads &ldquo;Not established&rdquo; — that is a statement that this
+page&rsquo;s author did not verify it, not that the answer is no.
+</Callout>
+
+## The honest headline
+
+Both projects put an AI agent inside a streaming pipeline as a keyed operator,
+and both require the input to be keyed. The difference a reader is most likely
+to care about is the substrate: Flink Agents is a sub-project of Apache Flink
+and targets Flink; `beam-agents` targets Apache Beam and therefore aims at
+runner portability, including Dataflow as a managed service.
+
+The other difference is maturity, and it does not favor this project. Flink
+Agents has published releases; `beam-agents` declares version `0.0.0` and has
+published none.
+
+{/*
+  One row of the table below, and only one, is drawn.
+
+  Substrate is the only axis where both sides are established: the right-hand
+  stack is exactly the sourced claim "Apache Flink Agents is an Agentic AI
+  framework based on Apache Flink", and the left-hand stack is the `Substrate`
+  row's own backing test. Everything else on this page — side effects, memory,
+  human-in-the-loop — has an empty cell on one side, and a picture cannot draw
+  "Not established" without inventing it. So it stays in the table.
+
+  The asymmetry at the bottom is the content, not an unfinished drawing. The
+  right stack ends at its engine; the left one fans out, with Spark's connector
+  stopping short because no test in this repository runs against it.
+*/}
+
+<Diagram
+  title="What each project runs on"
+  desc="Two stacks, compared on substrate only. On the left, an agent runs under beam-agents, which targets Apache Beam; Beam in turn fans out to DirectRunner, Flink and Dataflow. Spark hangs below the end of that fan with no connector at all, because no test in this repository runs against it. On the right, an agent runs under Apache Flink Agents, which targets Apache Flink; that stack ends there. No other row of the comparison table is drawn."
+  caption="Only the substrate row is drawn, because it is the row a citation establishes on both sides. Side effects, memory and human-in-the-loop stay in the table — including the rows that read Not established."
+  viewBox="0 0 600 476"
+  minWidth={592}
+>
+  {/* ---- left stack: this project ---- */}
+  <DgNode x={16} y={48} w={304} h={44} label="your agent" />
+  <DgEdge d="M 168,92 V 108" />
+  <DgNode x={16} y={112} w={304} h={44} label="beam-agents" />
+  <DgEdge d="M 168,156 V 172" />
+  <DgNode x={16} y={176} w={304} h={44} label="Apache Beam" />
+  {/*
+    The fan-out is the left stack's whole point, so it gets a proper spine
+    down the left gutter with one drop per runner. The spine carries no
+    arrowhead — it is a rail, not a flow.
+
+    It stops at the third drop. Spark hangs below the end of the spine with no
+    connector and a visible gap, because no test in this repository runs
+    against it; a fourth drop, even a short one, reads as a connection.
+  */}
+  <DgEdge d="M 168,220 V 236 H 36 V 364" arrow={false} />
+  <DgEdge d="M 36,268 H 54" />
+  <DgEdge d="M 36,316 H 54" />
+  <DgEdge d="M 36,364 H 54" />
+  <DgNode x={56} y={248} w={264} h={40} label="DirectRunner" />
+  <DgNode x={56} y={296} w={264} h={40} label="Flink" />
+  <DgNode x={56} y={344} w={264} h={40} label="Dataflow" />
+  <DgNode x={56} y={408} w={264} h={40} soft label="Spark" sub="NOT EXERCISED" />
+  {/* The two stacks are alternatives, so nothing crosses this rule. */}
+  <DgEdge d="M 336,36 V 456" arrow={false} />
+  {/* ---- right stack: the comparable project, drawn to its sourced depth ---- */}
+  <DgNode x={352} y={48} w={232} h={44} label="your agent" />
+  <DgEdge d="M 468,92 V 108" />
+  <DgNode x={352} y={112} w={232} h={44} label="Apache Flink Agents" />
+  <DgEdge d="M 468,156 V 172" />
+  <DgNode x={352} y={176} w={232} h={44} label="Apache Flink" />
+</Diagram>
+
+## Comparison
+
+<ClaimTable
+  columns={['beam-agents', 'Apache Flink Agents']}
+  caption="Rows marked Not established were not verified from a citable source at the retrieval date shown below."
+  rows={[
+    {
+      aspect: 'Governance',
+      cells: [
+        { text: 'Independent project, Apache-2.0 licensed, built on Apache Beam. Not an ASF project.', backing: 'pyproject.toml' },
+        { text: 'A sub-project developed under the Apache Flink umbrella, Apache-2.0 licensed.', source: 'https://github.com/apache/flink-agents' },
+      ],
+    },
+    {
+      aspect: 'Substrate',
+      cells: [
+        { text: 'Apache Beam. Exercised on DirectRunner and Flink per PR, Dataflow nightly; Spark not exercised.', backing: 'tests/conformance/test_direct.py' },
+        { text: 'Apache Flink.', source: 'https://github.com/apache/flink-agents' },
+      ],
+    },
+    {
+      aspect: 'Languages',
+      cells: [
+        { text: 'Python only for v0.x. Wire schemas are protobuf, so cross-language stays possible.', backing: 'pyproject.toml' },
+        { text: 'Java and Python 3.10-3.12.', source: 'https://github.com/apache/flink-agents' },
+      ],
+    },
+    {
+      aspect: 'Attaching an agent',
+      cells: [
+        { text: 'events | RunAgent(agent, config=AgentConfig(...)) over a pre-keyed PCollection[KV[bytes, AgentEnvelope]]; unkeyed input raises at construction time.', backing: 'tests/core/test_transform.py' },
+        { text: 'from_datastream(input, key_selector).apply(agent).to_datastream(); the input must be a KeyedStream or carry a KeySelector.', source: 'https://nightlies.apache.org/flink/flink-agents-docs-main/docs/development/integrate_with_flink/' },
+      ],
+    },
+    {
+      aspect: 'Released versions',
+      cells: [
+        { text: 'None. Declared version 0.0.0, not published to any registry.', backing: 'pyproject.toml' },
+        { text: '0.1.0 announced October 2025; v0.2 and v0.3 documented, with v0.3-SNAPSHOT current in development.', source: 'https://flink.apache.org/2025/10/15/apache-flink-agents-0.1.0-release-announcement/' },
+      ],
+    },
+    {
+      aspect: 'Side-effect model',
+      cells: [
+        { text: 'Effects never run in the pipeline. The agent stages a ToolIntent with a deterministic id (uuid5 over key|seq|step_index); an external effector deduplicates on it and executes.', backing: 'tests/semantics/test_effectively_once_e2e.py' },
+        null,
+      ],
+    },
+    {
+      aspect: 'Duplicate-effect guarantee',
+      cells: [
+        { text: 'Duplicates bounded to the crash window between a tool effect and its durable completion record; true exactly-once requires tools idempotent on intent_id. Gated end to end with SIGKILLed workers.', backing: 'tests/semantics/test_effectively_once_e2e.py' },
+        null,
+      ],
+    },
+    {
+      aspect: 'Human-in-the-loop',
+      cells: [
+        { text: 'Approval intents plus a fail-closed timeout at two layers: an in-pipeline timer routing Deny/Drop/Escalate, and effector-side refusal of expired intents.', backing: 'tests/semantics/test_hitl_fail_closed.py' },
+        null,
+      ],
+    },
+    {
+      aspect: 'Memory',
+      cells: [
+        { text: 'Working memory in Beam keyed state: scalars and bounded rings, 100 KiB blobs, 1 MiB soft cap per key, event-time TTL GC. No long-term store is implemented.', backing: 'openspec/specs/memory-facade/spec.md' },
+        { text: 'Documentation organizes memory into Sensory & Short-Term Memory and Long-Term Memory.', source: 'https://nightlies.apache.org/flink/flink-agents-docs-main/' },
+      ],
+    },
+    {
+      aspect: 'Tool and MCP support',
+      cells: [
+        { text: 'A @tool registry with a side_effect flag; read-only tools run inline, side-effecting ones only via intents. Read-only MCP is described in the module map but is not implemented.', backing: 'openspec/specs/tool-registry/spec.md' },
+        { text: 'Documents Tool Use and MCP sections.', source: 'https://nightlies.apache.org/flink/flink-agents-docs-main/' },
+      ],
+    },
+    {
+      aspect: 'Bring-your-own agent framework',
+      cells: [
+        { text: 'Adapter-based, targeting a structural protocol. LangGraph is implemented; ADK and Pydantic AI are roadmap only.', backing: 'tests/adapters/test_e2e_pipeline.py' },
+        null,
+      ],
+    },
+    {
+      aspect: 'Model-call replay behavior',
+      cells: [
+        { text: 'Every model call is cached in keyed state, keyed on the request plus (key, seq). A bundle retry incurs zero additional provider calls on the cached path.', backing: 'openspec/specs/llm-replay-cache/spec.md' },
+        null,
+      ],
+    },
+    {
+      aspect: 'Published performance figures',
+      cells: [
+        { text: 'None. A design budget exists for runtime overhead but no benchmark harness exists in the repository, so no measurement is published.', backing: 'openspec/project.md' },
+        null,
+      ],
+    },
+  ]}
+/>
+
+## About the empty cells
+
+Six rows have no Flink Agents entry. That is a limitation of this page, and
+worth being precise about: the documentation pages consulted at the date below
+covered integration, memory organization, and tool/MCP support, but the pages
+this author reached did not state a side-effect execution model, a duplicate
+suppression guarantee, or human-in-the-loop semantics in terms that could be
+quoted.
+
+This project's own internal notes assert that Flink Agents uses inline durable
+execution where `beam-agents` uses an outbox. **That assertion is not repeated
+as fact here**, because it could not be substantiated from a citable source at
+the retrieval date. If you are choosing between the two on that axis, read
+their documentation directly rather than trusting either project's
+characterization of the other.
+
+## What is genuinely different
+
+Setting aside what is unverified, two differences are solid:
+
+1. **Runner portability versus a single engine.** Targeting Beam means the same
+   pipeline can run on the DirectRunner, Flink, or Dataflow. Whether that is
+   worth anything depends entirely on whether you want to leave Flink.
+2. **Maturity, in Flink Agents' favor.** Released versions, an ASF community,
+   and Java support are real advantages over an unreleased single-language
+   project. If you need something in production this quarter, that difference
+   matters more than any architectural preference.
+
+## Related
+
+- [Compared with running a framework outside a runtime](/comparison/agent-framework-outside-a-runtime)
+- [Adapters](/comparison/adapters)
+- [Correctness invariants](/learn/correctness-invariants)
