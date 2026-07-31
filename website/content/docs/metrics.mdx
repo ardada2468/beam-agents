@@ -4,7 +4,11 @@ summary: The counters and distributions RunAgent publishes, the two identities w
 status: stable
 order: 2
 verifies:
+  - symbol: beam_agents.observability.metrics.ActivationTally
   - module: src/beam_agents/observability/metrics.py
+  - module: src/beam_agents/observability/otlp.py
+  - module: src/beam_agents/memory/facade.py
+  - module: src/beam_agents/core/dofn.py
   - module: docs/metrics.md
   - spec: openspec/specs/wire-schemas/spec.md
   - test: tests/observability/test_metrics.py
@@ -19,5 +23,157 @@ One thing to know before reading the tables: **Beam distributions carry no
 percentiles.** They report sum, count, min, and max, and Beam's histogram cell
 is marked internal-use-only, so a portable percentile is not available from
 this surface. Percentile work belongs to the trace sink.
+
+## Where each metric is recorded
+
+The reference below is a list of names. What a name cannot tell you is *when*
+it moves — and for these counters that is most of the story, because nearly all
+of them are recorded in one step at commit, from counts accumulated somewhere a
+Beam metric update would have been thrown away.
+
+{/*
+  The fact this diagram exists to make unmissable: a metric update made off the
+  Beam worker thread is silently discarded. Beam resolves a metric cell through
+  a thread-local state sampler, so an increment on the async bridge thread —
+  where every model call, tool call, and memory write in this runtime happens —
+  vanishes with no exception and no log. That is why there is an
+  `ActivationTally` at all, why the commit row is one wide block instead of a
+  metric hanging off each individual step, and why the OTLP exporter counts in
+  a `_SenderState` and records at `finish_bundle`.
+
+  Shape decisions:
+
+  - Authored at 620 user units wide, matching the ~630px docs article column.
+    A wider drawing would scroll on a 1440px screen or shrink its type below
+    legibility; going tall costs nothing.
+  - The bypass rail down the far left exists because a dead letter is an
+    *alternative* outcome for an element, reachable from admission (an orphaned
+    result), from the agent run (a failure or a timeout), and from either
+    timer — not a step that follows a commit. Drawing it in the chain would
+    have said something false.
+  - Namespaces are headers over their chips rather than a prefix on all
+    fourteen names: repeating `beam_agents.runtime` everywhere would bury the
+    two namespaces that are not it.
+*/}
+
+<Diagram
+  title="Where the runtime metrics are recorded"
+  desc="An activation's path runs down the left: admission, then running the agent on the async bridge thread, then commit on the Beam worker thread. A separate rail bypasses that chain down the far left and ends at a dead-letter box, fed from admission and from the agent run, because a dead letter is an alternative outcome reached by a refusal, a failure, a timeout, or a timer rather than a step after commit. To the right of each stage is what it records. Admission records nothing: a refused resume never runs the agent, so there is no sample at all. Running the agent records activation_ms in the beam_agents.runtime namespace on every exit including failures, and soft_cap_warnings in the beam_agents.memory namespace when working memory passes its soft cap; everything else it counts accumulates in an ActivationTally, a plain object with no Beam involvement, because a metric update made off the Beam worker thread is silently discarded with no exception and no log. Commit records the rest of beam_agents.runtime in one step: the counters activations, suspensions, intents_emitted, llm_calls and tool_calls, and the distributions memory_bytes, iterations, tokens, llm_ms and overhead_ms. One further intents_emitted increment comes from a human-in-the-loop escalation, which mints an intent outside the commit path. The dead-letter site records agent_errors and orphaned_results in beam_agents.runtime, and every record on the errors output passes through that one chokepoint. Off the activation path entirely, the OTLP trace sender thread counts spans_exported, spans_dropped, export_failures and batches_sent in the beam_agents.otlp namespace, and finish_bundle records them on the Beam thread under the same rule."
+  caption="Nearly every counter moves in a single step at commit, from counts accumulated in an ActivationTally during the run — because Beam resolves a metric cell through a thread-local state sampler, and an increment made on the async bridge thread is dropped with no exception and no log. Two namespaces sit outside beam_agents.runtime: beam_agents.memory for the working-memory soft cap, and beam_agents.otlp for trace delivery."
+  viewBox="0 0 620 764"
+  minWidth={560}
+>
+  {/* ---- the activation path, top to bottom ---- */}
+  <DgNode x={40} y={44} w={180} h={44} label="admission" sub="FAIL-CLOSED CHECK" />
+  <DgEdge d="M130,88 V114" />
+  <DgNode x={40} y={118} w={180} h={44} label="run the agent" sub="ASYNC BRIDGE THREAD" />
+  <DgEdge d="M130,162 V433" />
+  <DgNode x={40} y={437} w={180} h={44} label="commit" sub="BEAM WORKER THREAD" />
+
+  {/*
+    The bypass rail. It runs outside the stage column rather than through it,
+    because a dead letter is not what happens after a commit — it is what
+    happens instead of one. The open feeder from `run the agent` joins the same
+    rail, so the box has more than one reachable origin, which is the truth.
+
+    It arrives at the box's *left edge*, not its top: entering from above put
+    the rail's last leg straight through the "REFUSED · FAILED · TIMED OUT"
+    label, and there is nowhere else on this row for that label to go.
+  */}
+  <DgEdge d="M60,88 V100 H20 V622 H36" />
+  <DgEdge d="M80,162 V180 H20" arrow={false} />
+  <DgNode x={40} y={600} w={180} h={44} label="dead-letter" sub="ANY .errors RECORD" stream="errors" />
+  {/* Two lines, not one: the timer routes (`hitl_timeout`, `ttl_wiped_suspension`)
+      dead-letter without ever touching admission or the agent run, so leaving
+      them off the rail's label would under-report where `agent_errors` comes
+      from. A single line long enough to say it runs into the namespace header
+      at x=252. */}
+  <DgText x={40} y={576} variant="faint">REFUSED · FAILED · TIMED OUT,</DgText>
+  <DgText x={40} y={590} variant="faint">OR A TIMER FIRED</DgText>
+
+  {/* ---- admission: the absence is the point ---- */}
+  <DgEdge d="M220,66 H248" />
+  <DgNode
+    x={252}
+    y={44}
+    w={352}
+    h={44}
+    label="no sample"
+    sub="A REFUSED RESUME NEVER RUNS THE AGENT"
+    soft
+  />
+
+  {/* ---- the agent run: two namespaces, plus the tally that exists only
+          because Beam would have dropped these updates ---- */}
+  <DgEdge d="M220,140 H236" arrow={false} />
+  <DgEdge d="M236,140 V276" arrow={false} />
+  <DgEdge d="M236,140 H248" />
+  <DgEdge d="M236,211 H248" />
+  <DgEdge d="M236,276 H248" />
+
+  <DgText x={252} y={118} variant="faint">beam_agents.runtime</DgText>
+  <DgNode x={252} y={127} w={180} h={26} label="activation_ms" soft />
+  <DgText x={252} y={166} variant="faint">ON EVERY EXIT, INCLUDING FAILURES</DgText>
+
+  <DgText x={252} y={190} variant="faint">beam_agents.memory</DgText>
+  <DgNode x={252} y={198} w={180} h={26} label="soft_cap_warnings" soft />
+  <DgText x={252} y={238} variant="faint">WHEN WORKING MEMORY PASSES ITS SOFT CAP</DgText>
+
+  <DgNode
+    x={252}
+    y={254}
+    w={352}
+    h={44}
+    label="ActivationTally"
+    sub="EVERYTHING ELSE WAITS FOR THE BEAM THREAD"
+    soft
+  />
+  <DgText x={252} y={316} variant="faint">A METRIC UPDATE OFF THE BEAM THREAD IS DISCARDED</DgText>
+  <DgText x={252} y={330} variant="faint">WITH NO EXCEPTION AND NO LOG</DgText>
+
+  {/* ---- commit: five counters and five distributions, one step ---- */}
+  <DgEdge d="M220,459 H248" />
+  <DgText x={252} y={352} variant="faint">beam_agents.runtime</DgText>
+  <DgText x={337} y={374} anchor="middle" variant="faint">COUNTERS</DgText>
+  <DgText x={519} y={374} anchor="middle" variant="faint">DISTRIBUTIONS</DgText>
+
+  <DgNode x={252} y={382} w={170} h={26} label="activations" soft />
+  <DgNode x={252} y={414} w={170} h={26} label="suspensions" soft />
+  <DgNode x={252} y={446} w={170} h={26} label="intents_emitted" soft />
+  <DgNode x={252} y={478} w={170} h={26} label="llm_calls" soft />
+  <DgNode x={252} y={510} w={170} h={26} label="tool_calls" soft />
+
+  <DgNode x={434} y={382} w={170} h={26} label="memory_bytes" soft />
+  <DgNode x={434} y={414} w={170} h={26} label="iterations" soft />
+  <DgNode x={434} y={446} w={170} h={26} label="tokens" soft />
+  <DgNode x={434} y={478} w={170} h={26} label="llm_ms" soft />
+  <DgNode x={434} y={510} w={170} h={26} label="overhead_ms" soft />
+
+  <DgText x={252} y={560} variant="faint">ONE STEP, ON THE BEAM THREAD, AT COMMIT</DgText>
+  <DgText x={252} y={574} variant="faint">PLUS intents_emitted FROM A HITL ESCALATION</DgText>
+
+  {/* ---- the dead-letter chokepoint, which is what makes
+          `agent_errors + orphaned_results` equal the count on `.errors` ---- */}
+  <DgEdge d="M220,622 H236" arrow={false} />
+  <DgEdge d="M236,617 V649" arrow={false} />
+  <DgEdge d="M236,617 H248" />
+  <DgEdge d="M236,649 H248" />
+
+  <DgText x={252} y={596} variant="faint">beam_agents.runtime</DgText>
+  <DgNode x={252} y={604} w={180} h={26} label="agent_errors" soft />
+  <DgNode x={252} y={636} w={180} h={26} label="orphaned_results" soft />
+  <DgText x={452} y={622} variant="faint">EVERY .errors RECORD</DgText>
+  <DgText x={452} y={636} variant="faint">PASSES THROUGH HERE</DgText>
+
+  {/* ---- off the activation path: trace delivery, same thread rule ---- */}
+  <DgEdge d="M20,684 H604" arrow={false} />
+  <DgText x={20} y={708}>beam_agents.otlp</DgText>
+  <DgText x={20} y={722} variant="faint">THE traces_to SENDER THREAD COUNTS,</DgText>
+  <DgText x={20} y={736} variant="faint">finish_bundle RECORDS ON THE BEAM THREAD</DgText>
+  <DgNode x={356} y={696} w={120} h={26} label="spans_exported" soft />
+  <DgNode x={484} y={696} w={120} h={26} label="spans_dropped" soft />
+  <DgNode x={356} y={726} w={120} h={26} label="export_failures" soft />
+  <DgNode x={484} y={726} w={120} h={26} label="batches_sent" soft />
+</Diagram>
 
 <RepoDoc file="docs/metrics.md" />
