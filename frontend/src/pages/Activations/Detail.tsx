@@ -45,7 +45,12 @@ import {
   TileRow,
 } from '@/components/ui';
 import { ApiError, api, queryKeys } from '@/lib/api';
-import type { ActivationDetail, AttemptSummary, IntentSummary } from '@/lib/api-types';
+import type {
+  ActivationDetail,
+  ActivationSummary,
+  AttemptSummary,
+  IntentSummary,
+} from '@/lib/api-types';
 import {
   EM_DASH,
   formatBytes,
@@ -100,6 +105,26 @@ interface FailureItem {
   detail: string | null;
   atMs: number | null;
   position: FailurePosition;
+}
+
+/**
+ * Say why there is no wall time, rather than assuming one reason for all three.
+ *
+ * `wall_ms` is null in three distinct cases and they are not interchangeable.
+ * Only the first is a missing `ACTIVATION_END`; the common one is the second,
+ * where the END is recorded and the store still declines to report a duration.
+ * `ActivationTrace` holds a single injected clock read per attempt and stamps
+ * every event of that attempt with it (traces D7), so one attempt's START and
+ * END carry the identical timestamp — their difference is a number subtracted
+ * from itself, not a measured zero. Claiming "no ACTIVATION_END recorded yet"
+ * there contradicts the Events panel further down the same page, which lists
+ * the END that was recorded.
+ */
+function wallTimeMeta(summary: ActivationSummary): string {
+  if (summary.wall_ms !== null) return 'START → END clock delta';
+  if (summary.ended_ms === null) return 'no ACTIVATION_END recorded yet';
+  if (summary.attempts <= 1) return 'one attempt — a single clock read, nothing elapsed to measure';
+  return 'recorded end precedes start across attempts — not an elapsed time';
 }
 
 function failureItems(detail: ActivationDetail): FailureItem[] {
@@ -332,9 +357,7 @@ export default function ActivationDetailPage() {
         <StatTile
           label="Wall time"
           value={formatDuration(summary.wall_ms)}
-          meta={
-            summary.wall_ms === null ? 'no ACTIVATION_END recorded yet' : 'START → END clock delta'
-          }
+          meta={wallTimeMeta(summary)}
         />
         <StatTile
           label="Total tokens"
