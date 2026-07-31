@@ -69,7 +69,7 @@ The system SHALL map the YAML config surface onto `AgentConfig` as follows: `act
 
 ### Requirement: Input rows are keyed and enveloped; malformed rows dead-letter instead of crashing
 
-The transform SHALL accept a `PCollection` of schema'd rows and construct `RunAgent`'s `KV[bytes, AgentEnvelope]` input itself: the configured `key_field` (default `key`) supplies the entity key (a `str` key is UTF-8 encoded; `bytes` pass through), the configured `payload_field` (default `payload`) supplies the envelope's opaque `external_event` bytes, and `event_time_ms` comes from the configured `event_time_field` when set, else the element timestamp. An input row missing a configured field SHALL be routed to the `errors` output as a malformed-input record naming the missing field, and SHALL NOT fail the bundle.
+The transform SHALL accept a `PCollection` of schema'd rows and construct `RunAgent`'s `KV[bytes, AgentEnvelope]` input itself: the configured `key_field` (default `key`) supplies the entity key (a `str` key is UTF-8 encoded; `bytes` pass through), the configured `payload_field` (default `payload`) supplies the envelope's opaque `external_event` bytes, and `event_time_ms` comes from the configured `event_time_field` when set, else the element timestamp — with an element carrying Beam's unstamped sentinel (`MIN_TIMESTAMP`) mapped to `0` rather than to a pre-epoch value that would poison every derived timestamp. An input row missing a configured field SHALL be routed to the `errors` output as a malformed-input record naming the missing field, and SHALL NOT fail the bundle.
 
 #### Scenario: Rows are keyed and enveloped by the configured fields
 
@@ -83,7 +83,7 @@ The transform SHALL accept a `PCollection` of schema'd rows and construct `RunAg
 
 ### Requirement: The four outputs are addressable by name from YAML
 
-The transform SHALL expose its outputs under Beam YAML's multi-output convention with the names `output` (main), `intents`, `traces`, and `errors`, matching the `RunAgentOutputs` attribute names, so a downstream YAML transform can consume any of them by qualified name. Non-main outputs SHALL be schema'd rows: `traces` and `errors` via the existing `trace_event_to_row`/`activation_error_to_row` mappings, `intents` via an equivalent scalar-field mapping of `ToolIntent`, and `output` as rows carrying the entity key and the opaque output bytes. Configuring a sink URI SHALL NOT remove the corresponding named output.
+The transform SHALL expose its outputs under Beam YAML's multi-output convention with the names `output` (main), `intents`, `traces`, and `errors`, matching the `RunAgentOutputs` attribute names, so a downstream YAML transform can consume any of them by qualified name. Every output SHALL be schema'd rows: `traces` and `errors` via the existing `trace_event_to_row`/`activation_error_to_row` mappings, `intents` via an equivalent scalar-field mapping of `ToolIntent`, and `output` as rows carrying the opaque agent-output bytes. Configuring a sink URI SHALL NOT remove the corresponding named output.
 
 #### Scenario: A downstream step consumes a non-main output by name
 
@@ -94,6 +94,11 @@ The transform SHALL expose its outputs under Beam YAML's multi-output convention
 
 - **WHEN** an activation stages an intent and emits traces
 - **THEN** the `intents` output carries rows exposing the intent's scalar fields (including `intent_id`, `tool_name`, `args_json`) and the `traces` output carries rows in the existing trace-row shape, with no raw proto messages on any YAML-facing output
+
+#### Scenario: The main output carries no entity key
+
+- **WHEN** an activation completes and its output row is inspected
+- **THEN** the row carries the agent's opaque output bytes and no entity key, because the wrapped runtime's main output is an unkeyed `PCollection[bytes]`; a pipeline needing the key downstream carries it inside the agent's own output bytes
 
 #### Scenario: A configured sink leaves the named output addressable
 
@@ -107,7 +112,12 @@ The system SHALL run a complete Beam YAML pipeline document — declaring a prov
 #### Scenario: A YAML document drives an agent activation end to end
 
 - **WHEN** a YAML pipeline document whose transforms include `RunAgent` (mapped to `beam_agents.yaml.run_agent`, with `agent` referencing a test agent and `provider` referencing a module-level `FakeLLM` factory) is parsed and executed on DirectRunner
-- **THEN** the pipeline completes offline, the agent's output is observed on the `output` stream, and the `FakeLLM` recorded the model calls the agent made
+- **THEN** the pipeline completes offline, the agent's output is observed on the `output` stream, and the `FakeLLM` recorded the model calls the agent made — proven by a fail-closed script whose only rule matches the request the agent issues, so the served response could not appear otherwise
+
+#### Scenario: A bad reference in the document fails before the pipeline runs
+
+- **WHEN** the same document is expanded with an `agent` reference naming an uninstallable module
+- **THEN** expansion raises `ValueError` naming the module and pointing at the launch environment's install, and no pipeline is submitted
 
 #### Scenario: The documented example matches the shipped surface
 

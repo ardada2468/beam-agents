@@ -355,6 +355,14 @@ ignore_missing_imports = true
 module = "slack_sdk.*"
 ignore_missing_imports = true
 
+# PyYAML ships no type stubs and `types-PyYAML` is not in the locked typecheck
+# environment; the yaml-provider suites use it only to parse the documents they
+# assert on. Same relaxation as the other unstubbed dev-surface dependencies.
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
+follow_untyped_imports = true
+
 # The Firestore store's client is the optional `memory-stores` extra and is
 # absent from the `ci` lane where mypy runs, so `google.cloud.firestore` reads
 # as a missing attribute of the `google.cloud` namespace package, and its
@@ -505,6 +513,22 @@ disable_error_code = ["no-untyped-call", "type-arg"]
 
 [[tool.mypy.overrides]]
 module = "beam_agents.core.transform"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# The YAML provider wraps that same transform and drives the same Beam surface:
+# a DoFn with tagged outputs, ParDo/with_outputs/WithKeys/Map/Flatten, and
+# `beam.Row` — all untyped, over Beam's unparameterized PTransform/PCollection/
+# TaggedOutput generics. Same relaxation as core/transform.py; everything
+# non-Beam in the module (reference resolution, config mapping) stays strict.
+[[tool.mypy.overrides]]
+module = "beam_agents.yaml.transform"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation for the yaml-provider suites, which drive
+# TestPipeline/Create/Flatten/assert_that and the transform's PCollection-typed
+# seams directly, plus the offline document driver's Create/Row construction.
+[[tool.mypy.overrides]]
+module = "tests.yaml.*"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # Same Beam-untyped-API relaxation for the OTLP export DoFn/transform (ParDo,
