@@ -138,10 +138,10 @@ Work top to bottom. Phases 1–5 need only Docker. Phase 6 needs GCP. Phase 7 is
 - [x] 7.1 Configure and record: `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_DATAFLOW_TEMP_BUCKET`,
   `GCP_ARTIFACT_REGISTRY_REPO`, and Workload Identity Federation (or ADC for a local run). The
   nightly workflow gates on these being present.
-- [ ] 7.2 `make test-dataflow` — **2 `dataflow`-marked tests, never run.** Note this target has no
+- [x] 7.2 `make test-dataflow` — **2 `dataflow`-marked tests, never run.** Note this target has no
   exit-5 tolerance by design: an empty selection means the gate was deselected, not that it is
   pending.
-- [ ] 7.3 `tests/dataflow/test_update_compat.py` — launches a streaming pipeline at the previous
+- [x] 7.3 `tests/dataflow/test_update_compat.py` — launches a streaming pipeline at the previous
   released version with live keyed state (a suspended activation plus memory), `--update`s it to
   head, and asserts the continuation nonce, the memory marker, and a fresh key all survive.
   **Important caveat to record:** no version has been tagged yet (all three release gates are red),
@@ -152,9 +152,9 @@ Work top to bottom. Phases 1–5 need only Docker. Phase 6 needs GCP. Phase 7 is
   Verify the launcher resolves its provider API key from Secret Manager and that **no secret appears
   in the template parameters, the job options, or the logs** — that is a specified requirement of
   `add-dataflow-flex-template`, not an incidental check.
-- [ ] 7.5 Confirm teardown: the ledger and sweeper in `tests/dataflow/_update/resources.py` must
+- [x] 7.5 Confirm teardown: the ledger and sweeper in `tests/dataflow/_update/resources.py` must
   leave no job running, including if the phase failed. Record the sweeper's output as evidence.
-- [ ] 7.6 Record verdicts, the GCP project used, and the cost/duration observed.
+- [x] 7.6 Record verdicts, the GCP project used, and the cost/duration observed.
 
 ## 8. Phase 7 — optional tiers
 

@@ -230,7 +230,19 @@ def build_head_wheel_command(out_dir: Path) -> list[str]:
 
 
 def freeze_command(python: Path) -> list[str]:
-    return [str(python), "-m", "pip", "freeze"]
+    # `uv pip freeze --python`, NOT `<python> -m pip freeze`: the head leg's
+    # interpreter is the job's own uv-managed venv, and `uv sync` does not
+    # install `pip` into it. The nightly Dataflow job provisions with
+    # `uv sync --locked --group test --group integration --group bench`, so
+    # `-m pip` raised `No module named pip` and the gate died during
+    # provisioning — before launching any job, on both the bootstrap and
+    # cross-version paths. `uv build` is already used for the head wheel just
+    # above; this keeps the harness consistently uv-driven.
+    #
+    # `--python` makes this correct for the cross-version leg too, whose venv
+    # comes from `python -m venv` (and therefore does have pip): uv reads the
+    # target interpreter's environment either way.
+    return ["uv", "pip", "freeze", "--python", str(python)]
 
 
 def find_wheel(directory: Path, *, version: str) -> Path:

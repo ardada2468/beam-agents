@@ -44,6 +44,8 @@ four verdicts per design D2: `pass`, `fail (defect)`, `fail (infra)`, `blocked`.
 | 4 — mutation gate | `make mutation` | **fail (defect)** | Aborts in 7 s during baseline stats collection; 0 of ~900 mutants generated — see D-7. Task 5.2 undischargeable |
 | 5 — benchmarks | `make bench` | pass | all 5 dimensions written to `bench-results/` |
 | 5 — latency budget | `make bench-gate` | **pass (budget)** | p50 **2.1324 ms** (< 15 ms), p99 **9.3208 ms** (< 60 ms). Gate verdict FAIL is solely the 14 unseeded medians |
+| 6 — Dataflow `--update` gate | `make test-dataflow` | **pass** | 1 passed, 531.23 s (8 m 51 s), project `beamagents`, region `us-east1`. Predecessor `Updated`, successor `Cancelled`, 0 jobs left running |
+| 6 — Dataflow flex template | `tests/dataflow/test_flex_template_launch.py` | **blocked** | `BEAM_AGENTS_FLEX_TEMPLATE_SPEC` unset — needs the nightly template build/push step |
 | 5 — median seeding | — | **not seeded (host unqualified)** | Laptop running a 6-container Docker stack; see "Benchmark seeding" below |
 | 4 — full-lane coverage | `pytest -m "not semantics and not dataflow and not smoke and not spark" --cov` | pass (measured, **not seeded**) | 2028 passed, 2 failed (D-3), 150 s. Branch-rate **0.9358** vs baseline 0.9164. Baseline deliberately left unchanged — see D-6 |
 
@@ -498,6 +500,95 @@ release gate also depends on. The cold/warm correlation is established, but the 
 been proven to be the mechanism, and modifying a release gate's stack setup on an unproven hypothesis
 is not warranted. Recommended follow-up: either confirm the mechanism and add the restart, or document
 `make compose-down && make compose-up` as a precondition of a full matrix run.
+
+### D-11 — `beam_agents` was unimportable on a stock Dataflow worker (unbounded `protobuf`)
+
+**Found by:** task 7.2, the first-ever Dataflow launch. **Severity: highest of this run — a
+shipped-artifact defect.**
+
+Every SDK worker crashed on startup:
+
+```
+Error message from worker: generic::aborted: SDK harness sdk-0-0 disconnected.
+Could not load main session.
+  File ".../site-packages/beam_agents/_protos/beam_agents_pb2.py", line 12, in <module>
+google.protobuf.runtime_version.VersionError: Detected mismatched Protobuf Gencode/Runtime
+major versions ... gencode 6.33.5 runtime 5.29.5. Same major version is required.
+```
+
+**Root cause:** `pyproject.toml` declared a bare, unbounded `"protobuf"`. The committed `_pb2.py`
+bindings are 6.x gencode and protobuf requires gencode and runtime to share a **major** version. An
+unbounded requirement is satisfied by whatever is already installed, and
+`apache/beam_python3.11_sdk:2.72.0` — the base image Dataflow workers run — ships **5.29.5**. pip left
+it in place and the package could not be imported.
+
+**The project had already diagnosed this and fixed it in one place only.**
+`docker/sdk-harness.Dockerfile`'s header names this exact `VersionError` as one of two reasons that
+image is built rather than pulled, and pins `protobuf==6.33.6`. That protected the Flink harness.
+Dataflow uses the same base image *without* the pin — which is precisely why every Flink leg passed
+and Dataflow failed on first contact.
+
+**Why no existing gate caught it:** offline, unit, integration, semantics and conformance all run in
+environments where uv resolves protobuf 6.x, and the Flink harness bakes the pin in. Only a real
+Dataflow launch reaches a worker that supplies its own protobuf.
+
+**Fixed** — `protobuf>=6,<7` in the package's own dependencies (composing with Beam's
+`protobuf<7.0.0.dev0`), `uv.lock` regenerated. Carried by
+`openspec/changes/fix-protobuf-runtime-pin/`. Verified: the re-run shows zero `VersionError` entries,
+workers start, and the gate passes.
+
+### D-10 — the `--update` gate died in provisioning under uv (`pip freeze`)
+
+**Found by:** task 7.2, before any job launched. **Release-blocking.**
+
+```
+subprocess.CalledProcessError: Command '[.../python, -m, pip, freeze]' returned non-zero exit status 1
+No module named pip
+```
+
+`tests/dataflow/_update/versions.py:232` shelled out to `<python> -m pip freeze`, but the head leg's
+interpreter is the job's own **uv-managed venv**, which has no `pip`. The nightly job provisions with
+`uv sync --locked --group test --group integration --group bench`, so **CI would have failed
+identically**. The same module already used `uv build` for the head wheel, so it was internally
+inconsistent.
+
+**Fixed** — `uv pip freeze --python <path>`, correct for both legs (the cross-version leg's venv comes
+from `python -m venv` and does have pip; uv reads the target interpreter either way). 46 harness unit
+tests still pass.
+
+**Latent sibling, recorded not fixed:** `download_wheel_command`
+(`versions.py:197`) also uses `sys.executable -m pip` and will hit the same wall on the first
+*cross-version* run. There is no `uv pip download`, so the fix means reordering provisioning to use
+the pip-bearing prev-venv — a path that cannot be exercised until a release exists. Not worth an
+untestable edit inside a release gate.
+
+### Infra event — `ZONE_RESOURCE_POOL_EXHAUSTED` in `us-central1`
+
+Recorded per D2 as `fail (infra)`, remediated, not a verdict on the gate:
+
+```
+Startup of the worker pool in us-central1 failed to bring up any of the desired 1 workers.
+ZONE_RESOURCE_POOL_EXHAUSTED: the zone 'us-central1-f' does not have enough resources
+```
+
+Google capacity, unrelated to this code. Remediation: moved the phase to `us-east1` with a matching
+temp bucket (`gs://beamagents-dataflow-temp-use1`); workers came up immediately.
+
+### Phase 6 caveat, stated plainly (design D5 / task 7.3)
+
+The `--update` gate passed on its **bootstrap (head → head) leg**, because no version has been tagged.
+The harness said so itself:
+
+```
+launch version: 1.0.0 / update version: 1.0.0 (head, built from the checkout)
+resolution: PyPI resolution failed (404 Not Found for beam-agents)
+NOTE: this is a SELF-UPDATE run. It proves the harness, the Dataflow update mechanics, and that
+head's job graph is update-compatible with itself. It is NOT cross-version evidence.
+```
+
+So this run proves the `--update` **mechanism** — a live suspended activation plus working memory
+survives a pipeline update on real Dataflow. It does **not** prove cross-version compatibility, and
+C46's guarantee remains unevidenced until a release exists to update *from*.
 
 ## Headline result — correctness invariant 4 is now evidenced
 

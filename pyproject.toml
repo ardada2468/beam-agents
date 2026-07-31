@@ -14,7 +14,24 @@ dependencies = [
   "apache-beam[gcp]>=2.60",
   "httpx[http2]",
   "pydantic>=2",
-  "protobuf",
+  # `>=6` is load-bearing, not tidiness. The committed `_pb2.py` bindings are
+  # 6.x gencode, and protobuf requires gencode and runtime to share a MAJOR
+  # version. Unbounded, this requirement is satisfied by whatever protobuf a
+  # runtime environment already has — and `apache/beam_python3.11_sdk:2.72.0`,
+  # the base image Dataflow workers run, ships runtime 5.29.5. pip then leaves
+  # 5.29.5 in place and `import beam_agents` dies at
+  # `beam_agents/_protos/__init__.py` with `VersionError: Detected mismatched
+  # Protobuf Gencode/Runtime major versions ... gencode 6.33.5 runtime 5.29.5`,
+  # so the package is unimportable on a stock Dataflow worker.
+  #
+  # docker/sdk-harness.Dockerfile has pinned `protobuf==6.33.6` for exactly this
+  # reason since it was written — which is why the Flink legs never saw it. That
+  # constraint belongs in the package's own metadata, so every consumer gets it
+  # rather than only the environments that happen to bake it in.
+  #
+  # `<7` matches Beam's own `protobuf<7.0.0.dev0` bound; the two together leave
+  # the 6.x line, which is where the gencode is.
+  "protobuf>=6,<7",
 ]
 
 # The reference effector (`beam_agents.effector`) is a separate service, not part
