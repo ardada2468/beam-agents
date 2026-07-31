@@ -31,6 +31,55 @@ split only works if the adapters exist. Today **one does**.
 The project's architecture notes list `adapters/adk` and `adapters/pydantic_ai`
 in its module map. Neither directory exists in the current code.
 
+{/*
+  Where an adapter sits, drawn as three tiers.
+
+  This is safe to draw because every box is a statement about *this*
+  repository — what is implemented, what needs no adapter, and what is roadmap
+  only — and each one is already on the table above. Nothing here asserts
+  anything about how LangGraph, ADK or Pydantic AI behave, which is the line a
+  comparison page may not cross without a dated citation.
+
+  The two roadmap boxes are drawn soft with their connectors stopping short.
+  A box wired into the adapter tier would say an adapter exists; a box that is
+  simply absent would let a reader assume the seam does not fit them. Neither
+  is true, and the gap is the accurate drawing of "named in the module map, no
+  code".
+*/}
+
+<Diagram
+  title="Where an adapter sits"
+  desc="Three tiers. The authoring tier holds four ways to write an agent: LangGraph, which is implemented; a plain async function matching the reference protocol; and Google ADK and Pydantic AI, whose connectors stop short because no adapter for them exists. The adapter tier holds one box, LangGraphAgent, which supplies the per-activation checkpointer and the tool node; the plain async function passes straight down past this tier, needing no adapter. The runtime tier is a single bar, the RunAgent transform, which gives keyed state, the replay cache, intents and per-key ordering to everything above it."
+  caption="Only the adapter tier is framework-specific. Whatever reaches RunAgent gets the same keyed state, replay cache and intent path — and every registered adapter is held to the same seven lifecycle scenarios across two runners before it can claim that."
+  viewBox="0 0 600 316"
+  minWidth={592}
+>
+  {/* Tier names are faint labels above each band rather than headings, so the
+      three tiers read as one drawing and not as three sections. */}
+  <DgText x={16} y={26} variant="faint">AUTHORING</DgText>
+  <DgNode x={18} y={38} w={132} h={54} label="LangGraph" sub="IMPLEMENTED" />
+  <DgNode x={162} y={38} w={132} h={54} label="async function" sub="REFERENCE PROTOCOL" />
+  <DgNode x={306} y={38} w={132} h={54} soft label="Google ADK" sub="ROADMAP ONLY" />
+  <DgNode x={450} y={38} w={132} h={54} soft label="Pydantic AI" sub="ROADMAP ONLY" />
+  <DgText x={16} y={124} variant="faint">ADAPTER</DgText>
+  <DgEdge d="M 84,92 V 134" />
+  <DgNode x={18} y={136} w={180} h={54} label="LangGraphAgent" sub="CHECKPOINTER + TOOL NODE" />
+  <DgEdge d="M 84,190 V 232" />
+  {/* The protocol agent skips the adapter tier entirely — that is the point of
+      targeting a structural protocol rather than a base class. */}
+  <DgEdge d="M 228,92 V 232" />
+  <DgText x={238} y={180} variant="faint">NO ADAPTER NEEDED</DgText>
+  {/* Stub connectors, no arrowheads: the seam is there, nothing is wired into
+      it. A full arrow would say an adapter exists; no line at all would let a
+      reader assume the seam does not fit them. Neither is true. */}
+  <DgEdge d="M 372,92 V 118" arrow={false} />
+  <DgText x={372} y={136} anchor="middle" variant="faint">NOT BUILT</DgText>
+  <DgEdge d="M 516,92 V 118" arrow={false} />
+  <DgText x={516} y={136} anchor="middle" variant="faint">NOT BUILT</DgText>
+  <DgText x={16} y={222} variant="faint">RUNTIME</DgText>
+  <DgNode x={18} y={234} w={564} h={58} label="RunAgent" sub="KEYED STATE, REPLAY CACHE, INTENTS, PER-KEY ORDER" />
+</Diagram>
+
 ## The LangGraph adapter
 
 Adopting an existing graph takes three changes, none to its topology:

@@ -14,6 +14,63 @@ verifies:
 Support claims are cheap to make and hard to check, so this page states only
 what the repository actually exercises, and where.
 
+{/*
+  The portability surface, drawn.
+
+  Three bands, top to bottom: what is identical no matter where the pipeline
+  runs, what the runner has to supply in return, and which runners the tests in
+  this repository actually reach.
+
+  Authored 600 user units wide because that is the reading column — a diagram
+  wider than roughly 600 scrolls sideways even on a large desktop, and a
+  three-across layout put the runner column off the right edge. Height is free,
+  so the columns became bands.
+
+  The last row is the reason this diagram exists. Spark sits *outside* the
+  tested group, with no connector at all, so the picture agrees with the
+  landing page and with the table below: nothing here runs against Spark. A
+  fourth identical row inside the group would be a support claim, and this page
+  exists to not make one. Note the separation is not drawn as a dashed line —
+  dashed means "leaves through the message bus and comes back" everywhere else
+  on this site, and re-using it for "unverified" would break that key.
+*/}
+
+<Diagram
+  title="Where a beam-agents pipeline runs"
+  desc="Three bands. The first holds what is identical on every runner: your agent, the RunAgent transform, keyed state held as protobuf, and intent ids derived from key, seq and step index. It feeds the second band, what the runner must supply in return: a stateful DoFn over KV input, both event-time and processing-time timers, and bundle retry semantics matching the ones the guarantees are stated against. That feeds the third band, the runners this repository exercises: DirectRunner by the unit tier and the conformance matrix on every pull request, Flink by a Dockerised mini-cluster on every pull request, and Dataflow against the real service nightly. Spark is drawn below that group, unconnected, because no test in this repository runs against it."
+  caption="Spark sits outside the group and has no connector. The project's stated v1.0 target lists it as best-effort, and nothing in this repository exercises it — so it is drawn as an untested target rather than a fourth supported one."
+  viewBox="0 0 600 664"
+  minWidth={592}
+>
+  {/*
+    The two band containers are grouping strokes, not nodes — a closed path on
+    `DgEdge` with the arrowhead off, which `diagram.css` documents as the use
+    for an open line. Drawing them as `DgNode`s would need a label they do not
+    have, and would give a container the same weight as its contents.
+  */}
+  <DgText x={16} y={26} variant="title">Identical on every runner</DgText>
+  <DgEdge d="M 16,40 H 584 V 152 H 16 Z" arrow={false} />
+  <DgNode x={32} y={52} w={260} h={38} soft label="your agent" sub="UNCHANGED" />
+  <DgNode x={308} y={52} w={260} h={38} soft label="RunAgent" sub="KEYED, STATEFUL, KV INPUT" />
+  <DgNode x={32} y={102} w={260} h={38} soft label="keyed state" sub="PROTOBUF, NEVER PICKLE" />
+  <DgNode x={308} y={102} w={260} h={38} soft label="intent ids" sub="UUID5 OVER KEY, SEQ, STEP" />
+  {/* The two inter-band gaps are the same size (86 units), so the heading and
+      the connector sit in the same relationship both times. */}
+  <DgEdge d="M 300,152 V 236" label="REQUIRES" labelX={352} labelY={190} />
+  <DgText x={16} y={224} variant="title">Required of the runner</DgText>
+  <DgEdge d="M 16,238 H 584 V 306 H 16 Z" arrow={false} />
+  <DgNode x={32} y={252} w={170} h={38} soft label="stateful DoFn" sub="WITH KV INPUT" />
+  <DgNode x={215} y={252} w={170} h={38} soft label="timers" sub="EVENT-TIME + REAL-TIME" />
+  <DgNode x={398} y={252} w={170} h={38} soft label="bundle retry" sub="AS THE GUARANTEES ASSUME" />
+  <DgEdge d="M 300,306 V 390" />
+  <DgText x={16} y={378} variant="title">Runners, and their evidence</DgText>
+  <DgEdge d="M 16,392 H 584 V 568 H 16 Z" arrow={false} />
+  <DgNode x={32} y={408} w={536} h={44} label="DirectRunner" sub="UNIT TIER + CONFORMANCE, EVERY PR" />
+  <DgNode x={32} y={462} w={536} h={44} label="Flink" sub="MINI-CLUSTER IN DOCKER, EVERY PR" />
+  <DgNode x={32} y={516} w={536} h={44} label="Dataflow" sub="REAL DATAFLOW, NIGHTLY ONLY" />
+  <DgNode x={32} y={596} w={536} h={44} soft label="Spark" sub="NOT EXERCISED — NO TEST IN THIS REPOSITORY" />
+</Diagram>
+
 ## What runs where today
 
 | Runner | Exercised by | Tier |
