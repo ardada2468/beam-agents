@@ -24,9 +24,9 @@ from beam_agents.adapters.langgraph import BeamCheckpointSaver, BeamToolNode
 from beam_agents.adapters.langgraph import transport as transport_mod
 from beam_agents.adapters.langgraph.agent import LangGraphAgent
 from beam_agents.adapters.langgraph.transport import (
+    _find_async_client,
+    _install_transport,
     _ReplayTransport,
-    find_async_client,
-    install_transport,
 )
 from beam_agents.core.agent import Suspend
 from beam_agents.memory.facade import Memory
@@ -120,7 +120,7 @@ def test_find_async_client_on_a_bare_client_attribute() -> None:
             )
 
     model = _Model()
-    assert find_async_client(model) is model.async_client
+    assert _find_async_client(model) is model.async_client
 
 
 def test_install_transport_is_idempotent() -> None:
@@ -131,9 +131,9 @@ def test_install_transport_is_idempotent() -> None:
             )
 
     model = _Model()
-    assert install_transport(model) is True
+    assert _install_transport(model) is True
     first = model.async_client._transport
-    assert install_transport(model) is True
+    assert _install_transport(model) is True
     assert model.async_client._transport is first, "a second install must not re-wrap"
     assert isinstance(first, _ReplayTransport)
 
@@ -152,7 +152,7 @@ async def test_transport_passes_through_outside_an_activation() -> None:
             self.async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
     model = _Model()
-    install_transport(model)
+    _install_transport(model)
     assert transport_mod._current_activation.get() is None
     response = await model.async_client.post("https://provider.example/v1/chat", json={})
     assert response.json() == {"content": "direct"}

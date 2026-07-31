@@ -209,13 +209,34 @@ src = ["src", "tests", "examples", "benchmarks"]
 extend-exclude = ["src/beam_agents/_protos/*_pb2.py", "src/beam_agents/_protos/*_pb2.pyi"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "PL", "RUF"]
+# `D1` is the pydocstyle *completeness* subset (D100-D107) and nothing else: the
+# 1.0 API freeze requires every public name to be documented, per-name rather
+# than as a percentage, so one new undocumented public name fails the build. The
+# D2xx/D4xx style rules are deliberately NOT selected — docstring formatting is
+# orthogonal to the compatibility contract and would bury the completeness
+# signal in whitespace churn.
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "PL", "RUF", "D1"]
 ignore = [
   "PLR0913", # too many arguments — runtime call signatures are often wide
+  # Dunder semantics are defined by the language protocol, not by the
+  # implementation: `__eq__` means what `__eq__` means everywhere.
+  "D105", # undocumented magic method
+  # Constructor contracts belong in the class docstring, which every class in
+  # `src/` already has (D101 is zero). A second docstring on `__init__` is
+  # duplication that drifts away from the first one.
+  "D107", # undocumented `__init__`
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["PLR2004"]
+# `D1` is the 1.0 public-API completeness gate; tests, benchmarks and repo
+# tooling are none of those. Test names *are* the documentation here (the
+# scenario-named-test convention), and benchmark/script entry points are
+# internal tooling with no compatibility promise. Modules and classes in these
+# trees still carry docstrings by convention — this exempts the per-name gate,
+# not the practice.
+"tests/*" = ["PLR2004", "D1"]
+"benchmarks/*" = ["D1"]
+"scripts/*" = ["D1"]
 # The benchmark modules import pyperf inside `main()`, on purpose: pyperf is
 # the `bench` dependency group, which the required `ci` lane does not sync, and
 # the unit-tier smoke tests must still import every module and run its timed

@@ -57,6 +57,12 @@ from beam_agents.model.client import (
 )
 from beam_agents.model.openai_compat import OpenAICompatProvider
 
+__all__ = [
+    "VllmEndpointProvider",
+    "VllmSidecarProvider",
+    "vllm_sidecar_factory",
+]
+
 _T = TypeVar("_T")
 
 _DEFAULT_TIMEOUT_S = 60.0
@@ -128,6 +134,7 @@ class VllmEndpointProvider:
         )
 
     async def complete(self, request: LlmRequest) -> LlmResponse:
+        """Delegate to the OpenAI-compatible client pointed at the vLLM endpoint."""
         return await self._delegate.complete(request)
 
 
@@ -135,7 +142,7 @@ class VllmEndpointProvider:
 
 
 @dataclass(frozen=True, slots=True)
-class EngineGeneration:
+class _EngineGeneration:
     """One completed generation at the engine seam: text plus the engine's
     token accounting, exactly what the canonical response body needs.
     """
@@ -145,13 +152,13 @@ class EngineGeneration:
     completion_tokens: int
 
 
-class EngineSaturatedError(Exception):
+class _EngineSaturatedError(Exception):
     """The engine refused admission (queue full / KV-cache exhaustion); the
     provider maps it to the retryable `RateLimitError` (design D8).
     """
 
 
-class EngineInvalidRequestError(Exception):
+class _EngineInvalidRequestError(Exception):
     """The engine rejected the request material as invalid (bad sampling
     params, over-length prompt); mapped to the non-retryable
     `ProviderRequestError` (design D8).
@@ -159,7 +166,7 @@ class EngineInvalidRequestError(Exception):
 
 
 @runtime_checkable
-class VllmEngine(Protocol):
+class _VllmEngine(Protocol):
     """Narrow internal seam the sidecar drives the engine through.
 
     The real implementation adapts vLLM's async engine; unit tests inject a
@@ -170,7 +177,7 @@ class VllmEngine(Protocol):
 
     async def check_ready(self) -> None: ...
 
-    async def generate(self, request: LlmRequest) -> EngineGeneration: ...
+    async def generate(self, request: LlmRequest) -> _EngineGeneration: ...
 
     async def aclose(self) -> None: ...
 
@@ -206,7 +213,7 @@ class _RealVllmEngine:
         # answers. Never re-loads weights on an already-live engine.
         await self._engine.get_model_config()
 
-    async def generate(self, request: LlmRequest) -> EngineGeneration:  # pragma: no cover
+    async def generate(self, request: LlmRequest) -> _EngineGeneration:  # pragma: no cover
         try:
             sampling_params = self._vllm.SamplingParams(
                 **(request.sampling_params if isinstance(request.sampling_params, dict) else {})
@@ -218,7 +225,7 @@ class _RealVllmEngine:
                 )
             )
         except ValueError as exc:
-            raise EngineInvalidRequestError(str(exc)) from exc
+            raise _EngineInvalidRequestError(str(exc)) from exc
 
         final = None
         try:
@@ -228,11 +235,11 @@ class _RealVllmEngine:
                 final = output
         except ValueError as exc:
             # vLLM signals over-length prompts / invalid params as ValueError.
-            raise EngineInvalidRequestError(str(exc)) from exc
+            raise _EngineInvalidRequestError(str(exc)) from exc
         if final is None:
             raise RuntimeError("vLLM engine produced no output")
         first = final.outputs[0]
-        return EngineGeneration(
+        return _EngineGeneration(
             text=str(first.text),
             prompt_tokens=len(final.prompt_token_ids),
             completion_tokens=len(first.token_ids),
@@ -258,7 +265,7 @@ def _drive_loop(loop: asyncio.AbstractEventLoop) -> None:
 def _shutdown_engine(
     loop: asyncio.AbstractEventLoop,
     thread: threading.Thread,
-    cell: dict[str, VllmEngine],
+    cell: dict[str, _VllmEngine],
 ) -> None:
     """Finalizer body: release the engine, stop the engine loop, join the
     engine thread. Best-effort by design — on hard worker death no finalizer
@@ -283,11 +290,11 @@ class _EngineHandle:
     registers the last-reference shutdown finalizer (design D5).
     """
 
-    def __init__(self, engine_factory: Callable[[], VllmEngine]) -> None:
+    def __init__(self, engine_factory: Callable[[], _VllmEngine]) -> None:
         self._engine_factory = engine_factory
         # The engine lives in a cell (not an attribute) so the finalizer can
         # release it without referencing the handle it is finalizing.
-        self._cell: dict[str, VllmEngine] = {}
+        self._cell: dict[str, _VllmEngine] = {}
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=_drive_loop, args=(self._loop,), name="beam-agents-vllm-engine", daemon=True
@@ -301,7 +308,7 @@ class _EngineHandle:
         """Submit a coroutine to the engine loop from any thread/loop."""
         return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
-    async def _ensure_engine(self) -> VllmEngine:
+    async def _ensure_engine(self) -> _VllmEngine:
         # Runs on the engine loop; the check-construct-store sequence has no
         # await, so concurrent probes cannot double-build the engine.
         engine = self._cell.get("engine")
@@ -314,7 +321,7 @@ class _EngineHandle:
         engine = await self._ensure_engine()
         await engine.check_ready()
 
-    async def generate(self, request: LlmRequest) -> EngineGeneration:
+    async def generate(self, request: LlmRequest) -> _EngineGeneration:
         engine = await self._ensure_engine()
         return await engine.generate(request)
 
@@ -322,7 +329,7 @@ class _EngineHandle:
 # --- Sidecar provider (designs D2/D4/D6/D8) ---------------------------------
 
 
-def engine_config_tag(engine_config: Mapping[str, object]) -> str:
+def _engine_config_tag(engine_config: Mapping[str, object]) -> str:
     """Digest of the engine configuration, used as the `Shared` acquisition
     tag: a changed configuration yields a fresh engine on pipeline update
     instead of silently reusing a stale one (design D2).
@@ -351,7 +358,7 @@ class VllmSidecarProvider:
         engine_config: Mapping[str, object],
         health_deadline_s: float = _DEFAULT_HEALTH_DEADLINE_S,
         request_timeout_s: float = _DEFAULT_TIMEOUT_S,
-        engine_factory: Callable[[], VllmEngine] | None = None,
+        engine_factory: Callable[[], _VllmEngine] | None = None,
     ) -> None:
         if engine_factory is None:
             engine_factory = functools.partial(_RealVllmEngine, dict(engine_config))
@@ -373,6 +380,13 @@ class VllmSidecarProvider:
             ) from None
 
     async def complete(self, request: LlmRequest) -> LlmResponse:
+        """Generate on the worker-local engine, bridged onto the engine's own loop.
+
+        Raises :class:`ProviderTimeout` when the request outlives
+        ``request_timeout_s`` and the mapped :class:`ProviderError` for an
+        engine rejection, so sidecar failures classify exactly like remote
+        provider failures.
+        """
         future = self._handle.submit(self._handle.generate(request))
         try:
             generation = await asyncio.wait_for(
@@ -381,16 +395,16 @@ class VllmSidecarProvider:
         except TimeoutError as exc:
             # Per-request generation deadline (design D8).
             raise ProviderTimeout() from exc
-        except EngineSaturatedError as exc:
+        except _EngineSaturatedError as exc:
             raise RateLimitError(retry_after_ms=None) from exc
-        except EngineInvalidRequestError as exc:
+        except _EngineInvalidRequestError as exc:
             raise ProviderRequestError(status=_ENGINE_INVALID_REQUEST_STATUS) from exc
         except Exception as exc:
             raise ServerError(status=_ENGINE_INTERNAL_FAILURE_STATUS) from exc
         return LlmResponse(_serialize_chat_completion(generation))
 
 
-def _serialize_chat_completion(generation: EngineGeneration) -> bytes:
+def _serialize_chat_completion(generation: _EngineGeneration) -> bytes:
     """Canonical chat-completions-shaped body (design D6): sorted keys, compact
     separators, UTF-8 — decodable by `openai_compat.decode`, stable for digests.
     """
@@ -417,7 +431,7 @@ def vllm_sidecar_factory(
     *,
     health_deadline_s: float = _DEFAULT_HEALTH_DEADLINE_S,
     request_timeout_s: float = _DEFAULT_TIMEOUT_S,
-    engine_factory: Callable[[], VllmEngine] | None = None,
+    engine_factory: Callable[[], _VllmEngine] | None = None,
 ) -> Callable[[], VllmSidecarProvider]:
     """Build the `provider_factory` for sidecar mode.
 
@@ -429,7 +443,7 @@ def vllm_sidecar_factory(
     `engine_factory` is the offline test seam (design D7).
     """
     handle = beam_shared.Shared()
-    tag = engine_config_tag(engine_config)
+    tag = _engine_config_tag(engine_config)
     config = dict(engine_config)
 
     def provider_factory() -> VllmSidecarProvider:

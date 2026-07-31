@@ -37,19 +37,19 @@ from google.adk.sessions.session import Session
 from google.genai import types
 
 from beam_agents._protos import ToolResult
-from beam_agents.adapters.adk.events import ADAPTER_NAME, TraceTee, _current_tee
+from beam_agents.adapters.adk.events import _ADAPTER_NAME, _current_tee, _TraceTee
 from beam_agents.adapters.adk.session import BeamSessionService
 from beam_agents.adapters.adk.tools import (
-    KIND_APPROVAL,
-    KIND_TOOL,
-    CallCollector,
-    PendingCall,
+    _KIND_APPROVAL,
+    _KIND_TOOL,
+    _CallCollector,
     _current_collector,
+    _PendingCall,
 )
 from beam_agents.adapters.adk.transport import (
     _current_activation,
-    install_transport,
-    warn_fallback,
+    _install_transport,
+    _warn_fallback,
 )
 from beam_agents.core.agent import Complete, Outcome, Suspend
 
@@ -61,13 +61,17 @@ if TYPE_CHECKING:
 
     from beam_agents.core.context import ActivationContext
 
+__all__ = [
+    "AdkAgent",
+]
+
 #: The ADK ``app_name`` every adapter session lives under. An adapter constant:
 #: session identity is the entity key, so the app name carries no information.
-APP_NAME = "beam_agents"
+_APP_NAME = "beam_agents"
 
 
 @dataclass(frozen=True, slots=True)
-class RunResult:
+class _RunResult:
     """What one completed ADK run yields to ``encode_output``.
 
     ``final_text`` is the run's final response text — the default output. The
@@ -85,7 +89,7 @@ def _default_decode(event: bytes) -> types.Content:
     return types.Content(role="user", parts=[types.Part(text=event.decode("utf-8"))])
 
 
-def _default_encode(result: RunResult) -> bytes:
+def _default_encode(result: _RunResult) -> bytes:
     """Default output encode: the run's final text, UTF-8."""
     return result.final_text.encode("utf-8")
 
@@ -105,7 +109,7 @@ class AdkAgent:
         agent: BaseAgent,
         *,
         decode_event: Callable[[bytes], types.Content] = _default_decode,
-        encode_output: Callable[[RunResult], bytes] = _default_encode,
+        encode_output: Callable[[_RunResult], bytes] = _default_encode,
         hitl_timeout_ms: int | None = None,
         chat_models: Sequence[object] = (),
         max_events: int | None = None,
@@ -122,6 +126,15 @@ class AdkAgent:
         self._instrumented = False
 
     async def __call__(self, ctx: ActivationContext) -> Outcome:
+        """Drive one ADK run as a beam-agents activation.
+
+        Resumes from ``ctx.snapshot`` when ``ctx.is_resume``, replaying the
+        re-injected results into the framework; otherwise starts fresh. Returns
+        ``Suspend`` when the run staged an intent and yielded, ``Complete``
+        otherwise. Model calls made by the framework are served through the
+        activation's cache-first path by the installed transport, so a retried
+        bundle reaches the provider zero additional times (invariant 3).
+        """
         self._instrument_chat_models()
         runner = self._runner_for(ctx)
 
@@ -136,22 +149,22 @@ class AdkAgent:
         else:
             message = self._decode_event(ctx.single_event)
 
-        collector = CallCollector()
+        collector = _CallCollector()
         final_text, ordered_ids = await self._run(runner, ctx, message, collector)
         if collector.calls:
             return self._stage_and_suspend(ctx, collector, ordered_ids)
         session_id = ctx.entity_key.hex()
         session = await runner.session_service.get_session(
-            app_name=APP_NAME, user_id=session_id, session_id=session_id
+            app_name=_APP_NAME, user_id=session_id, session_id=session_id
         )
-        return Complete(self._encode_output(RunResult(final_text, session)))
+        return Complete(self._encode_output(_RunResult(final_text, session)))
 
     # -- internals -------------------------------------------------------------
 
     def _runner_for(self, ctx: ActivationContext) -> Runner:
         return Runner(
             agent=self._agent,
-            app_name=APP_NAME,
+            app_name=_APP_NAME,
             session_service=BeamSessionService(
                 ctx.memory, now_ms=ctx.now_ms, max_events=self._max_events
             ),
@@ -163,7 +176,7 @@ class AdkAgent:
         runner: Runner,
         ctx: ActivationContext,
         message: types.Content,
-        collector: CallCollector,
+        collector: _CallCollector,
     ) -> tuple[str, list[str]]:
         """Drain the run with the activation exposed to the shim/transport/tee.
 
@@ -177,7 +190,7 @@ class AdkAgent:
         ordered_ids: list[str] = []
         activation_token = _current_activation.set(ctx)
         collector_token = _current_collector.set(collector)
-        tee_token = _current_tee.set(TraceTee(ctx))
+        tee_token = _current_tee.set(_TraceTee(ctx))
         try:
             async for event in runner.run_async(
                 user_id=session_id, session_id=session_id, new_message=message
@@ -205,18 +218,18 @@ class AdkAgent:
             return
         self._instrumented = True
         for model in self._chat_models:
-            if not install_transport(model):
-                warn_fallback(model)
+            if not _install_transport(model):
+                _warn_fallback(model)
 
     def _stage_and_suspend(
-        self, ctx: ActivationContext, collector: CallCollector, ordered_ids: list[str]
+        self, ctx: ActivationContext, collector: _CallCollector, ordered_ids: list[str]
     ) -> Suspend:
         """Stage one intent per pending call and build the resume-map snapshot."""
         pending: dict[str, dict[str, Any]] = {}
         # Event-stream order first (deterministic), then anything the stream did
         # not surface, by function-call id, so intent step indices are stable.
         seen: set[str] = set()
-        ordered: list[PendingCall] = []
+        ordered: list[_PendingCall] = []
         for call_id in ordered_ids:
             call = collector.calls.get(call_id)
             if call is not None and call_id not in seen:
@@ -227,7 +240,7 @@ class AdkAgent:
                 ordered.append(collector.calls[call_id])
 
         for call in ordered:
-            if call.kind == KIND_APPROVAL:
+            if call.kind == _KIND_APPROVAL:
                 intent_id = ctx.request_approval(_canonical_json(call.args))
             else:
                 intent_id = ctx.act(call.tool_name, _canonical_json(call.args))
@@ -241,7 +254,7 @@ class AdkAgent:
     def _suspend_with(self, snapshot: dict[str, Any]) -> Suspend:
         return Suspend(
             snapshot=json.dumps(snapshot, sort_keys=True).encode("utf-8"),
-            adapter=ADAPTER_NAME,
+            adapter=_ADAPTER_NAME,
             timeout_ms=self._hitl_timeout_ms,
         )
 
@@ -260,7 +273,7 @@ class AdkAgent:
                     f"pending: {sorted(pending)}"
                 )
             snapshot["results"][approval.intent_id] = {
-                "kind": KIND_APPROVAL,
+                "kind": _KIND_APPROVAL,
                 "approved": approval.approved,
                 "approver": approval.approver,
                 "decided_at_ms": approval.decided_at_ms,
@@ -273,7 +286,7 @@ class AdkAgent:
                     f"pending: {sorted(pending)}"
                 )
             snapshot["results"][result.intent_id] = {
-                "kind": KIND_TOOL,
+                "kind": _KIND_TOOL,
                 "status": ToolResult.Status.Name(result.status),
                 "payload": result.payload.decode("utf-8", errors="replace"),
                 "error_message": result.error_message,
@@ -285,7 +298,7 @@ class AdkAgent:
         parts: list[types.Part] = []
         for intent_id, entry in snapshot["pending"].items():
             result = snapshot["results"][intent_id]
-            if entry["kind"] == KIND_APPROVAL:
+            if entry["kind"] == _KIND_APPROVAL:
                 payload: dict[str, Any] = {
                     "approved": result["approved"],
                     "approver": result["approver"],

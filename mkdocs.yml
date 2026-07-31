@@ -49,6 +49,7 @@ nav:
       - Fraud triage: examples/fraud-triage.md
       - Fraud triage on Dataflow: examples/fraud-triage-dataflow.md
       - IoT reaction: examples/iot-reaction.md
+  - API reference: api.md
   - Operating the runtime:
       - Beam YAML provider: yaml.md
       - CI workflow map: ci.md

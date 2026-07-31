@@ -26,6 +26,40 @@ if TYPE_CHECKING:
     from beam_agents.core.loop import FailureContext
     from beam_agents.model.facade import TokenUsage
 
+__all__ = [
+    "ACTIVATION_KIND",
+    "ACTIVATION_STATUS",
+    "ADAPTER",
+    "ATTEMPTS",
+    "BILLED",
+    "CACHE_HIT",
+    "CIRCUIT_STATE",
+    "DEADLINE_MS",
+    "ERROR_TYPE",
+    "EXPIRES_AT_MS",
+    "FAILURE_LAST_EVENT",
+    "FAILURE_LLM_CALLS",
+    "FAILURE_STAGED_INTENTS",
+    "FAILURE_STEP",
+    "INTENT_ID",
+    "INTENT_KIND",
+    "OPERATION_CHAT",
+    "OPERATION_NAME",
+    "PENDING_INTENT_IDS",
+    "REASON",
+    "REQUEST_MODEL",
+    "ROLE_ACTIVATION",
+    "ROLE_TIMER",
+    "TOOL_NAME",
+    "USAGE_INPUT_TOKENS",
+    "USAGE_OUTPUT_TOKENS",
+    "ActivationTrace",
+    "role_for_event_type",
+    "span_id_for",
+    "trace_id_for",
+    "usage_attributes",
+]
+
 # Fixed namespace for deterministic trace/span IDs. Distinct from the intent
 # namespace so the two ID spaces cannot alias; like it, this must never change
 # without a state_schema_version bump.
@@ -159,6 +193,11 @@ class ActivationTrace:
 
     @property
     def trace_id(self) -> bytes:
+        """The trace id for this activation, derived from ``(entity_key, seq)``.
+
+        Derived, not random, so a replayed activation lands in the same
+        trace as the original.
+        """
         return trace_id_for(self._entity_key, self._seq)
 
     @property
@@ -168,6 +207,7 @@ class ActivationTrace:
 
     @property
     def parent_span_id(self) -> bytes:
+        """The span this activation hangs under, or empty bytes at the root."""
         return self._parent_span_id
 
     # -- stamping -------------------------------------------------------------
@@ -198,6 +238,7 @@ class ActivationTrace:
     # -- builders -------------------------------------------------------------
 
     def activation_start(self) -> TraceEvent:
+        """Build the ACTIVATION_START event, tagged ``start`` or ``resume``."""
         return self._event(
             TraceEvent.ACTIVATION_START,
             step_index=0,
@@ -205,6 +246,7 @@ class ActivationTrace:
         )
 
     def activation_end(self, *, status: str, step_index: int) -> TraceEvent:
+        """Build the ACTIVATION_END event carrying the terminal ``status``."""
         return self._event(
             TraceEvent.ACTIVATION_END,
             step_index=step_index,
@@ -222,6 +264,7 @@ class ActivationTrace:
         adapter: str,
         pending_intent_ids: tuple[str, ...],
     ) -> TraceEvent:
+        """Build the SUSPENDED event: the deadline, adapter, and pending intent ids."""
         return self._event(
             TraceEvent.SUSPENDED,
             step_index=step_index,
@@ -241,6 +284,7 @@ class ActivationTrace:
         intent_kind: str,
         expires_at_ms: int,
     ) -> TraceEvent:
+        """Build the INTENT_EMITTED event for one staged intent."""
         return self._event(
             TraceEvent.INTENT_EMITTED,
             step_index=step_index,

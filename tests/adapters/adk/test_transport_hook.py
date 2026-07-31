@@ -25,7 +25,7 @@ from google.adk.agents import LlmAgent
 from google.adk.models.base_llm import BaseLlm
 
 from beam_agents.adapters.adk import AdkAgent
-from beam_agents.adapters.adk.transport import find_async_client, install_transport
+from beam_agents.adapters.adk.transport import _find_async_client, _install_transport
 from beam_agents.core.agent import Complete
 from beam_agents.model.fake import FakeLLM, match_any, respond_with
 from tests.adapters._helpers import make_ctx
@@ -119,9 +119,9 @@ def test_recognition_probes_the_google_genai_layout() -> None:
     # `api_client`, and a genai Client passed directly.
     client = SdkClient(httpx.MockTransport(lambda r: httpx.Response(200)))
     model = RecognizedGenaiModel(model="m", api_client=client)
-    assert find_async_client(model) is client._api_client._async_httpx_client
-    assert find_async_client(client) is client._api_client._async_httpx_client
-    assert find_async_client(object()) is None
+    assert _find_async_client(model) is client._api_client._async_httpx_client
+    assert _find_async_client(client) is client._api_client._async_httpx_client
+    assert _find_async_client(object()) is None
 
 
 def test_recognition_survives_a_model_whose_api_client_raises() -> None:
@@ -133,7 +133,7 @@ def test_recognition_survives_a_model_whose_api_client_raises() -> None:
         def api_client(self) -> object:
             raise ValueError("No API key was provided")
 
-    assert find_async_client(_Exploding()) is None
+    assert _find_async_client(_Exploding()) is None
 
 
 def test_the_transport_passes_through_outside_an_activation() -> None:
@@ -142,10 +142,10 @@ def test_the_transport_passes_through_outside_an_activation() -> None:
     # reaches its real provider.
     upstream: list[httpx.Request] = []
     model = _recognized(upstream)
-    assert install_transport(model) is True
+    assert _install_transport(model) is True
 
     async def call() -> httpx.Response:
-        client = find_async_client(model)
+        client = _find_async_client(model)
         assert client is not None
         return await client.post("https://provider.example/v1/chat", json={"model": "m-1"})
 

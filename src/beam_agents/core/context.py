@@ -73,6 +73,13 @@ from beam_agents.observability.metrics import ActivationTally
 from beam_agents.tools.registry import ToolRegistry
 from beam_agents.tools.runner import ToolRunner
 
+__all__ = [
+    "ActivationContext",
+    "AgentContext",
+    "AgentResult",
+    "MonotonicNs",
+]
+
 # Injected monotonic clock for duration measurement. Injected like every other
 # non-determinism source (`now_ms`, `rng`, `sleep`) so tests script exact
 # durations instead of sleeping -- and read ONLY for measurement: no staged
@@ -201,14 +208,21 @@ class AgentContext:
 
     @property
     def entity_key(self) -> bytes:
+        """The Beam key this activation is running on."""
         return self._entity_key
 
     @property
     def seq(self) -> int:
+        """The per-key monotonic activation counter (see the glossary)."""
         return self._seq
 
     @property
     def now_ms(self) -> int:
+        """Processing time at activation start, in epoch milliseconds.
+
+        Read once and held fixed for the activation, so two reads inside one
+        activation cannot disagree and a replay sees the same value.
+        """
         return self._now_ms
 
     # -- side effects: the only path is act() ------------------------------
@@ -347,6 +361,12 @@ class AgentContext:
         self._traces.append(self._trace.stamp(event))
 
     def accumulate_usage(self, usage: TokenUsage) -> None:
+        """Add one call's token usage to the activation tally.
+
+        Called by the facade only when a provider was actually reached, so a
+        cache hit contributes nothing and the ``tokens`` distribution stays
+        a measure of billed traffic.
+        """
         self._prompt_tokens += usage.prompt_tokens
         self._completion_tokens += usage.completion_tokens
         self._total_tokens += usage.total_tokens
@@ -791,10 +811,12 @@ class ActivationContext:
 
     @property
     def staged_intents(self) -> list[ToolIntent]:
+        """Intents staged this activation, emitted on commit."""
         return self._intents
 
     @property
     def staged_traces(self) -> list[TraceEvent]:
+        """Trace events staged this activation, emitted on commit."""
         return self._traces
 
     @property
@@ -813,6 +835,11 @@ class ActivationContext:
 
     @property
     def step_index(self) -> int:
+        """The step cursor: how far into the activation the driver has advanced.
+
+        Part of the deterministic intent-ID input (invariant 2) and of the
+        replay-cache key (invariant 3).
+        """
         return self._step_index
 
     @property
@@ -834,9 +861,11 @@ class ActivationContext:
         return self._tally
 
     def memory_blob(self) -> MemoryBlob:
+        """Working memory serialized for the keyed state write."""
         return self._memory.to_blob()
 
     def cache_blob(self) -> LlmCacheBlob:
+        """The replay cache serialized for the keyed state write."""
         return self._replay_cache.to_blob()
 
     def build_continuation(

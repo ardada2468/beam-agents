@@ -10,7 +10,7 @@ official SDK client as a ``client`` property, and that SDK object's
 identical wire stack the runtime's own provider clients use.
 
 Unrecognized model objects are left alone: the caller logs one warning per
-agent instance via :func:`warn_fallback`, which also increments the
+agent instance via :func:`_warn_fallback`, which also increments the
 ``beam_agents.adapters/transport_fallback`` counter so the degradation is
 visible on dashboards, not just in logs. Belt-and-braces for exotic setups:
 Pydantic AI providers accept a caller-supplied ``http_client`` at
@@ -35,20 +35,20 @@ _LOGGER = logging.getLogger(__name__)
 _SDK_CLIENT_ATTRS = ("client",)
 
 
-def find_async_client(model: object) -> httpx.AsyncClient | None:
+def _find_async_client(model: object) -> httpx.AsyncClient | None:
     """The model's underlying ``httpx.AsyncClient``, or ``None`` if unrecognized."""
-    return _shared.find_async_client(model, _SDK_CLIENT_ATTRS)
+    return _shared._find_async_client(model, _SDK_CLIENT_ATTRS)
 
 
-def install_transport(model: object) -> bool:
+def _install_transport(model: object) -> bool:
     """Swap the model's httpx transport for the replay transport (idempotent).
 
     Returns False when the model has no recognizable httpx client, in which
     case the model is left untouched.
     """
-    return _shared.install_transport(model, _SDK_CLIENT_ATTRS)
+    return _shared._install_transport(model, _SDK_CLIENT_ATTRS)
 
 
-def warn_fallback(model: object) -> None:
+def _warn_fallback(model: object) -> None:
     """Log the once-per-instance fallback warning and count the degradation."""
-    _shared.warn_fallback(model, logger=_LOGGER, metrics=Metrics)
+    _shared._warn_fallback(model, logger=_LOGGER, metrics=Metrics)

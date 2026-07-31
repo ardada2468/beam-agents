@@ -72,6 +72,7 @@ def make_demo_provider() -> FakeLLM:
 
 
 def demo_config() -> AgentConfig:
+    """An ``AgentConfig`` wired to the scripted demo provider."""
     return AgentConfig(provider_factory=make_demo_provider)
 
 

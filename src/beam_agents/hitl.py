@@ -34,6 +34,22 @@ if TYPE_CHECKING:
 
     from beam_agents.core.agent import FallbackContext
 
+__all__ = [
+    "DEFAULT_APPROVAL_CHANNEL",
+    "DEFAULT_HITL_TIMEOUT_MS",
+    "DEFAULT_INTENT_TTL_MS",
+    "HITL_TIMEOUT_OUTPUT",
+    "REASON_HITL_TIMEOUT",
+    "Deny",
+    "Drop",
+    "Escalate",
+    "HitlPolicy",
+    "Route",
+    "deny",
+    "intent_expired",
+    "refuse_expired",
+]
+
 # Default HITL deadline when a Suspend omits an explicit timeout_ms (24h). Real
 # approvals are wall-clock bound; the value only sets when the fail-closed HITL
 # timer fires, never how the activation runs.

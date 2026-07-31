@@ -32,14 +32,14 @@ from beam_agents.model.client import (
     RateLimitError,
     ServerError,
 )
-from beam_agents.model.openai_compat import decode as openai_decode
+from beam_agents.model.openai_compat import _decode as openai_decode
 from beam_agents.model.vllm import (
-    EngineGeneration,
-    EngineInvalidRequestError,
-    EngineSaturatedError,
     VllmEndpointProvider,
     VllmSidecarProvider,
-    engine_config_tag,
+    _engine_config_tag,
+    _EngineGeneration,
+    _EngineInvalidRequestError,
+    _EngineSaturatedError,
     vllm_sidecar_factory,
 )
 
@@ -113,7 +113,7 @@ class FakeEngine:
         if self.ready_error is not None:
             raise self.ready_error
 
-    async def generate(self, request: LlmRequest) -> EngineGeneration:
+    async def generate(self, request: LlmRequest) -> _EngineGeneration:
         self.generate_calls.append(request)
         self.generate_loops.append(asyncio.get_running_loop())
         if self.generate_gate is not None:
@@ -122,7 +122,7 @@ class FakeEngine:
             await asyncio.sleep(self.generate_delay_s)
         if self.generate_error is not None:
             raise self.generate_error
-        return EngineGeneration(
+        return _EngineGeneration(
             text=self.text,
             prompt_tokens=self.prompt_tokens,
             completion_tokens=self.completion_tokens,
@@ -278,7 +278,7 @@ async def test_two_dofn_instances_share_one_engine() -> None:
 
 def test_a_changed_engine_configuration_yields_a_distinct_engine() -> None:
     # Scenario: A changed engine configuration yields a distinct engine.
-    assert engine_config_tag({"model": "a"}) != engine_config_tag({"model": "b"})
+    assert _engine_config_tag({"model": "a"}) != _engine_config_tag({"model": "b"})
 
     built: list[FakeEngine] = []
 
@@ -290,14 +290,14 @@ def test_a_changed_engine_configuration_yields_a_distinct_engine() -> None:
     handle = beam_shared.Shared()
     VllmSidecarProvider(
         shared_handle=handle,
-        tag=engine_config_tag({"model": "a"}),
+        tag=_engine_config_tag({"model": "a"}),
         engine_config={"model": "a"},
         health_deadline_s=5.0,
         engine_factory=make_engine,
     )
     VllmSidecarProvider(
         shared_handle=handle,
-        tag=engine_config_tag({"model": "b"}),
+        tag=_engine_config_tag({"model": "b"}),
         engine_config={"model": "b"},
         health_deadline_s=5.0,
         engine_factory=make_engine,
@@ -443,7 +443,7 @@ async def test_cached_sidecar_bytes_replay_without_engine_calls() -> None:
 
 async def test_engine_saturation_is_retryable_as_a_rate_limit() -> None:
     # Scenario: Engine saturation is retryable as a rate limit.
-    provider = _sidecar(FakeEngine(generate_error=EngineSaturatedError("queue full")))
+    provider = _sidecar(FakeEngine(generate_error=_EngineSaturatedError("queue full")))
 
     with pytest.raises(RateLimitError) as excinfo:
         await provider.complete(_request())
@@ -473,7 +473,7 @@ async def test_generation_deadline_maps_to_provider_timeout() -> None:
 
 async def test_invalid_request_material_is_non_retryable() -> None:
     # Scenario: Invalid request material is non-retryable.
-    provider = _sidecar(FakeEngine(generate_error=EngineInvalidRequestError("prompt too long")))
+    provider = _sidecar(FakeEngine(generate_error=_EngineInvalidRequestError("prompt too long")))
 
     with pytest.raises(ProviderRequestError) as excinfo:
         await provider.complete(_request())

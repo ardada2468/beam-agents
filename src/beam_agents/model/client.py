@@ -16,6 +16,17 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+__all__ = [
+    "LLMClient",
+    "LlmRequest",
+    "LlmResponse",
+    "ProviderError",
+    "ProviderRequestError",
+    "ProviderTimeout",
+    "RateLimitError",
+    "ServerError",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class LlmRequest:
@@ -57,7 +68,15 @@ class LLMClient(Protocol):
     provider off the async loop.
     """
 
-    async def complete(self, request: LlmRequest) -> LlmResponse: ...
+    async def complete(self, request: LlmRequest) -> LlmResponse:
+        """Issue one completion and return the provider's raw response bytes.
+
+        Implementations do transport only: no retries, no circuit breaking,
+        no caching — those live in :class:`~beam_agents.model.facade.LlmFacade`.
+        Transport failures MUST surface as the :class:`ProviderError` subclass
+        that classifies them, so the driver never parses a message.
+        """
+        ...
 
 
 class ProviderError(Exception):

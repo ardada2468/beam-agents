@@ -13,7 +13,7 @@ runtime-provider on a miss. Outside an activation the wrapped original
 transport handles the request untouched.
 
 Unrecognized model objects are left alone: the caller logs one warning per
-agent instance via :func:`warn_fallback`, which also increments the shared
+agent instance via :func:`_warn_fallback`, which also increments the shared
 ``beam_agents.adapters/transport_fallback`` counter.
 
 NOTE(coordinator): this module is deliberately a local seam. A parallel change
@@ -92,7 +92,7 @@ def _genai_httpx_client(candidate: object) -> httpx.AsyncClient | None:
     return inner if isinstance(inner, httpx.AsyncClient) else None
 
 
-def find_async_client(model: object) -> httpx.AsyncClient | None:
+def _find_async_client(model: object) -> httpx.AsyncClient | None:
     """The model's underlying ``httpx.AsyncClient``, or ``None`` if unrecognized.
 
     Probes, in order: the object itself being an ``httpx.AsyncClient``, a
@@ -117,13 +117,13 @@ def find_async_client(model: object) -> httpx.AsyncClient | None:
     return _genai_httpx_client(api_client)
 
 
-def install_transport(model: object) -> bool:
+def _install_transport(model: object) -> bool:
     """Swap the model's httpx transport for the replay transport (idempotent).
 
     Returns False when the model has no recognizable httpx client, in which
     case the model is left untouched.
     """
-    client = find_async_client(model)
+    client = _find_async_client(model)
     if client is None:
         return False
     if not isinstance(client._transport, _ReplayTransport):
@@ -131,7 +131,7 @@ def install_transport(model: object) -> bool:
     return True
 
 
-def warn_fallback(model: object) -> None:
+def _warn_fallback(model: object) -> None:
     """Log the once-per-instance fallback warning and count the degradation."""
     _LOGGER.warning(
         "ADK model %s has no recognizable httpx client; its provider calls bypass "

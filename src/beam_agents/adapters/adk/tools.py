@@ -36,7 +36,7 @@ from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.long_running_tool import LongRunningFunctionTool
 from typing_extensions import override
 
-from beam_agents.adapters.adk.events import stage_tool_call
+from beam_agents.adapters.adk.events import _stage_tool_call
 from beam_agents.tools.errors import ToolError
 from beam_agents.tools.registry import Tool
 
@@ -46,16 +46,23 @@ if TYPE_CHECKING:
     from google.adk.tools.tool_context import ToolContext
     from pydantic import BaseModel
 
-KIND_TOOL = "tool"
-KIND_APPROVAL = "approval"
+__all__ = [
+    "BeamApprovalTool",
+    "BeamFunctionTool",
+    "BeamLongRunningTool",
+    "beam_tools",
+]
+
+_KIND_TOOL = "tool"
+_KIND_APPROVAL = "approval"
 
 #: The ADK-facing name of the approval shim tool — the function-call name a
 #: model uses to request human approval.
-APPROVAL_TOOL_NAME = "request_approval"
+_APPROVAL_TOOL_NAME = "request_approval"
 
 
 @dataclass(frozen=True, slots=True)
-class PendingCall:
+class _PendingCall:
     """One collected long-running call awaiting its intent."""
 
     kind: str
@@ -64,26 +71,26 @@ class PendingCall:
     function_call_id: str
 
 
-class CallCollector:
+class _CallCollector:
     """The per-activation collector of pending long-running calls, keyed by
     ADK function-call id (ADK may execute parallel calls concurrently; the
     adapter re-derives a deterministic order from the event stream)."""
 
     def __init__(self) -> None:
-        self.calls: dict[str, PendingCall] = {}
+        self.calls: dict[str, _PendingCall] = {}
 
-    def record(self, call: PendingCall) -> None:
+    def record(self, call: _PendingCall) -> None:
         self.calls[call.function_call_id] = call
 
 
 #: The collector of the activation currently driving the ADK run; set by
 #: `AdkAgent` around `run_async` (same contextvar pattern as the transport).
-_current_collector: ContextVar[CallCollector | None] = ContextVar(
+_current_collector: ContextVar[_CallCollector | None] = ContextVar(
     "beam_agents_adk_collector", default=None
 )
 
 
-def _collector() -> CallCollector:
+def _collector() -> _CallCollector:
     collector = _current_collector.get()
     if collector is None:
         raise ToolError(
@@ -146,7 +153,7 @@ class BeamFunctionTool(FunctionTool):
         # Traced only after a successful execution, while the activation
         # contextvar is held — the seam the LangGraph BeamToolNode lacked
         # (design D7 closes that gap for this adapter).
-        stage_tool_call(self._beam_tool.name)
+        _stage_tool_call(self._beam_tool.name)
         return value
 
 
@@ -173,7 +180,7 @@ class BeamLongRunningTool(LongRunningFunctionTool):
                 "the adapter cannot correlate its result"
             )
         _collector().record(
-            PendingCall(KIND_TOOL, self._beam_tool.name, validated, function_call_id)
+            _PendingCall(_KIND_TOOL, self._beam_tool.name, validated, function_call_id)
         )
         return None  # no function response: the call stays pending (suspension)
 
@@ -185,8 +192,8 @@ def _approval_stub(**_kwargs: Any) -> Any:
     raise ToolError("declaration stub for the approval shim must never be invoked")
 
 
-_approval_stub.__name__ = APPROVAL_TOOL_NAME
-_approval_stub.__qualname__ = APPROVAL_TOOL_NAME
+_approval_stub.__name__ = _APPROVAL_TOOL_NAME
+_approval_stub.__qualname__ = _APPROVAL_TOOL_NAME
 _approval_stub.__signature__ = inspect.Signature([])  # type: ignore[attr-defined]
 
 
@@ -208,7 +215,7 @@ class BeamApprovalTool(LongRunningFunctionTool):
                 "correlate its decision"
             )
         _collector().record(
-            PendingCall(KIND_APPROVAL, APPROVAL_TOOL_NAME, dict(args), function_call_id)
+            _PendingCall(_KIND_APPROVAL, _APPROVAL_TOOL_NAME, dict(args), function_call_id)
         )
         return None
 

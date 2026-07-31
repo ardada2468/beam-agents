@@ -54,10 +54,18 @@ from typing import TYPE_CHECKING, Literal
 import apache_beam as beam
 
 from beam_agents._protos import AgentEnvelope
-from beam_agents.actions.write_intents import is_kv_shaped
+from beam_agents.actions.write_intents import _is_kv_shaped
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Iterator
+
+__all__ = [
+    "SHARD_DELIMITER",
+    "Assignment",
+    "ShardKeys",
+    "shard_key",
+    "unshard_key",
+]
 
 #: The shard-suffix delimiter. A physical key is ``<logical key>#<decimal index>``.
 SHARD_DELIMITER = b"#"
@@ -222,7 +230,13 @@ class ShardKeys(beam.PTransform):
         self._assignment: Assignment = assignment
 
     def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
-        if not is_kv_shaped(pcoll.element_type):
+        """Fan each logical entity across ``shards`` physical keys.
+
+        Raises ``ValueError`` at pipeline-construction time on non-KV input,
+        naming the ``beam.WithKeys`` call the caller is missing. Safe for
+        memory-free agents only — see ``docs/sharding.md``.
+        """
+        if not _is_kv_shaped(pcoll.element_type):
             raise ValueError(
                 "ShardKeys requires a PCollection[KV[bytes, AgentEnvelope]] input "
                 f"(pre-keyed by entity_key); got element type {pcoll.element_type!r}. Key "

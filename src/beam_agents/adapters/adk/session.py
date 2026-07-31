@@ -49,10 +49,14 @@ if TYPE_CHECKING:
 
     from beam_agents.memory.facade import Memory
 
+__all__ = [
+    "BeamSessionService",
+]
+
 # The reserved working-memory namespace for ADK state. The adapter owns every
 # key under this prefix; nothing else may write here.
-RESERVED_NAMESPACE = "__adk__/"
-_SESSION_KEY = RESERVED_NAMESPACE + "session"
+_RESERVED_NAMESPACE = "__adk__/"
+_SESSION_KEY = _RESERVED_NAMESPACE + "session"
 
 # Milliseconds per second: `Session.last_update_time` is float seconds, the
 # activation clock is integer milliseconds.

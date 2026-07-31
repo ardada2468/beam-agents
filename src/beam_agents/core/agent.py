@@ -32,6 +32,17 @@ if TYPE_CHECKING:
     # context.py can import `intent_id_for` from here without a cycle.
     from beam_agents.core.context import ActivationContext, AgentContext
 
+__all__ = [
+    "Agent",
+    "Complete",
+    "FallbackContext",
+    "FunctionAgent",
+    "Outcome",
+    "StreamAgent",
+    "Suspend",
+    "intent_id_for",
+]
+
 # Fixed namespace for deterministic intent IDs (correctness invariant 2):
 # intent_id = uuid5(_INTENT_NAMESPACE, f"{key.hex()}|{seq}|{step_index}"). A
 # replayed bundle walking the same path produces byte-identical intent IDs, and
@@ -63,7 +74,16 @@ class StreamAgent(Protocol):
     orchestration DSL.
     """
 
-    async def activate(self, ctx: AgentContext) -> None: ...
+    async def activate(self, ctx: AgentContext) -> None:
+        """Run one activation against ``ctx``.
+
+        Everything the agent does — memory writes, staged intents, model
+        calls, the emitted output — goes through ``ctx`` and is *staged*,
+        not applied: the runtime commits it atomically with the Beam bundle
+        only if this coroutine returns normally (correctness invariant 1).
+        Raising mutates nothing and routes the element to ``.errors``.
+        """
+        ...
 
 
 class FunctionAgent:
@@ -73,6 +93,7 @@ class FunctionAgent:
         self._fn = fn
 
     async def activate(self, ctx: AgentContext) -> None:
+        """Delegate the activation to the wrapped function."""
         await self._fn(ctx)
 
 
@@ -134,4 +155,12 @@ class Agent(Protocol):
     replay cache, so bundle retries reproduce the same effects.
     """
 
-    async def __call__(self, ctx: ActivationContext) -> Outcome: ...
+    async def __call__(self, ctx: ActivationContext) -> Outcome:
+        """Drive one activation to an :data:`Outcome` — ``Complete`` or ``Suspend``.
+
+        ``Suspend`` means the activation staged an intent and yielded; the
+        runtime persists a ``Continuation`` and resumes on the re-injected
+        ``ToolResult``/``Approval``. Implementations must be deterministic
+        over ``ctx``, since a retried bundle re-runs them (invariant 2).
+        """
+        ...

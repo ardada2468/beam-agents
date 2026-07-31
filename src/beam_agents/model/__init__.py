@@ -16,7 +16,7 @@ Importing this package has no side effects.
 """
 
 from beam_agents.model.anthropic import AnthropicProvider
-from beam_agents.model.anthropic import decode as anthropic_decode
+from beam_agents.model.anthropic import _decode as anthropic_decode
 from beam_agents.model.client import (
     LLMClient,
     LlmRequest,
@@ -52,7 +52,7 @@ from beam_agents.model.fake import (
     respond_with,
 )
 from beam_agents.model.openai_compat import OpenAICompatProvider
-from beam_agents.model.openai_compat import decode as openai_compat_decode
+from beam_agents.model.openai_compat import _decode as openai_compat_decode
 from beam_agents.model.replay_cache import (
     BLOB_CAP_BYTES,
     MAX_ENTRIES,

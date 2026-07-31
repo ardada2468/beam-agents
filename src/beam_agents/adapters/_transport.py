@@ -12,8 +12,8 @@ What *is* framework-specific stays in each adapter's own ``transport`` module:
 the attribute table that finds the SDK client on a model object, and the
 module whose logger/metrics the fallback warning is emitted through (so a
 dashboard names the adapter that degraded). Adapters call
-:func:`find_async_client`/:func:`install_transport` with their probing table
-and :func:`warn_fallback` with their logger.
+:func:`_find_async_client`/:func:`_install_transport` with their probing table
+and :func:`_warn_fallback` with their logger.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ class _ReplayTransport(httpx.AsyncBaseTransport):
         )
 
 
-def find_async_client(model: object, sdk_client_attrs: Sequence[str]) -> httpx.AsyncClient | None:
+def _find_async_client(model: object, sdk_client_attrs: Sequence[str]) -> httpx.AsyncClient | None:
     """The model's underlying ``httpx.AsyncClient``, or ``None`` if unrecognized.
 
     Probes each attribute in ``sdk_client_attrs`` for either the httpx client
@@ -94,13 +94,13 @@ def find_async_client(model: object, sdk_client_attrs: Sequence[str]) -> httpx.A
     return None
 
 
-def install_transport(model: object, sdk_client_attrs: Sequence[str]) -> bool:
+def _install_transport(model: object, sdk_client_attrs: Sequence[str]) -> bool:
     """Swap the model's httpx transport for the replay transport (idempotent).
 
     Returns False when the model has no recognizable httpx client, in which
     case the model is left untouched.
     """
-    client = find_async_client(model, sdk_client_attrs)
+    client = _find_async_client(model, sdk_client_attrs)
     if client is None:
         return False
     if not isinstance(client._transport, _ReplayTransport):
@@ -108,7 +108,7 @@ def install_transport(model: object, sdk_client_attrs: Sequence[str]) -> bool:
     return True
 
 
-def warn_fallback(model: object, *, logger: logging.Logger, metrics: type[Metrics]) -> None:
+def _warn_fallback(model: object, *, logger: logging.Logger, metrics: type[Metrics]) -> None:
     """Log the once-per-instance fallback warning and count the degradation.
 
     ``logger`` and ``metrics`` are the *calling adapter module's* bindings, so

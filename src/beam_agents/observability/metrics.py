@@ -130,7 +130,27 @@ DISTRIBUTIONS = (
 
 __all__ = [
     "COUNTERS",
+    "COUNTER_ACTIVATIONS",
+    "COUNTER_AGENT_ERRORS",
+    "COUNTER_BATCH_FLUSHES_SIZE",
+    "COUNTER_BATCH_FLUSHES_TIMER",
+    "COUNTER_EVENTS_BUFFERED",
+    "COUNTER_INTENTS_EMITTED",
+    "COUNTER_LLM_CALLS",
+    "COUNTER_LONGTERM_UPSERTS",
+    "COUNTER_ORPHANED_RESULTS",
+    "COUNTER_SUSPENSIONS",
+    "COUNTER_TOOL_CALLS",
     "DISTRIBUTIONS",
+    "DISTRIBUTION_ACTIVATION_MS",
+    "DISTRIBUTION_BATCH_SIZE",
+    "DISTRIBUTION_COMPLETION_TOKENS",
+    "DISTRIBUTION_ITERATIONS",
+    "DISTRIBUTION_LLM_MS",
+    "DISTRIBUTION_MEMORY_BYTES",
+    "DISTRIBUTION_OVERHEAD_MS",
+    "DISTRIBUTION_PROMPT_TOKENS",
+    "DISTRIBUTION_TOKENS",
     "NAMESPACE",
     "ActivationTally",
     "MetricsSink",
@@ -183,9 +203,13 @@ class MetricsSink(Protocol):
     on this protocol.
     """
 
-    def incr(self, name: str, n: int = 1) -> None: ...
+    def incr(self, name: str, n: int = 1) -> None:
+        """Add ``n`` to the counter ``name``."""
+        ...
 
-    def observe(self, name: str, value: int) -> None: ...
+    def observe(self, name: str, value: int) -> None:
+        """Record one observation of ``value`` for the distribution ``name``."""
+        ...
 
 
 class RuntimeMetrics:
@@ -206,12 +230,19 @@ class RuntimeMetrics:
         }
 
     def incr(self, name: str, n: int = 1) -> None:
+        """Increment the Beam counter for ``name``.
+
+        Off a Beam worker thread Beam finds no state sampler and drops the
+        update; that is the documented behavior the staging design works
+        around, not an error the caller handles.
+        """
         # Off a Beam worker thread (or outside a pipeline entirely) Beam finds
         # no state sampler and drops this; that is the documented behavior the
         # staging design exists to work around, not an error the caller handles.
         self._counters[name].inc(n)
 
     def observe(self, name: str, value: int) -> None:
+        """Update the Beam distribution for ``name`` with ``value``."""
         self._distributions[name].update(value)
 
 
@@ -223,7 +254,9 @@ class NullMetrics:
     """
 
     def incr(self, name: str, n: int = 1) -> None:
+        """Discard the increment."""
         return None
 
     def observe(self, name: str, value: int) -> None:
+        """Discard the observation."""
         return None

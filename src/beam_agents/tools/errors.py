@@ -10,6 +10,14 @@ the pipeline).
 
 from __future__ import annotations
 
+__all__ = [
+    "SideEffectToolError",
+    "ToolArgumentError",
+    "ToolDefinitionError",
+    "ToolError",
+    "ToolNotFoundError",
+]
+
 
 class ToolError(Exception):
     """Base class for every error raised by the tool-registry capability."""

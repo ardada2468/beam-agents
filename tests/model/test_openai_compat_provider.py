@@ -13,7 +13,7 @@ import pytest
 
 from beam_agents.model.client import LlmRequest, ProviderRequestError
 from beam_agents.model.openai_compat import OpenAICompatProvider
-from beam_agents.model.openai_compat import decode as openai_decode
+from beam_agents.model.openai_compat import _decode as openai_decode
 
 _MESSAGES = [{"role": "user", "content": "hi"}]
 
@@ -89,7 +89,7 @@ async def test_base_url_selects_the_endpoint() -> None:
 
 
 def test_decode_extracts_usage_and_text() -> None:
-    # Scenario: OpenAI-compatible decode extracts usage and text.
+    # Scenario: OpenAI-compatible _decode extracts usage and text.
     decoded = openai_decode(json.dumps(_SUCCESS_BODY).encode())
 
     assert decoded.usage.prompt_tokens == 12

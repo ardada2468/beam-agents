@@ -40,18 +40,18 @@ if TYPE_CHECKING:
 
 # The reserved working-memory namespace for Pydantic AI state. The adapter
 # owns every key under this prefix; nothing else may write here.
-RESERVED_NAMESPACE = "__pydantic_ai__/"
-MESSAGES_KEY = RESERVED_NAMESPACE + "messages"
+_RESERVED_NAMESPACE = "__pydantic_ai__/"
+_MESSAGES_KEY = _RESERVED_NAMESPACE + "messages"
 
 
-def load_history(memory: Memory) -> list[ModelMessage]:
+def _load_history(memory: Memory) -> list[ModelMessage]:
     """The committed conversation for this key, or ``[]`` for a fresh one."""
-    raw = memory.get(MESSAGES_KEY)
+    raw = memory.get(_MESSAGES_KEY)
     if raw is None:
         return []
     return list(ModelMessagesTypeAdapter.validate_json(raw))
 
 
-def save_history(memory: Memory, messages: Sequence[ModelMessage]) -> None:
+def _save_history(memory: Memory, messages: Sequence[ModelMessage]) -> None:
     """Stage the run's full message list, latest-only, for bundle-atomic commit."""
-    memory.set(MESSAGES_KEY, ModelMessagesTypeAdapter.dump_json(list(messages)))
+    memory.set(_MESSAGES_KEY, ModelMessagesTypeAdapter.dump_json(list(messages)))

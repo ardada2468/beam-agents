@@ -15,10 +15,10 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from beam_agents.memory.stores.base import (
-    decode_envelope,
-    decode_seq,
-    encode_envelope,
-    encode_seq,
+    _decode_envelope,
+    _decode_seq,
+    _encode_envelope,
+    _encode_seq,
 )
 
 from ._conformance import ENTITY_A, a_record
@@ -32,15 +32,15 @@ _GOLDEN_HEX = "0801120770726f66696c651a02010220072880d095ffbc31"
 
 def test_envelope_bytes_are_pinned_by_a_golden_test() -> None:
     # Scenario: Envelope bytes are pinned by a golden test.
-    encoded = encode_envelope(_GOLDEN_RECORD)
+    encoded = _encode_envelope(_GOLDEN_RECORD)
 
     assert encoded.hex() == _GOLDEN_HEX
-    assert decode_envelope(ENTITY_A, bytes.fromhex(_GOLDEN_HEX)) == _GOLDEN_RECORD
+    assert _decode_envelope(ENTITY_A, bytes.fromhex(_GOLDEN_HEX)) == _GOLDEN_RECORD
 
 
 def test_encoding_is_deterministic_across_calls() -> None:
     record = a_record("k", value=b"v" * 100, seq=123, updated_at_ms=456)
-    assert encode_envelope(record) == encode_envelope(record)
+    assert _encode_envelope(record) == _encode_envelope(record)
 
 
 _MAX_SEQ = 2**63 - 1
@@ -52,7 +52,7 @@ _MAX_SEQ = 2**63 - 1
 )
 def test_big_endian_seq_encoding_preserves_numeric_order(a: int, b: int) -> None:
     # Scenario: Big-endian seq encoding preserves numeric order.
-    ea, eb = encode_seq(a), encode_seq(b)
+    ea, eb = _encode_seq(a), _encode_seq(b)
 
     assert (ea < eb) == (a < b)
     assert (ea == eb) == (a == b)
@@ -61,9 +61,9 @@ def test_big_endian_seq_encoding_preserves_numeric_order(a: int, b: int) -> None
 
 @given(seq=st.integers(min_value=0, max_value=_MAX_SEQ))
 def test_seq_encoding_round_trips(seq: int) -> None:
-    assert decode_seq(encode_seq(seq)) == seq
+    assert _decode_seq(_encode_seq(seq)) == seq
 
 
 def test_a_negative_seq_is_unencodable() -> None:
     with pytest.raises(ValueError, match="seq"):
-        encode_seq(-1)
+        _encode_seq(-1)

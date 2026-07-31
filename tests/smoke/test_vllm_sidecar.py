@@ -15,7 +15,7 @@ import importlib.util
 import pytest
 
 from beam_agents.model.client import LlmRequest
-from beam_agents.model.openai_compat import decode as openai_decode
+from beam_agents.model.openai_compat import _decode as openai_decode
 from beam_agents.model.vllm import vllm_sidecar_factory
 
 pytestmark = pytest.mark.smoke

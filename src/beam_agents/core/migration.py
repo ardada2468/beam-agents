@@ -80,7 +80,7 @@ VERSIONED_MESSAGE_TYPES: Final[tuple[type[Message], ...]] = (
 
 # The three messages `migrate_to_current` accepts. Constrained (not bound) so
 # a call site keeps its concrete blob type through the hook.
-M = TypeVar("M", MemoryBlob, Continuation, LlmCacheBlob)
+_M = TypeVar("_M", MemoryBlob, Continuation, LlmCacheBlob)
 
 
 class StateMigrationError(Exception):
@@ -153,8 +153,8 @@ _REGISTRY: dict[tuple[type[Message], int], Callable[[Message], Message]] = {}
 
 
 def migration(
-    message_type: type[M], *, from_version: int
-) -> Callable[[Callable[[M], M]], Callable[[M], M]]:
+    message_type: type[_M], *, from_version: int
+) -> Callable[[Callable[[_M], _M]], Callable[[_M], _M]]:
     """Register a pure single-step migration for ``message_type``.
 
     The decorated function takes a version-``from_version`` message and returns
@@ -168,7 +168,7 @@ def migration(
             f"for {message_type.__name__}"
         )
 
-    def register(step: Callable[[M], M]) -> Callable[[M], M]:
+    def register(step: Callable[[_M], _M]) -> Callable[[_M], _M]:
         key = (message_type, from_version)
         if key in _REGISTRY:
             raise ValueError(
@@ -184,8 +184,8 @@ def migration(
 @overload
 def migrate_to_current(message: None) -> None: ...
 @overload
-def migrate_to_current(message: M) -> M: ...
-def migrate_to_current(message: M | None) -> M | None:
+def migrate_to_current(message: _M) -> _M: ...
+def migrate_to_current(message: _M | None) -> _M | None:
     """Upgrade a keyed-state blob to ``CURRENT_STATE_SCHEMA_VERSION``, lazily.
 
     ``None`` (absent state) passes through untouched; so does a blob already at
@@ -212,7 +212,7 @@ def migrate_to_current(message: M | None) -> M | None:
         step = _REGISTRY.get((type(message), version))
         if step is None:
             raise MissingMigrationError(type(message), version, current)
-        migrated = cast("M", step(migrated))
+        migrated = cast("_M", step(migrated))
         if migrated.state_schema_version != version + 1:
             raise MigrationStepError(type(message), version, migrated.state_schema_version)
         version += 1

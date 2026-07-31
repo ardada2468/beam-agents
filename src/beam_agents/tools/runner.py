@@ -21,6 +21,10 @@ from pydantic import ValidationError
 from beam_agents.tools.errors import SideEffectToolError, ToolArgumentError
 from beam_agents.tools.registry import Tool
 
+__all__ = [
+    "ToolRunner",
+]
+
 
 class ToolRunner:
     """Validates arguments against a tool's Pydantic model, then invokes it.
@@ -30,6 +34,13 @@ class ToolRunner:
     """
 
     async def run(self, t: Tool, arguments: Mapping[str, object]) -> object:
+        """Validate ``arguments`` against the tool's model and run it inline.
+
+        Raises :class:`SideEffectToolError` for a ``side_effect`` tool
+        (invariant 5) and :class:`ToolArgumentError` when the arguments do
+        not validate, so a malformed model-produced call becomes a typed
+        error rather than an exception from inside user code.
+        """
         if t.side_effect:
             raise SideEffectToolError(t.name)
         try:

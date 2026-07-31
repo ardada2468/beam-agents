@@ -89,9 +89,11 @@ class DiffReport:
 
     @property
     def reproduced(self) -> bool:
+        """Whether the replay matched the recorded trace exactly."""
         return not self.differences
 
     def render(self) -> str:
+        """The report as human-readable lines, one per note and difference."""
         lines = ["reproduced" if self.reproduced else "diverged"]
         lines.extend(f"  {note}" for note in self.notes)
         lines.extend(f"  {d.kind}: {d.detail}" for d in self.differences)

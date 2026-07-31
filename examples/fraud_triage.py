@@ -139,6 +139,7 @@ def build(pipeline: beam.Pipeline) -> RunAgentOutputs:
 
 
 def main() -> None:
+    """Run the example pipeline, printing each decision to stdout."""
     options = PipelineOptions()
     options.view_as(StandardOptions).streaming = True
     with beam.Pipeline(options=options) as pipeline:

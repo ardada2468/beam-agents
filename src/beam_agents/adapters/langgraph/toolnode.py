@@ -36,10 +36,14 @@ from beam_agents.tools.registry import Tool
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+__all__ = [
+    "BeamToolNode",
+]
+
 # The marker key the adapter looks for in an interrupt payload to tell the
 # shim's batched tool calls from a plain approval interrupt. Defined here (the
 # producer); the agent imports it.
-TOOL_CALLS_MARKER = "__beam_tool_calls__"
+_TOOL_CALLS_MARKER = "__beam_tool_calls__"
 
 
 class BeamToolNode:
@@ -58,6 +62,13 @@ class BeamToolNode:
         self._messages_key = messages_key
 
     def __call__(self, state: Any) -> dict[str, list[ToolMessage]]:
+        """Execute the last AI message's tool calls, splitting by ``side_effect``.
+
+        Read-only tools run inline and their results become ``ToolMessage``s;
+        side-effecting calls are staged as ``ToolIntent``s and the node
+        marks the graph for suspension instead of executing them
+        (invariant 5).
+        """
         last = self._last_ai_message(state)
         results: dict[str, ToolMessage] = {}
         side_calls: list[dict[str, Any]] = []
@@ -83,7 +94,7 @@ class BeamToolNode:
                 )
 
         if side_calls:
-            answers = interrupt({TOOL_CALLS_MARKER: side_calls})
+            answers = interrupt({_TOOL_CALLS_MARKER: side_calls})
             for staged in side_calls:
                 answer = answers[staged["id"]]
                 ok = answer["status"] == "OK"

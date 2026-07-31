@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from beam_agents._protos import ToolIntent, ToolResult
 from beam_agents.effector.dedup import Claimed, DedupStore, Done, InFlight
-from beam_agents.effector.runner import EffectorToolRunner, execute_intent
+from beam_agents.effector.runner import EffectorToolRunner, _execute_intent
 from beam_agents.hitl import refuse_expired
 from beam_agents.intent_signing import Keyring, VerificationResult, verify_intent
 
@@ -55,15 +55,26 @@ if TYPE_CHECKING:
     from beam_agents.effector.sources import DeliveredIntent, IntentSource
     from beam_agents.tools.registry import ToolRegistry
 
+__all__ = [
+    "CountingMetrics",
+    "EffectorService",
+    "MetricsSink",
+    "PublishFailedError",
+]
+
 _LOG = logging.getLogger(__name__)
 
 
 class MetricsSink(Protocol):
     """Counters and timings. Wiring these to OTel belongs to `observability/`."""
 
-    def incr(self, name: str, value: int = 1) -> None: ...
+    def incr(self, name: str, value: int = 1) -> None:
+        """Add ``value`` to the counter ``name``."""
+        ...
 
-    def observe(self, name: str, value: float) -> None: ...
+    def observe(self, name: str, value: float) -> None:
+        """Record one observation of ``value`` for the distribution ``name``."""
+        ...
 
 
 @dataclass
@@ -74,9 +85,11 @@ class CountingMetrics:
     observations: dict[str, list[float]] = field(default_factory=dict)
 
     def incr(self, name: str, value: int = 1) -> None:
+        """Add ``value`` to the in-process counter ``name``."""
         self.counters[name] = self.counters.get(name, 0) + value
 
     def observe(self, name: str, value: float) -> None:
+        """Append ``value`` to the in-process observations for ``name``."""
         self.observations.setdefault(name, []).append(value)
 
 
@@ -413,7 +426,7 @@ class EffectorService:
     async def _execute(self, delivered: DeliveredIntent, claim: _ActiveClaim) -> None:
         intent = delivered.intent
         started_ms = self._clock()
-        result = await execute_intent(
+        result = await _execute_intent(
             intent,
             self._registry,
             self._runner,

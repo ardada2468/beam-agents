@@ -241,7 +241,9 @@ class _SecretVersion(Protocol):
 class SecretAccessor(Protocol):
     """The one Secret Manager method this launcher uses."""
 
-    def access_secret_version(self, *, request: Mapping[str, str]) -> _SecretVersion: ...
+    def access_secret_version(self, *, request: Mapping[str, str]) -> _SecretVersion:
+        """Fetch one secret version. Matches the Secret Manager client's method."""
+        ...
 
 
 def secret_client() -> SecretAccessor:
@@ -361,6 +363,7 @@ class TriageWithDeadline:
         return triage
 
     async def __call__(self, ctx: ActivationContext) -> Complete | Suspend:
+        """Run the shared triage agent, stamping the launch plan's HITL timeout."""
         outcome = await triage(ctx)
         if isinstance(outcome, Suspend):
             return replace(outcome, timeout_ms=self.timeout_ms)
@@ -500,10 +503,12 @@ def build_launch_plan(argv: list[str]) -> LaunchPlan:
 
 
 def parse_envelope(raw: bytes) -> AgentEnvelope:
+    """Parse an ``AgentEnvelope`` off the wire."""
     return AgentEnvelope.FromString(raw)
 
 
 def entity_key(envelope: AgentEnvelope) -> bytes:
+    """The envelope's entity key, used to key the pipeline."""
     return envelope.entity_key
 
 

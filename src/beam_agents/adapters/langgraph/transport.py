@@ -13,7 +13,7 @@ request untouched.
 
 Unrecognized model objects are left alone: the caller logs one warning per
 agent instance (naming the model class and the lost replay-cache protection)
-via :func:`warn_fallback`, which also increments the
+via :func:`_warn_fallback`, which also increments the
 ``beam_agents.adapters/transport_fallback`` counter so the degradation is
 visible on dashboards, not just in logs.
 
@@ -46,9 +46,9 @@ __all__ = [
     "_RESERVED_BODY_KEYS",
     "_ReplayTransport",
     "_current_activation",
-    "find_async_client",
-    "install_transport",
-    "warn_fallback",
+    "_find_async_client",
+    "_install_transport",
+    "_warn_fallback",
 ]
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,20 +59,20 @@ _LOGGER = logging.getLogger(__name__)
 _SDK_CLIENT_ATTRS = ("root_async_client", "_async_client", "async_client")
 
 
-def find_async_client(model: object) -> httpx.AsyncClient | None:
+def _find_async_client(model: object) -> httpx.AsyncClient | None:
     """The model's underlying ``httpx.AsyncClient``, or ``None`` if unrecognized."""
-    return _shared.find_async_client(model, _SDK_CLIENT_ATTRS)
+    return _shared._find_async_client(model, _SDK_CLIENT_ATTRS)
 
 
-def install_transport(model: object) -> bool:
+def _install_transport(model: object) -> bool:
     """Swap the model's httpx transport for the replay transport (idempotent).
 
     Returns False when the model has no recognizable httpx client, in which
     case the model is left untouched.
     """
-    return _shared.install_transport(model, _SDK_CLIENT_ATTRS)
+    return _shared._install_transport(model, _SDK_CLIENT_ATTRS)
 
 
-def warn_fallback(model: object) -> None:
+def _warn_fallback(model: object) -> None:
     """Log the once-per-instance fallback warning and count the degradation."""
-    _shared.warn_fallback(model, logger=_LOGGER, metrics=Metrics)
+    _shared._warn_fallback(model, logger=_LOGGER, metrics=Metrics)

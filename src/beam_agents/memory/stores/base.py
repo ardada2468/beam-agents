@@ -29,6 +29,14 @@ from dataclasses import dataclass
 
 from beam_agents._protos import LongTermRecord
 
+__all__ = [
+    "InMemoryMemoryStore",
+    "MemoryRecord",
+    "MemoryStore",
+    "build_memory_store",
+    "parse_memory_store_uri",
+]
+
 # The grammar every recognized URI documents in its errors; any other
 # ``scheme://`` URI is handed to SQLAlchemy whole, which is the authority on
 # its own URL grammar (design D6).
@@ -58,7 +66,7 @@ class MemoryRecord:
     updated_at_ms: int
 
 
-def encode_seq(seq: int) -> bytes:
+def _encode_seq(seq: int) -> bytes:
     """Encode ``seq`` as 8 big-endian bytes so byte order matches numeric order.
 
     The comparable-bytes trick proven for the dedup store's lease expiry: it is
@@ -70,12 +78,12 @@ def encode_seq(seq: int) -> bytes:
     return struct.pack(">Q", seq)
 
 
-def decode_seq(encoded: bytes) -> int:
-    """Inverse of :func:`encode_seq` (reads the first 8 bytes)."""
+def _decode_seq(encoded: bytes) -> int:
+    """Inverse of :func:`_encode_seq` (reads the first 8 bytes)."""
     return int(struct.unpack(">Q", encoded[:8])[0])
 
 
-def encode_envelope(record: MemoryRecord) -> bytes:
+def _encode_envelope(record: MemoryRecord) -> bytes:
     """The deterministic `LongTermRecord` bytes every backend stores verbatim."""
     return LongTermRecord(
         state_schema_version=1,
@@ -86,7 +94,7 @@ def encode_envelope(record: MemoryRecord) -> bytes:
     ).SerializeToString(deterministic=True)
 
 
-def decode_envelope(entity_key: bytes, encoded: bytes) -> MemoryRecord:
+def _decode_envelope(entity_key: bytes, encoded: bytes) -> MemoryRecord:
     """Rebuild the record from its envelope bytes and the row's entity key."""
     message = LongTermRecord()
     message.ParseFromString(encoded)
@@ -99,7 +107,7 @@ def decode_envelope(entity_key: bytes, encoded: bytes) -> MemoryRecord:
     )
 
 
-def seq_guard_applies(incoming_seq: int, stored_seq: int | None) -> bool:
+def _seq_guard_applies(incoming_seq: int, stored_seq: int | None) -> bool:
     """The one definition of the upsert guard: apply iff ``incoming >= stored``.
 
     ``>=`` (not ``>``) is deliberate: an equal-seq save is a replayed
@@ -126,7 +134,7 @@ class MemoryStore(abc.ABC):
     async def save(self, record: MemoryRecord) -> bool:
         """Seq-guarded idempotent upsert; ``True`` iff the write applied.
 
-        Applies iff :func:`seq_guard_applies` holds for the row's stored seq,
+        Applies iff :func:`_seq_guard_applies` holds for the row's stored seq,
         enforced atomically by the backend's own primitive; a lower incoming
         seq leaves the row unchanged and returns ``False``.
         """
@@ -192,20 +200,20 @@ class InMemoryMemoryStore(MemoryStore):
         stored = self._rows.get(entity_key, {}).get(key)
         if stored is None:
             return None
-        return decode_envelope(entity_key, stored[1])
+        return _decode_envelope(entity_key, stored[1])
 
     async def _save(self, record: MemoryRecord) -> bool:
         entity_rows = self._rows.setdefault(record.entity_key, {})
         stored = entity_rows.get(record.key)
-        if not seq_guard_applies(record.seq, stored[0] if stored is not None else None):
+        if not _seq_guard_applies(record.seq, stored[0] if stored is not None else None):
             return False
-        entity_rows[record.key] = (record.seq, encode_envelope(record))
+        entity_rows[record.key] = (record.seq, _encode_envelope(record))
         return True
 
     async def _search(self, entity_key: bytes, prefix: str, limit: int) -> list[MemoryRecord]:
         entity_rows = self._rows.get(entity_key, {})
         matching = sorted(key for key in entity_rows if key.startswith(prefix))
-        return [decode_envelope(entity_key, entity_rows[key][1]) for key in matching[:limit]]
+        return [_decode_envelope(entity_key, entity_rows[key][1]) for key in matching[:limit]]
 
 
 # Segment counts the recognized multi-part grammars require.
@@ -283,7 +291,7 @@ def build_memory_store(scheme: str, parts: tuple[str, ...]) -> MemoryStore:
     return sql_module.SqlMemoryStore(parts[0])
 
 
-def missing_client_error(store: str, client: str, cause: ImportError) -> ImportError:
+def _missing_client_error(store: str, client: str, cause: ImportError) -> ImportError:
     """The actionable constructor-time error for an absent optional client."""
     return ImportError(
         f"{store} requires the {client!r} client library, which is not installed; "

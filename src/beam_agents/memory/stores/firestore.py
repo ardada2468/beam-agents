@@ -17,10 +17,14 @@ from __future__ import annotations
 from beam_agents.memory.stores.base import (
     MemoryRecord,
     MemoryStore,
-    decode_envelope,
-    encode_envelope,
-    missing_client_error,
+    _decode_envelope,
+    _encode_envelope,
+    _missing_client_error,
 )
+
+__all__ = [
+    "FirestoreMemoryStore",
+]
 
 _ENTITY_FIELD = "entity"
 _KEY_FIELD = "key"
@@ -35,7 +39,7 @@ class FirestoreMemoryStore(MemoryStore):
         try:
             from google.cloud import firestore
         except ImportError as exc:
-            raise missing_client_error(
+            raise _missing_client_error(
                 "FirestoreMemoryStore", "google-cloud-firestore", exc
             ) from exc
 
@@ -51,7 +55,7 @@ class FirestoreMemoryStore(MemoryStore):
         snapshot = await self._collection.document(self._doc_id(entity_key, key)).get()
         if not snapshot.exists:
             return None
-        return decode_envelope(entity_key, bytes(snapshot.get(_RECORD_FIELD)))
+        return _decode_envelope(entity_key, bytes(snapshot.get(_RECORD_FIELD)))
 
     async def _save(self, record: MemoryRecord) -> bool:
         doc_ref = self._collection.document(self._doc_id(record.entity_key, record.key))
@@ -59,7 +63,7 @@ class FirestoreMemoryStore(MemoryStore):
             _ENTITY_FIELD: record.entity_key.hex(),
             _KEY_FIELD: record.key,
             _SEQ_FIELD: record.seq,
-            _RECORD_FIELD: encode_envelope(record),
+            _RECORD_FIELD: _encode_envelope(record),
         }
         transaction = self._client.transaction()
 
@@ -86,10 +90,11 @@ class FirestoreMemoryStore(MemoryStore):
         )
         records: list[MemoryRecord] = []
         async for snapshot in query.stream():
-            records.append(decode_envelope(entity_key, bytes(snapshot.get(_RECORD_FIELD))))
+            records.append(_decode_envelope(entity_key, bytes(snapshot.get(_RECORD_FIELD))))
         return records
 
     async def close(self) -> None:
+        """Close the Firestore client, tolerating its sync/async ``close`` variants."""
         import inspect
 
         # AsyncClient.close is a coroutine in current client versions; the

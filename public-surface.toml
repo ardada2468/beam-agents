@@ -1,0 +1,1331 @@
+# The frozen public API surface of `beam_agents` (OpenSpec change
+# `add-1-0-api-freeze`, roadmap C45).
+#
+# One table per public module, keyed by its path relative to `src/`, recording:
+#   names = every public (non-underscore) top-level name the module *declares*
+#           -- functions, classes, and module-level assignments -- sorted.
+#   all   = the module's declared `__all__`, verbatim, when it has one. For the
+#           package `__init__` modules this is the whole contract, since they
+#           re-export rather than declare.
+#
+# Modules under a `_`-prefixed package or with a `_`-prefixed name are internal
+# machinery by their path and are deliberately absent: `_protos/`,
+# `adapters/_transport.py`, `model/_http.py`, `yaml/_config.py`, `yaml/_refs.py`.
+# Generated protobuf bindings are never snapshotted.
+#
+# This file is GENERATED, never hand-edited:
+#
+#     uv run python tests/test_public_surface.py
+#
+# `tests/test_public_surface.py` compares it against the tree by exact equality
+# in both directions, so an unreviewed addition and an unreviewed removal both
+# fail `make test-unit`. Regenerating is not a way to make the test pass -- the
+# resulting diff is the API review, and after 1.0 a removal in that diff needs
+# the deprecation window CONTRIBUTING.md defines.
+
+["beam_agents/__init__.py"]
+names = []
+all = [
+  "AdkAgent",
+  "AgentConfig",
+  "Deny",
+  "Drop",
+  "Escalate",
+  "FallbackContext",
+  "HitlPolicy",
+  "LangGraphAgent",
+  "PydanticAIAgent",
+  "RunAgent",
+  "RunAgentOutputs",
+  "ShardKeys",
+  "StreamAgent",
+  "shard_key",
+  "tool",
+  "unshard_key",
+]
+
+["beam_agents/actions/__init__.py"]
+names = []
+all = [
+  "DEAD_LETTER_TAG",
+  "UnknownIntentsSchemeError",
+  "WriteIntents",
+  "WriteIntentsResult",
+]
+
+["beam_agents/actions/write_intents.py"]
+names = [
+  "DEAD_LETTER_TAG",
+  "UnknownIntentsSchemeError",
+  "WriteIntents",
+  "WriteIntentsResult",
+]
+all = [
+  "DEAD_LETTER_TAG",
+  "UnknownIntentsSchemeError",
+  "WriteIntents",
+  "WriteIntentsResult",
+]
+
+["beam_agents/adapters/__init__.py"]
+names = []
+
+["beam_agents/adapters/adk/__init__.py"]
+names = []
+all = [
+  "AdkAgent",
+  "BeamApprovalTool",
+  "BeamFunctionTool",
+  "BeamLongRunningTool",
+  "BeamSessionService",
+  "beam_tools",
+]
+
+["beam_agents/adapters/adk/agent.py"]
+names = [
+  "AdkAgent",
+]
+all = [
+  "AdkAgent",
+]
+
+["beam_agents/adapters/adk/events.py"]
+names = []
+
+["beam_agents/adapters/adk/session.py"]
+names = [
+  "BeamSessionService",
+]
+all = [
+  "BeamSessionService",
+]
+
+["beam_agents/adapters/adk/tools.py"]
+names = [
+  "BeamApprovalTool",
+  "BeamFunctionTool",
+  "BeamLongRunningTool",
+  "beam_tools",
+]
+all = [
+  "BeamApprovalTool",
+  "BeamFunctionTool",
+  "BeamLongRunningTool",
+  "beam_tools",
+]
+
+["beam_agents/adapters/adk/transport.py"]
+names = []
+
+["beam_agents/adapters/langgraph/__init__.py"]
+names = []
+all = [
+  "BeamCheckpointSaver",
+  "BeamToolNode",
+  "LangGraphAgent",
+]
+
+["beam_agents/adapters/langgraph/agent.py"]
+names = [
+  "LangGraphAgent",
+]
+all = [
+  "LangGraphAgent",
+]
+
+["beam_agents/adapters/langgraph/checkpoint.py"]
+names = [
+  "BeamCheckpointSaver",
+]
+all = [
+  "BeamCheckpointSaver",
+]
+
+["beam_agents/adapters/langgraph/toolnode.py"]
+names = [
+  "BeamToolNode",
+]
+all = [
+  "BeamToolNode",
+]
+
+["beam_agents/adapters/langgraph/transport.py"]
+names = []
+all = [
+  "_FALLBACK_COUNTER",
+  "_METRIC_NAMESPACE",
+  "_RESERVED_BODY_KEYS",
+  "_ReplayTransport",
+  "_current_activation",
+  "_find_async_client",
+  "_install_transport",
+  "_warn_fallback",
+]
+
+["beam_agents/adapters/pydantic_ai/__init__.py"]
+names = []
+all = [
+  "BeamToolset",
+  "PydanticAIAgent",
+]
+
+["beam_agents/adapters/pydantic_ai/agent.py"]
+names = [
+  "PydanticAIAgent",
+]
+all = [
+  "PydanticAIAgent",
+]
+
+["beam_agents/adapters/pydantic_ai/history.py"]
+names = []
+
+["beam_agents/adapters/pydantic_ai/toolset.py"]
+names = [
+  "BeamToolset",
+]
+all = [
+  "BeamToolset",
+]
+
+["beam_agents/adapters/pydantic_ai/transport.py"]
+names = []
+
+["beam_agents/core/__init__.py"]
+names = []
+all = [
+  "AgentContext",
+  "AgentResult",
+  "FunctionAgent",
+  "StreamAgent",
+]
+
+["beam_agents/core/agent.py"]
+names = [
+  "Agent",
+  "Complete",
+  "FallbackContext",
+  "FunctionAgent",
+  "Outcome",
+  "StreamAgent",
+  "Suspend",
+  "intent_id_for",
+]
+all = [
+  "Agent",
+  "Complete",
+  "FallbackContext",
+  "FunctionAgent",
+  "Outcome",
+  "StreamAgent",
+  "Suspend",
+  "intent_id_for",
+]
+
+["beam_agents/core/batching.py"]
+names = [
+  "BUFFER_HEADROOM",
+  "BatchPolicy",
+  "BatchSettings",
+  "DEFAULT_MAX_BATCH_SIZE",
+  "DEFAULT_MAX_WAIT_MS",
+  "TRACE_BATCH_SIZE",
+  "TRACE_BATCH_TRIGGER",
+  "TRIGGER_SIZE",
+  "TRIGGER_TIMER",
+  "buffer_is_full",
+  "resolve_batch_settings",
+  "should_flush_on_size",
+  "should_flush_on_timer",
+]
+all = [
+  "BUFFER_HEADROOM",
+  "DEFAULT_MAX_BATCH_SIZE",
+  "DEFAULT_MAX_WAIT_MS",
+  "TRACE_BATCH_SIZE",
+  "TRACE_BATCH_TRIGGER",
+  "TRIGGER_SIZE",
+  "TRIGGER_TIMER",
+  "BatchPolicy",
+  "BatchSettings",
+  "buffer_is_full",
+  "resolve_batch_settings",
+  "should_flush_on_size",
+  "should_flush_on_timer",
+]
+
+["beam_agents/core/bridge.py"]
+names = [
+  "ActivationTimeout",
+  "AsyncBridge",
+]
+all = [
+  "ActivationTimeout",
+  "AsyncBridge",
+]
+
+["beam_agents/core/coders.py"]
+names = [
+  "DeterministicProtoCoder",
+  "MESSAGE_TYPES",
+  "register_coders",
+]
+all = [
+  "MESSAGE_TYPES",
+  "DeterministicProtoCoder",
+  "register_coders",
+]
+
+["beam_agents/core/context.py"]
+names = [
+  "ActivationContext",
+  "AgentContext",
+  "AgentResult",
+  "MonotonicNs",
+]
+all = [
+  "ActivationContext",
+  "AgentContext",
+  "AgentResult",
+  "MonotonicNs",
+]
+
+["beam_agents/core/dofn.py"]
+names = [
+  "ActivationError",
+  "DETAIL_DEADLINE_PASSED",
+  "DETAIL_INTENT_EXPIRED",
+  "DETAIL_NO_CONTINUATION",
+  "DETAIL_UNKNOWN_INTENT",
+  "REASON_BATCH_OVERFLOW",
+  "REASON_BUDGET_EXCEEDED",
+  "REASON_ERROR",
+  "REASON_INTENT_DEAD_LETTER",
+  "REASON_ORPHANED",
+  "REASON_TIMEOUT",
+  "REASON_TTL_WIPED_BATCH",
+  "REASON_TTL_WIPED_SUSPENSION",
+]
+all = [
+  "DETAIL_DEADLINE_PASSED",
+  "DETAIL_INTENT_EXPIRED",
+  "DETAIL_NO_CONTINUATION",
+  "DETAIL_UNKNOWN_INTENT",
+  "HITL_TIMEOUT_OUTPUT",
+  "REASON_BATCH_OVERFLOW",
+  "REASON_BUDGET_EXCEEDED",
+  "REASON_ERROR",
+  "REASON_HITL_TIMEOUT",
+  "REASON_INTENT_DEAD_LETTER",
+  "REASON_ORPHANED",
+  "REASON_TIMEOUT",
+  "REASON_TTL_WIPED_BATCH",
+  "REASON_TTL_WIPED_SUSPENSION",
+  "ActivationError",
+]
+
+["beam_agents/core/error_records.py"]
+names = [
+  "activation_error_to_row",
+  "intent_dead_letter_to_error",
+  "serialize_error_envelope",
+]
+all = [
+  "activation_error_to_row",
+  "intent_dead_letter_to_error",
+  "serialize_error_envelope",
+]
+
+["beam_agents/core/loop.py"]
+names = [
+  "ActivationFailed",
+  "ActivationResult",
+  "FailureContext",
+  "LongtermFlushFailed",
+  "run_activation",
+]
+all = [
+  "DEFAULT_HITL_TIMEOUT_MS",
+  "ActivationFailed",
+  "ActivationResult",
+  "FailureContext",
+  "LongtermFlushFailed",
+  "run_activation",
+]
+
+["beam_agents/core/migration.py"]
+names = [
+  "CURRENT_STATE_SCHEMA_VERSION",
+  "MigrationStepError",
+  "MissingMigrationError",
+  "StateMigrationError",
+  "StateSchemaFromFutureError",
+  "VERSIONED_MESSAGE_TYPES",
+  "migrate_to_current",
+  "migration",
+]
+all = [
+  "CURRENT_STATE_SCHEMA_VERSION",
+  "VERSIONED_MESSAGE_TYPES",
+  "MigrationStepError",
+  "MissingMigrationError",
+  "StateMigrationError",
+  "StateSchemaFromFutureError",
+  "migrate_to_current",
+  "migration",
+]
+
+["beam_agents/core/snapshot.py"]
+names = [
+  "build_snapshot",
+  "serialize_snapshot",
+]
+all = [
+  "build_snapshot",
+  "serialize_snapshot",
+]
+
+["beam_agents/core/transform.py"]
+names = [
+  "AgentConfig",
+  "DefaultSinkResolver",
+  "ERRORS_TAG",
+  "INTENTS_TAG",
+  "RunAgent",
+  "RunAgentOutputs",
+  "SNAPSHOTS_TAG",
+  "SinkResolver",
+  "TRACES_TAG",
+  "UnknownSinkSchemeError",
+]
+all = [
+  "ERRORS_TAG",
+  "INTENTS_TAG",
+  "SNAPSHOTS_TAG",
+  "TRACES_TAG",
+  "AgentConfig",
+  "DefaultSinkResolver",
+  "RunAgent",
+  "RunAgentOutputs",
+  "SinkResolver",
+  "UnknownSinkSchemeError",
+]
+
+["beam_agents/effector/__init__.py"]
+names = []
+all = [
+  "ClaimOutcome",
+  "Claimed",
+  "DedupStore",
+  "DeliveredIntent",
+  "Done",
+  "EffectorConfig",
+  "EffectorConfigError",
+  "EffectorService",
+  "EffectorToolRunner",
+  "InFlight",
+  "InMemoryDedupStore",
+  "IntentSource",
+  "ReadOnlyToolError",
+  "ResultSink",
+  "TransportSecurity",
+  "redact_uri",
+]
+
+["beam_agents/effector/__main__.py"]
+names = [
+  "build_parser",
+  "config_from_args",
+  "main",
+  "transport_security_from_args",
+]
+all = [
+  "build_parser",
+  "config_from_args",
+  "main",
+  "transport_security_from_args",
+]
+
+["beam_agents/effector/config.py"]
+names = [
+  "DEFAULT_LEASE_MS",
+  "DEFAULT_RESULT_TTL_MS",
+  "DEFAULT_TOOL_TIMEOUT_MS",
+  "EffectorConfig",
+  "EffectorConfigError",
+  "TransportSecurity",
+  "VERIFICATION_MODES",
+  "VerificationMode",
+  "parse_dedup_uri",
+  "parse_transport_uri",
+  "redact_uri",
+]
+all = [
+  "DEFAULT_LEASE_MS",
+  "DEFAULT_RESULT_TTL_MS",
+  "DEFAULT_TOOL_TIMEOUT_MS",
+  "VERIFICATION_MODES",
+  "EffectorConfig",
+  "EffectorConfigError",
+  "TransportSecurity",
+  "VerificationMode",
+  "parse_dedup_uri",
+  "parse_transport_uri",
+  "redact_uri",
+]
+
+["beam_agents/effector/dedup.py"]
+names = [
+  "BigtableDedupStore",
+  "ClaimOutcome",
+  "Claimed",
+  "DedupStore",
+  "Done",
+  "InFlight",
+  "InMemoryDedupStore",
+  "RedisDedupStore",
+  "build_dedup_store",
+]
+all = [
+  "BigtableDedupStore",
+  "ClaimOutcome",
+  "Claimed",
+  "DedupStore",
+  "Done",
+  "InFlight",
+  "InMemoryDedupStore",
+  "RedisDedupStore",
+  "build_dedup_store",
+]
+
+["beam_agents/effector/runner.py"]
+names = [
+  "EffectorToolRunner",
+  "ReadOnlyToolError",
+]
+all = [
+  "EffectorToolRunner",
+  "ReadOnlyToolError",
+]
+
+["beam_agents/effector/service.py"]
+names = [
+  "CountingMetrics",
+  "EffectorService",
+  "MetricsSink",
+  "PublishFailedError",
+]
+all = [
+  "CountingMetrics",
+  "EffectorService",
+  "MetricsSink",
+  "PublishFailedError",
+]
+
+["beam_agents/effector/sinks.py"]
+names = [
+  "InMemoryMessageSink",
+  "InMemoryResultSink",
+  "KafkaMessageSink",
+  "MessageSink",
+  "ProtoResultSink",
+  "PubSubMessageSink",
+  "ResultSink",
+  "build_message_sink",
+  "build_result_sink",
+]
+all = [
+  "InMemoryMessageSink",
+  "InMemoryResultSink",
+  "KafkaMessageSink",
+  "MessageSink",
+  "ProtoResultSink",
+  "PubSubMessageSink",
+  "ResultSink",
+  "build_message_sink",
+  "build_result_sink",
+]
+
+["beam_agents/effector/sources.py"]
+names = [
+  "DeliveredIntent",
+  "InMemoryIntentSource",
+  "IntentSource",
+  "KafkaIntentSource",
+  "PubSubIntentSource",
+  "RevocationHandler",
+  "build_intent_source",
+]
+all = [
+  "DeliveredIntent",
+  "InMemoryIntentSource",
+  "IntentSource",
+  "KafkaIntentSource",
+  "PubSubIntentSource",
+  "RevocationHandler",
+  "build_intent_source",
+]
+
+["beam_agents/hitl.py"]
+names = [
+  "DEFAULT_APPROVAL_CHANNEL",
+  "DEFAULT_HITL_TIMEOUT_MS",
+  "DEFAULT_INTENT_TTL_MS",
+  "Deny",
+  "Drop",
+  "Escalate",
+  "HITL_TIMEOUT_OUTPUT",
+  "HitlPolicy",
+  "REASON_HITL_TIMEOUT",
+  "Route",
+  "deny",
+  "intent_expired",
+  "refuse_expired",
+]
+all = [
+  "DEFAULT_APPROVAL_CHANNEL",
+  "DEFAULT_HITL_TIMEOUT_MS",
+  "DEFAULT_INTENT_TTL_MS",
+  "HITL_TIMEOUT_OUTPUT",
+  "REASON_HITL_TIMEOUT",
+  "Deny",
+  "Drop",
+  "Escalate",
+  "HitlPolicy",
+  "Route",
+  "deny",
+  "intent_expired",
+  "refuse_expired",
+]
+
+["beam_agents/intent_signing.py"]
+names = [
+  "IntentSigner",
+  "Keyring",
+  "SCHEME_HMAC_SHA256",
+  "VerificationResult",
+  "load_keyring",
+  "resolve_secret_reference",
+  "sign_intent",
+  "signing_input",
+  "validate_secret_reference",
+  "verify_intent",
+]
+all = [
+  "SCHEME_HMAC_SHA256",
+  "IntentSigner",
+  "Keyring",
+  "VerificationResult",
+  "load_keyring",
+  "resolve_secret_reference",
+  "sign_intent",
+  "signing_input",
+  "validate_secret_reference",
+  "verify_intent",
+]
+
+["beam_agents/keys.py"]
+names = [
+  "Assignment",
+  "SHARD_DELIMITER",
+  "ShardKeys",
+  "shard_key",
+  "unshard_key",
+]
+all = [
+  "SHARD_DELIMITER",
+  "Assignment",
+  "ShardKeys",
+  "shard_key",
+  "unshard_key",
+]
+
+["beam_agents/memory/__init__.py"]
+names = []
+all = [
+  "Compactor",
+  "DropOldestCompactor",
+  "ExpireHook",
+  "ExpiringMemory",
+  "FlushToLongterm",
+  "LongtermMemory",
+  "Memory",
+  "MemoryOverflow",
+  "SummarizationView",
+  "SummarizeCompactor",
+  "Summarizer",
+]
+
+["beam_agents/memory/compaction.py"]
+names = [
+  "DEFAULT_EXPIRY_KEY",
+  "DEFAULT_KEEP_RECENT",
+  "DEFAULT_PROTECTED_PREFIXES",
+  "DEFAULT_SUMMARY_KEY",
+  "DEFAULT_TARGET_BYTES",
+  "DEFAULT_TRIGGER_BYTES",
+  "DropOldestCompactor",
+  "ExpireHook",
+  "ExpiringMemory",
+  "FlushToLongterm",
+  "SummarizationView",
+  "SummarizeCompactor",
+  "Summarizer",
+]
+all = [
+  "DEFAULT_EXPIRY_KEY",
+  "DEFAULT_KEEP_RECENT",
+  "DEFAULT_PROTECTED_PREFIXES",
+  "DEFAULT_SUMMARY_KEY",
+  "DEFAULT_TARGET_BYTES",
+  "DEFAULT_TRIGGER_BYTES",
+  "DropOldestCompactor",
+  "ExpireHook",
+  "ExpiringMemory",
+  "FlushToLongterm",
+  "SummarizationView",
+  "SummarizeCompactor",
+  "Summarizer",
+]
+
+["beam_agents/memory/facade.py"]
+names = [
+  "Compactor",
+  "HARD_CAP_BYTES",
+  "LongtermMemory",
+  "Memory",
+  "MemoryOverflow",
+]
+all = [
+  "HARD_CAP_BYTES",
+  "Compactor",
+  "LongtermMemory",
+  "Memory",
+  "MemoryOverflow",
+]
+
+["beam_agents/memory/stores/__init__.py"]
+names = []
+all = [
+  "InMemoryMemoryStore",
+  "MemoryRecord",
+  "MemoryStore",
+  "build_memory_store",
+  "parse_memory_store_uri",
+]
+
+["beam_agents/memory/stores/base.py"]
+names = [
+  "InMemoryMemoryStore",
+  "MemoryRecord",
+  "MemoryStore",
+  "build_memory_store",
+  "parse_memory_store_uri",
+]
+all = [
+  "InMemoryMemoryStore",
+  "MemoryRecord",
+  "MemoryStore",
+  "build_memory_store",
+  "parse_memory_store_uri",
+]
+
+["beam_agents/memory/stores/bigtable.py"]
+names = [
+  "BigtableMemoryStore",
+]
+all = [
+  "BigtableMemoryStore",
+]
+
+["beam_agents/memory/stores/firestore.py"]
+names = [
+  "FirestoreMemoryStore",
+]
+all = [
+  "FirestoreMemoryStore",
+]
+
+["beam_agents/memory/stores/redis.py"]
+names = [
+  "RedisMemoryStore",
+]
+all = [
+  "RedisMemoryStore",
+]
+
+["beam_agents/memory/stores/sql.py"]
+names = [
+  "DDL",
+  "SqlMemoryStore",
+]
+all = [
+  "DDL",
+  "SqlMemoryStore",
+]
+
+["beam_agents/model/__init__.py"]
+names = []
+all = [
+  "BLOB_CAP_BYTES",
+  "MAX_ENTRIES",
+  "TTL_MS",
+  "AnthropicProvider",
+  "BudgetExceeded",
+  "CircuitBreaker",
+  "CircuitOpenError",
+  "CircuitState",
+  "DecodedResponse",
+  "FacadeResult",
+  "FakeLLM",
+  "LLMClient",
+  "LlmFacade",
+  "LlmRequest",
+  "LlmResponse",
+  "OpenAICompatProvider",
+  "OutputSchemaError",
+  "ProviderError",
+  "ProviderRequestError",
+  "ProviderTimeout",
+  "RateLimitError",
+  "ReplayCache",
+  "ReplayEntry",
+  "RetryPolicy",
+  "ServerError",
+  "StagingSink",
+  "TokenBudget",
+  "TokenUsage",
+  "UnmatchedRequestError",
+  "VllmEndpointProvider",
+  "VllmSidecarProvider",
+  "anthropic_decode",
+  "compute_cache_key",
+  "fail_then_succeed",
+  "match_any",
+  "match_contains",
+  "match_model_id",
+  "openai_compat_decode",
+  "raise_error",
+  "respond_with",
+  "vllm_sidecar_factory",
+]
+
+["beam_agents/model/anthropic.py"]
+names = [
+  "AnthropicProvider",
+]
+all = [
+  "AnthropicProvider",
+]
+
+["beam_agents/model/client.py"]
+names = [
+  "LLMClient",
+  "LlmRequest",
+  "LlmResponse",
+  "ProviderError",
+  "ProviderRequestError",
+  "ProviderTimeout",
+  "RateLimitError",
+  "ServerError",
+]
+all = [
+  "LLMClient",
+  "LlmRequest",
+  "LlmResponse",
+  "ProviderError",
+  "ProviderRequestError",
+  "ProviderTimeout",
+  "RateLimitError",
+  "ServerError",
+]
+
+["beam_agents/model/facade.py"]
+names = [
+  "BudgetExceeded",
+  "CircuitBreaker",
+  "CircuitOpenError",
+  "CircuitState",
+  "Decode",
+  "DecodedResponse",
+  "FacadeResult",
+  "LlmFacade",
+  "OutputSchemaError",
+  "RetryPolicy",
+  "Sleep",
+  "StagingSink",
+  "TokenBudget",
+  "TokenUsage",
+]
+all = [
+  "BudgetExceeded",
+  "CircuitBreaker",
+  "CircuitOpenError",
+  "CircuitState",
+  "Decode",
+  "DecodedResponse",
+  "FacadeResult",
+  "LlmFacade",
+  "OutputSchemaError",
+  "RetryPolicy",
+  "Sleep",
+  "StagingSink",
+  "TokenBudget",
+  "TokenUsage",
+]
+
+["beam_agents/model/fake.py"]
+names = [
+  "Behavior",
+  "FakeLLM",
+  "Matcher",
+  "UnmatchedRequestError",
+  "fail_then_succeed",
+  "match_any",
+  "match_contains",
+  "match_model_id",
+  "raise_error",
+  "respond_with",
+]
+all = [
+  "Behavior",
+  "FakeLLM",
+  "Matcher",
+  "UnmatchedRequestError",
+  "fail_then_succeed",
+  "match_any",
+  "match_contains",
+  "match_model_id",
+  "raise_error",
+  "respond_with",
+]
+
+["beam_agents/model/openai_compat.py"]
+names = [
+  "OpenAICompatProvider",
+]
+all = [
+  "OpenAICompatProvider",
+]
+
+["beam_agents/model/replay_cache.py"]
+names = [
+  "BLOB_CAP_BYTES",
+  "MAX_ENTRIES",
+  "ReplayCache",
+  "ReplayEntry",
+  "TTL_MS",
+  "compute_cache_key",
+]
+all = [
+  "BLOB_CAP_BYTES",
+  "MAX_ENTRIES",
+  "TTL_MS",
+  "ReplayCache",
+  "ReplayEntry",
+  "compute_cache_key",
+]
+
+["beam_agents/model/vllm.py"]
+names = [
+  "VllmEndpointProvider",
+  "VllmSidecarProvider",
+  "vllm_sidecar_factory",
+]
+all = [
+  "VllmEndpointProvider",
+  "VllmSidecarProvider",
+  "vllm_sidecar_factory",
+]
+
+["beam_agents/observability/__init__.py"]
+names = []
+all = [
+  "ACTIVATION_KIND",
+  "ACTIVATION_STATUS",
+  "ADAPTER",
+  "ATTEMPTS",
+  "BILLED",
+  "CACHE_HIT",
+  "CIRCUIT_STATE",
+  "DEADLINE_MS",
+  "ERROR_TYPE",
+  "EXPIRES_AT_MS",
+  "FAILURE_LAST_EVENT",
+  "FAILURE_LLM_CALLS",
+  "FAILURE_STAGED_INTENTS",
+  "FAILURE_STEP",
+  "INTENT_ID",
+  "INTENT_KIND",
+  "OPERATION_CHAT",
+  "OPERATION_NAME",
+  "PENDING_INTENT_IDS",
+  "REASON",
+  "REQUEST_MODEL",
+  "ROLE_ACTIVATION",
+  "ROLE_TIMER",
+  "TOOL_NAME",
+  "USAGE_INPUT_TOKENS",
+  "USAGE_OUTPUT_TOKENS",
+  "ActivationTally",
+  "ActivationTrace",
+  "MetricsSink",
+  "NullMetrics",
+  "RuntimeMetrics",
+  "role_for_event_type",
+  "serialize_trace_event",
+  "span_id_for",
+  "trace_event_to_row",
+  "trace_id_for",
+  "usage_attributes",
+]
+
+["beam_agents/observability/exporters.py"]
+names = [
+  "TRACE_TABLE_SCHEMA",
+  "serialize_trace_event",
+  "trace_event_to_row",
+]
+all = [
+  "TRACE_TABLE_SCHEMA",
+  "serialize_trace_event",
+  "trace_event_to_row",
+]
+
+["beam_agents/observability/metrics.py"]
+names = [
+  "ActivationTally",
+  "COUNTERS",
+  "COUNTER_ACTIVATIONS",
+  "COUNTER_AGENT_ERRORS",
+  "COUNTER_BATCH_FLUSHES_SIZE",
+  "COUNTER_BATCH_FLUSHES_TIMER",
+  "COUNTER_EVENTS_BUFFERED",
+  "COUNTER_INTENTS_EMITTED",
+  "COUNTER_LLM_CALLS",
+  "COUNTER_LONGTERM_UPSERTS",
+  "COUNTER_ORPHANED_RESULTS",
+  "COUNTER_SUSPENSIONS",
+  "COUNTER_TOOL_CALLS",
+  "DISTRIBUTIONS",
+  "DISTRIBUTION_ACTIVATION_MS",
+  "DISTRIBUTION_BATCH_SIZE",
+  "DISTRIBUTION_COMPLETION_TOKENS",
+  "DISTRIBUTION_ITERATIONS",
+  "DISTRIBUTION_LLM_MS",
+  "DISTRIBUTION_MEMORY_BYTES",
+  "DISTRIBUTION_OVERHEAD_MS",
+  "DISTRIBUTION_PROMPT_TOKENS",
+  "DISTRIBUTION_TOKENS",
+  "MetricsSink",
+  "NAMESPACE",
+  "NullMetrics",
+  "RuntimeMetrics",
+]
+all = [
+  "COUNTERS",
+  "COUNTER_ACTIVATIONS",
+  "COUNTER_AGENT_ERRORS",
+  "COUNTER_BATCH_FLUSHES_SIZE",
+  "COUNTER_BATCH_FLUSHES_TIMER",
+  "COUNTER_EVENTS_BUFFERED",
+  "COUNTER_INTENTS_EMITTED",
+  "COUNTER_LLM_CALLS",
+  "COUNTER_LONGTERM_UPSERTS",
+  "COUNTER_ORPHANED_RESULTS",
+  "COUNTER_SUSPENSIONS",
+  "COUNTER_TOOL_CALLS",
+  "DISTRIBUTIONS",
+  "DISTRIBUTION_ACTIVATION_MS",
+  "DISTRIBUTION_BATCH_SIZE",
+  "DISTRIBUTION_COMPLETION_TOKENS",
+  "DISTRIBUTION_ITERATIONS",
+  "DISTRIBUTION_LLM_MS",
+  "DISTRIBUTION_MEMORY_BYTES",
+  "DISTRIBUTION_OVERHEAD_MS",
+  "DISTRIBUTION_PROMPT_TOKENS",
+  "DISTRIBUTION_TOKENS",
+  "NAMESPACE",
+  "ActivationTally",
+  "MetricsSink",
+  "NullMetrics",
+  "RuntimeMetrics",
+]
+
+["beam_agents/observability/otlp.py"]
+names = [
+  "COUNTERS",
+  "COUNTER_BATCHES_SENT",
+  "COUNTER_EXPORT_FAILURES",
+  "COUNTER_SPANS_DROPPED",
+  "COUNTER_SPANS_EXPORTED",
+  "DEFAULT_BATCH_SIZE",
+  "DEFAULT_FLUSH_DEADLINE_S",
+  "DEFAULT_QUEUE_BATCHES",
+  "DEFAULT_SERVICE_NAME",
+  "NAMESPACE",
+  "WriteTracesToOtlp",
+]
+all = [
+  "COUNTERS",
+  "COUNTER_BATCHES_SENT",
+  "COUNTER_EXPORT_FAILURES",
+  "COUNTER_SPANS_DROPPED",
+  "COUNTER_SPANS_EXPORTED",
+  "DEFAULT_BATCH_SIZE",
+  "DEFAULT_FLUSH_DEADLINE_S",
+  "DEFAULT_QUEUE_BATCHES",
+  "DEFAULT_SERVICE_NAME",
+  "NAMESPACE",
+  "WriteTracesToOtlp",
+]
+
+["beam_agents/observability/traces.py"]
+names = [
+  "ACTIVATION_KIND",
+  "ACTIVATION_STATUS",
+  "ADAPTER",
+  "ATTEMPTS",
+  "ActivationTrace",
+  "BILLED",
+  "CACHE_HIT",
+  "CIRCUIT_STATE",
+  "DEADLINE_MS",
+  "ERROR_TYPE",
+  "EXPIRES_AT_MS",
+  "FAILURE_LAST_EVENT",
+  "FAILURE_LLM_CALLS",
+  "FAILURE_STAGED_INTENTS",
+  "FAILURE_STEP",
+  "INTENT_ID",
+  "INTENT_KIND",
+  "OPERATION_CHAT",
+  "OPERATION_NAME",
+  "PENDING_INTENT_IDS",
+  "REASON",
+  "REQUEST_MODEL",
+  "ROLE_ACTIVATION",
+  "ROLE_TIMER",
+  "TOOL_NAME",
+  "USAGE_INPUT_TOKENS",
+  "USAGE_OUTPUT_TOKENS",
+  "role_for_event_type",
+  "span_id_for",
+  "trace_id_for",
+  "usage_attributes",
+]
+all = [
+  "ACTIVATION_KIND",
+  "ACTIVATION_STATUS",
+  "ADAPTER",
+  "ATTEMPTS",
+  "BILLED",
+  "CACHE_HIT",
+  "CIRCUIT_STATE",
+  "DEADLINE_MS",
+  "ERROR_TYPE",
+  "EXPIRES_AT_MS",
+  "FAILURE_LAST_EVENT",
+  "FAILURE_LLM_CALLS",
+  "FAILURE_STAGED_INTENTS",
+  "FAILURE_STEP",
+  "INTENT_ID",
+  "INTENT_KIND",
+  "OPERATION_CHAT",
+  "OPERATION_NAME",
+  "PENDING_INTENT_IDS",
+  "REASON",
+  "REQUEST_MODEL",
+  "ROLE_ACTIVATION",
+  "ROLE_TIMER",
+  "TOOL_NAME",
+  "USAGE_INPUT_TOKENS",
+  "USAGE_OUTPUT_TOKENS",
+  "ActivationTrace",
+  "role_for_event_type",
+  "span_id_for",
+  "trace_id_for",
+  "usage_attributes",
+]
+
+["beam_agents/replay/__init__.py"]
+names = []
+
+["beam_agents/replay/__main__.py"]
+names = [
+  "EXIT_DIVERGED",
+  "EXIT_IRREPRODUCIBLE",
+  "EXIT_REPRODUCED",
+  "EXIT_USAGE",
+  "build_parser",
+  "import_object",
+  "main",
+]
+all = [
+  "EXIT_DIVERGED",
+  "EXIT_IRREPRODUCIBLE",
+  "EXIT_REPRODUCED",
+  "EXIT_USAGE",
+  "build_parser",
+  "import_object",
+  "main",
+]
+
+["beam_agents/replay/bundle.py"]
+names = [
+  "ReplayBundle",
+  "ReplayError",
+  "ReplayIrreproducibleError",
+  "ReplayOutcome",
+  "ReplayUsageError",
+  "build_bundle",
+  "frame_trace_events",
+  "load_envelope",
+  "load_snapshot",
+  "parse_trace_stream",
+  "run_replay",
+]
+all = [
+  "ReplayBundle",
+  "ReplayError",
+  "ReplayIrreproducibleError",
+  "ReplayOutcome",
+  "ReplayUsageError",
+  "build_bundle",
+  "frame_trace_events",
+  "load_envelope",
+  "load_snapshot",
+  "parse_trace_stream",
+  "run_replay",
+]
+
+["beam_agents/replay/diff.py"]
+names = [
+  "DiffReport",
+  "Difference",
+  "NORMALIZED_ATTRIBUTES",
+  "compare",
+  "normalize_event",
+]
+all = [
+  "NORMALIZED_ATTRIBUTES",
+  "DiffReport",
+  "Difference",
+  "compare",
+  "normalize_event",
+]
+
+["beam_agents/replay/provider.py"]
+names = [
+  "CacheOnlyLLMClient",
+  "ReplayCacheMissError",
+  "digest_only_digests",
+]
+all = [
+  "CacheOnlyLLMClient",
+  "ReplayCacheMissError",
+  "digest_only_digests",
+]
+
+["beam_agents/testing/__init__.py"]
+names = []
+
+["beam_agents/testing/chaos.py"]
+names = [
+  "ChaosBundleFailure",
+  "Matcher",
+  "fail_first_hitl_fire",
+  "fail_first_matching_commit",
+  "match_any",
+]
+all = [
+  "ChaosBundleFailure",
+  "Matcher",
+  "fail_first_hitl_fire",
+  "fail_first_matching_commit",
+  "match_any",
+]
+
+["beam_agents/tools/__init__.py"]
+names = []
+all = [
+  "IntentInfo",
+  "SideEffectToolError",
+  "Tool",
+  "ToolArgumentError",
+  "ToolDefinitionError",
+  "ToolError",
+  "ToolNotFoundError",
+  "ToolRegistry",
+  "ToolRunner",
+  "tool",
+]
+
+["beam_agents/tools/errors.py"]
+names = [
+  "SideEffectToolError",
+  "ToolArgumentError",
+  "ToolDefinitionError",
+  "ToolError",
+  "ToolNotFoundError",
+]
+all = [
+  "SideEffectToolError",
+  "ToolArgumentError",
+  "ToolDefinitionError",
+  "ToolError",
+  "ToolNotFoundError",
+]
+
+["beam_agents/tools/intent_info.py"]
+names = [
+  "IntentInfo",
+]
+all = [
+  "IntentInfo",
+]
+
+["beam_agents/tools/registry.py"]
+names = [
+  "Tool",
+  "ToolRegistry",
+  "tool",
+]
+all = [
+  "Tool",
+  "ToolRegistry",
+  "tool",
+]
+
+["beam_agents/tools/runner.py"]
+names = [
+  "ToolRunner",
+]
+all = [
+  "ToolRunner",
+]
+
+["beam_agents/yaml/__init__.py"]
+names = [
+  "PROVIDER_LISTING",
+]
+all = [
+  "PROVIDER_LISTING",
+  "run_agent",
+]
+
+["beam_agents/yaml/transform.py"]
+names = [
+  "MALFORMED_TAG",
+  "OUTPUT_NAMES",
+  "REASON_MALFORMED_ROW",
+  "RunAgentFromYaml",
+  "run_agent",
+]
+all = [
+  "MALFORMED_TAG",
+  "OUTPUT_NAMES",
+  "REASON_MALFORMED_ROW",
+  "RunAgentFromYaml",
+  "run_agent",
+]

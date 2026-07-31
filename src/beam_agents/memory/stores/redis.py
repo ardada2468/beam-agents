@@ -20,14 +20,18 @@ from typing import TYPE_CHECKING, cast
 from beam_agents.memory.stores.base import (
     MemoryRecord,
     MemoryStore,
-    decode_envelope,
-    encode_envelope,
-    encode_seq,
-    missing_client_error,
+    _decode_envelope,
+    _encode_envelope,
+    _encode_seq,
+    _missing_client_error,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+__all__ = [
+    "RedisMemoryStore",
+]
 
 # Lua strings compare lexicographically byte-by-byte, and the 8-byte big-endian
 # seq framing makes that agree with numeric order — so "incoming >= stored" is
@@ -64,7 +68,7 @@ class RedisMemoryStore(MemoryStore):
         try:
             from redis import asyncio as redis_asyncio
         except ImportError as exc:
-            raise missing_client_error("RedisMemoryStore", "redis", exc) from exc
+            raise _missing_client_error("RedisMemoryStore", "redis", exc) from exc
 
         self._redis = redis_asyncio.from_url(uri)
         self._prefix = key_prefix
@@ -77,12 +81,12 @@ class RedisMemoryStore(MemoryStore):
         framed = cast("bytes | None", await self._redis.hget(self._hash_key(entity_key), key))
         if framed is None:
             return None
-        return decode_envelope(entity_key, framed[8:])
+        return _decode_envelope(entity_key, framed[8:])
 
     async def _save(self, record: MemoryRecord) -> bool:
         applied = await self._save_script(
             keys=[self._hash_key(record.entity_key)],
-            args=[record.key, encode_seq(record.seq), encode_envelope(record)],
+            args=[record.key, _encode_seq(record.seq), _encode_envelope(record)],
         )
         return bool(applied)
 
@@ -99,7 +103,8 @@ class RedisMemoryStore(MemoryStore):
             if key.startswith(prefix):
                 matched.append((key, framed))
         matched.sort(key=lambda item: item[0])
-        return [decode_envelope(entity_key, framed[8:]) for _, framed in matched[:limit]]
+        return [_decode_envelope(entity_key, framed[8:]) for _, framed in matched[:limit]]
 
     async def close(self) -> None:
+        """Close the Redis client's connection pool."""
         await self._redis.aclose()

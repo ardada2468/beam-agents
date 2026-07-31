@@ -65,7 +65,7 @@ __all__ = [
 def import_object(path: str, *, flag: str) -> Any:
     """Import a ``module:attribute`` path and return what it names.
 
-    The same shape as the effector's ``load_registry``, with the flag named in
+    The same shape as the effector's ``_load_registry``, with the flag named in
     the error so a typo says which argument to fix.
     """
     module_name, _, attribute = path.partition(":")
@@ -84,6 +84,12 @@ def import_object(path: str, *, flag: str) -> Any:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the replay CLI parser.
+
+    The flags name the three inputs a reproduction needs: the agent to
+    re-run, the ``StateSnapshot`` to run it against, and the trace whose
+    events the result is compared to.
+    """
     parser = argparse.ArgumentParser(
         prog="beam-agents-replay",
         description=(
@@ -142,6 +148,14 @@ def _load_bundle(args: argparse.Namespace) -> ReplayBundle:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: reproduce one activation and report the comparison.
+
+    Returns :data:`EXIT_REPRODUCED` on a byte-identical replay,
+    :data:`EXIT_DIVERGED` when the replay differs from the recorded
+    trace, :data:`EXIT_IRREPRODUCIBLE` when the snapshot's replay cache
+    cannot serve a call the replay makes, and :data:`EXIT_USAGE` for a
+    bad invocation.
+    """
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=args.log_level.upper())
     try:

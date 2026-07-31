@@ -14,7 +14,7 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from beam_agents.adapters.langgraph import LangGraphAgent
-from beam_agents.adapters.langgraph.checkpoint import RESERVED_NAMESPACE
+from beam_agents.adapters.langgraph.checkpoint import _RESERVED_NAMESPACE
 from beam_agents.core.agent import Complete
 from beam_agents.tools.registry import tool
 from tests.adapters._helpers import make_ctx
@@ -66,7 +66,7 @@ async def test_fast_path_completes_with_final_output_and_checkpoint() -> None:
 
     keys = [entry.key for entry in ctx.memory_blob().entries]
     assert keys, "the activation must persist a checkpoint"
-    assert all(key.startswith(RESERVED_NAMESPACE) for key in keys), keys
+    assert all(key.startswith(_RESERVED_NAMESPACE) for key in keys), keys
 
 
 async def test_accepts_an_already_compiled_graph() -> None:

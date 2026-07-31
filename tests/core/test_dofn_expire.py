@@ -25,7 +25,7 @@ from beam_agents.core.context import ActivationContext
 from beam_agents.core.dofn import REASON_TTL_WIPED_SUSPENSION, _AgentDoFn
 from beam_agents.memory import FlushToLongterm, Memory
 from beam_agents.memory.stores import InMemoryMemoryStore, MemoryRecord
-from beam_agents.memory.stores.base import encode_envelope
+from beam_agents.memory.stores.base import _encode_envelope
 from beam_agents.model.fake import FakeLLM
 from tests.core._dofn_fakes import FakeBag, FakeSum, FakeValue
 
@@ -47,7 +47,7 @@ class _RecordingStore(InMemoryMemoryStore):
         if self.fail_saves:
             raise ConnectionError("long-term store unreachable")
         self.saved.append(record)
-        self.envelopes.append(encode_envelope(record))
+        self.envelopes.append(_encode_envelope(record))
         return await super()._save(record)
 
 

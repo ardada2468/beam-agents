@@ -115,10 +115,12 @@ class DropOldestCompactor:
 
     @property
     def target_bytes(self) -> int:
+        """The size ``compact`` reduces working memory to, in bytes."""
         return self._target_bytes
 
     @property
     def protected_prefixes(self) -> tuple[str, ...]:
+        """Key prefixes ``compact`` never evicts."""
         return self._protected_prefixes
 
     def compact(self, memory: Memory) -> None:
@@ -149,9 +151,9 @@ class DropOldestCompactor:
 #: by the caller (design D5) and REQUIRED to be a pure function of its inputs:
 #: an impure builder hashes to a different cache key on replay, misses the
 #: cache, and fails the retry-determinism gate's zero-extra-calls assertion.
-BuildRequest = Callable[[tuple[bytes, ...], bytes | None], LlmRequest]
+_BuildRequest = Callable[[tuple[bytes, ...], bytes | None], LlmRequest]
 #: Maps opaque provider response bytes onto the summary bytes to store.
-ExtractSummary = Callable[[bytes], bytes]
+_ExtractSummary = Callable[[bytes], bytes]
 
 
 @runtime_checkable
@@ -166,9 +168,18 @@ class SummarizationView(Protocol):
     """
 
     @property
-    def memory(self) -> Memory: ...
+    def memory(self) -> Memory:
+        """The working memory being summarized."""
+        ...
 
-    async def call_model(self, request: LlmRequest) -> LlmResponse: ...
+    async def call_model(self, request: LlmRequest) -> LlmResponse:
+        """Call the model through the activation, so the call is replay-cached.
+
+        Summarization is a model call like any other: it goes through the
+        activation's cache-first path, so a retried bundle re-summarizes
+        with zero additional provider calls (invariant 3).
+        """
+        ...
 
 
 @runtime_checkable
@@ -183,9 +194,17 @@ class Summarizer(Protocol):
     """
 
     @property
-    def trigger_bytes(self) -> int: ...
+    def trigger_bytes(self) -> int:
+        """Working-memory size at which the driver invokes ``compact``."""
+        ...
 
-    async def compact(self, view: SummarizationView) -> None: ...
+    async def compact(self, view: SummarizationView) -> None:
+        """Fold old content into a compact form, staging the result on ``view``.
+
+        Runs inside the activation, so every write it makes is staged and
+        commits (or does not) with the bundle.
+        """
+        ...
 
 
 class SummarizeCompactor:
@@ -219,8 +238,8 @@ class SummarizeCompactor:
     def __init__(
         self,
         *,
-        build_request: BuildRequest,
-        extract_summary: ExtractSummary,
+        build_request: _BuildRequest,
+        extract_summary: _ExtractSummary,
         source_keys: Sequence[str],
         summary_key: str = DEFAULT_SUMMARY_KEY,
         keep_recent: int = DEFAULT_KEEP_RECENT,
@@ -249,10 +268,12 @@ class SummarizeCompactor:
 
     @property
     def trigger_bytes(self) -> int:
+        """Working-memory size at which the driver invokes ``compact``."""
         return self._trigger_bytes
 
     @property
     def summary_key(self) -> str:
+        """The memory key the rolling summary is written to."""
         return self._summary_key
 
     async def compact(self, view: SummarizationView) -> None:
@@ -324,7 +345,14 @@ class ExpireHook(Protocol):
     which is exactly what the retry needs.
     """
 
-    async def __call__(self, store: MemoryStore, expiry: ExpiringMemory) -> None: ...
+    async def __call__(self, store: MemoryStore, expiry: ExpiringMemory) -> None:
+        """Persist the expiring blob to ``store`` before the keyed state is wiped.
+
+        The one sanctioned external write from inside the pipeline: it must
+        be an idempotent upsert keyed by ``(entity_key, seq)`` so a retried
+        bundle re-running the hook changes nothing (invariant 5).
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +373,7 @@ class FlushToLongterm:
     key: str = DEFAULT_EXPIRY_KEY
 
     async def __call__(self, store: MemoryStore, expiry: ExpiringMemory) -> None:
+        """Upsert the final memory blob under ``key``, seq-guarded and idempotent."""
         await store.save(
             MemoryRecord(
                 entity_key=expiry.entity_key,

@@ -15,7 +15,7 @@ import threading
 import pytest
 
 from beam_agents._protos import ToolIntent, ToolResult
-from beam_agents.effector.runner import EffectorToolRunner, ReadOnlyToolError, execute_intent
+from beam_agents.effector.runner import EffectorToolRunner, ReadOnlyToolError, _execute_intent
 from beam_agents.tools import SideEffectToolError, ToolArgumentError, ToolRegistry, tool
 
 NOW_MS = 1_700_000_000_000
@@ -146,7 +146,7 @@ async def test_a_successful_tool_call_publishes_ok_with_its_encoded_return_value
     def charge(amount_cents: int) -> dict[str, object]:
         return {"receipt": "r-1", "cents": amount_cents}
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(), a_registry(charge), EffectorToolRunner(tool_timeout_ms=1_000), now_ms=NOW_MS
     )
 
@@ -164,7 +164,7 @@ async def test_a_raising_tool_publishes_error_with_its_message() -> None:
         calls.append(amount_cents)
         raise RuntimeError("card declined")
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(), a_registry(charge), EffectorToolRunner(tool_timeout_ms=1_000), now_ms=NOW_MS
     )
 
@@ -179,7 +179,7 @@ async def test_a_tool_exceeding_its_timeout_publishes_error_not_rejected() -> No
     async def charge(amount_cents: int) -> None:
         await asyncio.sleep(5)
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(), a_registry(charge), EffectorToolRunner(tool_timeout_ms=10), now_ms=NOW_MS
     )
 
@@ -190,7 +190,7 @@ async def test_a_tool_exceeding_its_timeout_publishes_error_not_rejected() -> No
 async def test_an_unknown_tool_name_is_rejected() -> None:
     # Scenario: An unknown tool name is rejected without stalling the partition
     # (the no-stall half is asserted in the service tests).
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(tool_name="nope"),
         a_registry(),
         EffectorToolRunner(tool_timeout_ms=1_000),
@@ -210,7 +210,7 @@ async def test_a_read_only_tool_on_the_outbox_is_rejected() -> None:
     def charge(amount_cents: int) -> None:
         calls.append(amount_cents)
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(), a_registry(charge), EffectorToolRunner(tool_timeout_ms=1_000), now_ms=NOW_MS
     )
 
@@ -227,7 +227,7 @@ async def test_malformed_args_json_is_rejected_before_invocation() -> None:
     def charge(amount_cents: int) -> None:
         calls.append(amount_cents)
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(args_json="{not json"),
         a_registry(charge),
         EffectorToolRunner(tool_timeout_ms=1_000),
@@ -242,7 +242,7 @@ async def test_args_json_that_is_not_an_object_is_rejected() -> None:
     @tool(side_effect=True)
     def charge(amount_cents: int) -> None: ...
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(args_json="[1, 2]"),
         a_registry(charge),
         EffectorToolRunner(tool_timeout_ms=1_000),
@@ -258,7 +258,7 @@ async def test_a_result_that_cannot_be_encoded_is_an_error_not_a_lost_intent() -
     def charge(amount_cents: int) -> object:
         return object()
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(), a_registry(charge), EffectorToolRunner(tool_timeout_ms=1_000), now_ms=NOW_MS
     )
 
@@ -273,7 +273,7 @@ async def test_every_result_correlates_with_its_intent() -> None:
         return "ok"
 
     intent = an_intent()
-    result = await execute_intent(
+    result = await _execute_intent(
         intent, a_registry(charge), EffectorToolRunner(tool_timeout_ms=1_000), now_ms=NOW_MS
     )
 
@@ -289,7 +289,7 @@ async def test_a_none_returning_tool_publishes_ok_with_a_null_payload() -> None:
     def charge(amount_cents: int) -> None:
         return None
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(), a_registry(charge), EffectorToolRunner(tool_timeout_ms=1_000), now_ms=NOW_MS
     )
 

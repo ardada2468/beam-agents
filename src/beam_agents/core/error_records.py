@@ -34,6 +34,12 @@ from beam_agents.core.dofn import REASON_INTENT_DEAD_LETTER, ActivationError
 if TYPE_CHECKING:
     from beam_agents._protos import ToolIntent
 
+__all__ = [
+    "activation_error_to_row",
+    "intent_dead_letter_to_error",
+    "serialize_error_envelope",
+]
+
 
 def _record(error: ActivationError) -> ActivationErrorRecord:
     return ActivationErrorRecord(

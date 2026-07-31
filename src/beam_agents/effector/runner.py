@@ -7,7 +7,7 @@ through :meth:`Tool.unwrap` — the single sanctioned bypass of correctness
 invariant 5. The two runners are disjoint, so neither can execute the other's
 class of tool and "side effects only via intents" stays a closed statement.
 
-The status mapping in :func:`execute_intent` is total, and its dividing line is
+The status mapping in :func:`_execute_intent` is total, and its dividing line is
 whether the callable ran: ``REJECTED`` means it never did (unknown tool,
 read-only tool, bad arguments), while ``ERROR`` means it ran and its effect is
 unknown (it raised, timed out, or returned something unencodable). That
@@ -34,6 +34,11 @@ from beam_agents.tools.intent_info import IntentInfo
 
 if TYPE_CHECKING:
     from beam_agents.tools.registry import Tool, ToolRegistry
+
+__all__ = [
+    "EffectorToolRunner",
+    "ReadOnlyToolError",
+]
 
 
 class ReadOnlyToolError(ToolError):
@@ -108,7 +113,7 @@ class EffectorToolRunner:
         return result
 
 
-def encode_payload(value: object) -> bytes:
+def _encode_payload(value: object) -> bytes:
     """Encode a tool's return value as canonical JSON.
 
     Matches the encoding ``ctx.act`` uses for ``args_json`` (sorted keys, tight
@@ -153,7 +158,7 @@ def _parse_arguments(intent: ToolIntent) -> Mapping[str, object]:
     return decoded
 
 
-async def execute_intent(
+async def _execute_intent(
     intent: ToolIntent,
     registry: ToolRegistry,
     runner: EffectorToolRunner,
@@ -234,7 +239,7 @@ def _encode_result(intent: ToolIntent, value: object, now_ms: int) -> ToolResult
     effect happened, and the agent has to learn that even if the value is lost.
     """
     try:
-        payload = encode_payload(value)
+        payload = _encode_payload(value)
     except (TypeError, ValueError) as exc:
         return _result(
             intent,
