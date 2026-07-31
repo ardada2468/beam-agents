@@ -140,7 +140,7 @@ class TraceEvent(_message.Message):
     def __init__(self, trace_id: _Optional[bytes] = ..., span_id: _Optional[bytes] = ..., parent_span_id: _Optional[bytes] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., step_index: _Optional[int] = ..., event_type: _Optional[_Union[TraceEvent.EventType, str]] = ..., attributes: _Optional[_Mapping[str, str]] = ..., start_ms: _Optional[int] = ..., end_ms: _Optional[int] = ...) -> None: ...
 
 class AgentEnvelope(_message.Message):
-    __slots__ = ("entity_key", "event_time_ms", "external_event", "tool_result", "approval")
+    __slots__ = ("entity_key", "event_time_ms", "external_event", "tool_result", "approval", "export_request")
     class Approval(_message.Message):
         __slots__ = ("intent_id", "approved", "approver", "decided_at_ms")
         INTENT_ID_FIELD_NUMBER: _ClassVar[int]
@@ -152,17 +152,46 @@ class AgentEnvelope(_message.Message):
         approver: str
         decided_at_ms: int
         def __init__(self, intent_id: _Optional[str] = ..., approved: _Optional[bool] = ..., approver: _Optional[str] = ..., decided_at_ms: _Optional[int] = ...) -> None: ...
+    class StateExportRequest(_message.Message):
+        __slots__ = ("request_id",)
+        REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+        request_id: str
+        def __init__(self, request_id: _Optional[str] = ...) -> None: ...
     ENTITY_KEY_FIELD_NUMBER: _ClassVar[int]
     EVENT_TIME_MS_FIELD_NUMBER: _ClassVar[int]
     EXTERNAL_EVENT_FIELD_NUMBER: _ClassVar[int]
     TOOL_RESULT_FIELD_NUMBER: _ClassVar[int]
     APPROVAL_FIELD_NUMBER: _ClassVar[int]
+    EXPORT_REQUEST_FIELD_NUMBER: _ClassVar[int]
     entity_key: bytes
     event_time_ms: int
     external_event: bytes
     tool_result: ToolResult
     approval: AgentEnvelope.Approval
-    def __init__(self, entity_key: _Optional[bytes] = ..., event_time_ms: _Optional[int] = ..., external_event: _Optional[bytes] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., approval: _Optional[_Union[AgentEnvelope.Approval, _Mapping]] = ...) -> None: ...
+    export_request: AgentEnvelope.StateExportRequest
+    def __init__(self, entity_key: _Optional[bytes] = ..., event_time_ms: _Optional[int] = ..., external_event: _Optional[bytes] = ..., tool_result: _Optional[_Union[ToolResult, _Mapping]] = ..., approval: _Optional[_Union[AgentEnvelope.Approval, _Mapping]] = ..., export_request: _Optional[_Union[AgentEnvelope.StateExportRequest, _Mapping]] = ...) -> None: ...
+
+class StateSnapshot(_message.Message):
+    __slots__ = ("state_schema_version", "entity_key", "seq", "snapshot_at_ms", "memory", "llm_cache", "continuation", "pending", "request_id")
+    STATE_SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    ENTITY_KEY_FIELD_NUMBER: _ClassVar[int]
+    SEQ_FIELD_NUMBER: _ClassVar[int]
+    SNAPSHOT_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_FIELD_NUMBER: _ClassVar[int]
+    LLM_CACHE_FIELD_NUMBER: _ClassVar[int]
+    CONTINUATION_FIELD_NUMBER: _ClassVar[int]
+    PENDING_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    state_schema_version: int
+    entity_key: bytes
+    seq: int
+    snapshot_at_ms: int
+    memory: MemoryBlob
+    llm_cache: LlmCacheBlob
+    continuation: Continuation
+    pending: _containers.RepeatedCompositeFieldContainer[ToolIntent]
+    request_id: str
+    def __init__(self, state_schema_version: _Optional[int] = ..., entity_key: _Optional[bytes] = ..., seq: _Optional[int] = ..., snapshot_at_ms: _Optional[int] = ..., memory: _Optional[_Union[MemoryBlob, _Mapping]] = ..., llm_cache: _Optional[_Union[LlmCacheBlob, _Mapping]] = ..., continuation: _Optional[_Union[Continuation, _Mapping]] = ..., pending: _Optional[_Iterable[_Union[ToolIntent, _Mapping]]] = ..., request_id: _Optional[str] = ...) -> None: ...
 
 class ActivationErrorRecord(_message.Message):
     __slots__ = ("entity_key", "reason", "detail", "event_time_ms")

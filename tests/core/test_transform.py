@@ -25,7 +25,7 @@ from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
-from beam_agents._protos import AgentEnvelope, TraceEvent
+from beam_agents._protos import AgentEnvelope, StateSnapshot, TraceEvent
 from beam_agents.core.dofn import (
     DETAIL_NO_CONTINUATION,
     REASON_ERROR,
@@ -34,6 +34,7 @@ from beam_agents.core.dofn import (
     _AgentDoFn,
 )
 from beam_agents.core.error_records import activation_error_to_row, serialize_error_envelope
+from beam_agents.core.migration import CURRENT_STATE_SCHEMA_VERSION
 from beam_agents.core.transform import (
     AgentConfig,
     DefaultSinkResolver,
@@ -42,6 +43,7 @@ from beam_agents.core.transform import (
     UnknownSinkSchemeError,
     _validate_kv_input,
     _WriteErrors,
+    _WriteSnapshots,
     _WriteTraces,
 )
 from beam_agents.hitl import HitlPolicy
@@ -820,6 +822,104 @@ def test_a_configured_errors_sink_receives_encoded_records_not_dataclasses() -> 
         # ...and `.errors` still exposes the dataclass to a direct consumer.
         reasons = outputs.errors | "reasons" >> beam.Map(lambda e: e.reason)
         assert_that(reasons, equal_to([REASON_ORPHANED]), label="errors-still-exposed")
+
+
+# --- Requirement: The snapshots output resolves a sink like traces ------------
+
+
+def _export_request(key: bytes, request_id: str = "req-1", t_ms: int = 1000) -> AgentEnvelope:
+    return AgentEnvelope(
+        entity_key=key,
+        event_time_ms=t_ms,
+        export_request=AgentEnvelope.StateExportRequest(request_id=request_id),
+    )
+
+
+class _RecordingSnapshotsResolver:
+    """Resolves ``snapshots_to`` to the *real* encoder over a recording writer."""
+
+    def __init__(self) -> None:
+        self.sink = _RecordingWrite()
+
+    def validate(self, field_name: str, uri: str) -> None:
+        pass
+
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        return _WriteSnapshots(self.sink)
+
+
+def test_a_configured_snapshots_sink_receives_serialized_snapshots_keyed_by_entity() -> None:
+    # Scenario: A configured snapshots sink receives serialized snapshots keyed
+    # by entity. The resolver hands back the real encoding wrapped around a
+    # recording writer, so this exercises the production path.
+    resolver = _RecordingSnapshotsResolver()
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        snapshots_to="stub://snapshots",
+        sink_resolver=resolver,
+    )
+    expected = StateSnapshot(
+        state_schema_version=CURRENT_STATE_SCHEMA_VERSION,
+        entity_key=b"k",
+        seq=0,
+        snapshot_at_ms=1000,
+        request_id="req-1",
+    )
+    with BeamTestPipeline() as p:
+        keyed = _keyed(p, _export_request(b"k"))
+        outputs = keyed | RunAgent(seq_agent, config=config)
+        assert_that(
+            resolver.sink.written,
+            equal_to([(b"k", expected.SerializeToString(deterministic=True))]),
+            label="keyed-serialized-at-the-writer",
+        )
+        # ...and `.snapshots` still exposes the proto to a direct consumer.
+        request_ids = outputs.snapshots | "request-ids" >> beam.Map(lambda s: s.request_id)
+        assert_that(request_ids, equal_to(["req-1"]), label="snapshots-still-exposed")
+
+
+def test_no_snapshots_sink_configured_still_constructs_and_runs() -> None:
+    # Scenario: No sink configured still constructs and runs. The tagged output
+    # stays exposed and unconsumed; nothing about pipeline construction needs it.
+    config = AgentConfig(provider_factory=make_pong_provider)
+    with BeamTestPipeline() as p:
+        keyed = _keyed(p, _export_request(b"k"), _event(b"k", b"go"))
+        outputs = keyed | RunAgent(seq_agent, config=config)
+        assert isinstance(outputs.snapshots, beam.pvalue.PCollection)
+        # The activation still runs; only the export produces a snapshot.
+        assert_that(outputs.output, equal_to([b"0"]), label="activation-unaffected")
+
+
+def test_a_snapshots_sink_encodes_before_writing() -> None:
+    # A raw write transform cannot accept a `StateSnapshot` proto, so resolution
+    # for `snapshots_to` must wrap the writer in the serializer — the same shape
+    # `traces_to` has.
+    for uri in ("kafka://broker:9092/snapshots", "pubsub://my-project/snapshots"):
+        transform = DefaultSinkResolver().resolve("snapshots_to", uri)
+        assert isinstance(transform, _WriteSnapshots)
+
+
+def test_the_snapshots_encoder_hands_the_sink_keyed_deterministic_bytes() -> None:
+    snapshot = StateSnapshot(state_schema_version=1, entity_key=b"key-1", seq=3, snapshot_at_ms=7)
+    with BeamTestPipeline() as p:
+        written = p | beam.Create([snapshot]) | _WriteSnapshots(beam.Map(lambda x: x))
+        assert_that(
+            written,
+            equal_to([(b"key-1", snapshot.SerializeToString(deterministic=True))]),
+        )
+
+
+def test_a_bigquery_snapshots_sink_is_refused_at_construction() -> None:
+    # A `StateSnapshot` is an opaque per-key state image with no row encoding,
+    # so the misconfiguration is refused where it is written rather than
+    # failing inside a bundle.
+    with pytest.raises(UnknownSinkSchemeError, match="snapshots_to"):
+        DefaultSinkResolver().validate("snapshots_to", "bigquery://my-project/my_dataset/snaps")
+    with pytest.raises(UnknownSinkSchemeError, match="snapshots_to"):
+        AgentConfig(
+            provider_factory=make_pong_provider,
+            snapshots_to="bigquery://my-project/my_dataset/snaps",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

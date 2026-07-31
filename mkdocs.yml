@@ -55,4 +55,5 @@ nav:
       - Errors and dead letters: errors.md
       - Runtime metrics: metrics.md
       - Trace delivery: traces.md
+      - State export and replay: replay.md
       - Releasing: releasing.md

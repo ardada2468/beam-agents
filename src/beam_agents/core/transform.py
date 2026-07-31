@@ -4,10 +4,11 @@ stateful, fault-tolerant Beam step.
 Usage::
 
     outputs = keyed_envelopes | RunAgent(agent, config=AgentConfig(provider_factory=make_client))
-    outputs.output   # terminal agent outputs (bytes)
-    outputs.intents  # ToolIntent side-effect requests -> outbox topic
-    outputs.traces   # TraceEvent observability records
-    outputs.errors   # ActivationError dead-letter records
+    outputs.output    # terminal agent outputs (bytes)
+    outputs.intents   # ToolIntent side-effect requests -> outbox topic
+    outputs.traces    # TraceEvent observability records
+    outputs.errors    # ActivationError dead-letter records
+    outputs.snapshots # StateSnapshot exports answering an export_request
 
 Input is a pre-keyed ``PCollection[KV[bytes, AgentEnvelope]]`` — the caller
 ``Flatten``s its event/tool-result/approval streams and keys them with
@@ -17,7 +18,7 @@ elements itself; it validates the input is KV-shaped at pipeline-construction
 (``expand``) time and raises ``ValueError`` otherwise.
 
 ``AgentConfig`` bundles the provider factory, runtime knobs, and optional sink
-URIs (``intents_to``/``traces_to``/``errors_to``); it validates itself at
+URIs (``intents_to``/``traces_to``/``errors_to``/``snapshots_to``); it validates itself at
 construction time so misconfiguration fails at the site of the typo rather than
 deep inside a runner. Configured sink URIs are resolved to Beam write
 transforms via a pluggable ``SinkResolver`` and attached as terminal branches
@@ -47,6 +48,7 @@ from beam_agents.core.error_records import (
     intent_dead_letter_to_error,
     serialize_error_envelope,
 )
+from beam_agents.core.snapshot import serialize_snapshot
 from beam_agents.hitl import HitlPolicy
 from beam_agents.memory.compaction import DropOldestCompactor
 from beam_agents.memory.stores import parse_memory_store_uri
@@ -66,16 +68,18 @@ if TYPE_CHECKING:
 INTENTS_TAG = "intents"
 TRACES_TAG = "traces"
 ERRORS_TAG = "errors"
+SNAPSHOTS_TAG = "snapshots"
 
 _DEFAULT_ACTIVATION_TIMEOUT_S = 30.0
 _DEFAULT_TTL_MS = 3_600_000
 _DEFAULT_CANCEL_GRACE_S = 5.0
 
-_SINK_FIELDS = ("intents_to", "traces_to", "errors_to")
+_SINK_FIELDS = ("intents_to", "traces_to", "errors_to", "snapshots_to")
 _SINK_LABELS = {
     "intents_to": "WriteIntents",
     "traces_to": "WriteTraces",
     "errors_to": "WriteErrors",
+    "snapshots_to": "WriteSnapshots",
 }
 
 
@@ -172,8 +176,8 @@ class SinkResolver(Protocol):
     import-free, raising :class:`UnknownSinkSchemeError` for an unrecognized
     scheme or a malformed URI. ``resolve`` runs only at ``RunAgent.expand`` and
     may construct real IO clients. Both take ``field_name`` (one of
-    ``intents_to``/``traces_to``/``errors_to``) so a resolver can special-case
-    a field independently of URI scheme.
+    ``intents_to``/``traces_to``/``errors_to``/``snapshots_to``) so a resolver
+    can special-case a field independently of URI scheme.
     """
 
     def validate(self, field_name: str, uri: str) -> None: ...
@@ -222,6 +226,28 @@ class _WriteTraces(beam.PTransform):
                 serialize_trace_event
             ).with_output_types(tuple[bytes, bytes])
         return encoded | "WriteEncodedTraces" >> self._sink
+
+
+class _WriteSnapshots(beam.PTransform):
+    """Serializes ``StateSnapshot``s for a message-bus sink, then writes them.
+
+    ``.snapshots`` is a ``PCollection[StateSnapshot]`` and no write transform
+    accepts a proto message, so without this step a configured ``snapshots_to``
+    fails at runtime — the same shape (and the same reason) as
+    :class:`_WriteTraces`. There is no row form: a snapshot is an opaque per-key
+    state image, and :meth:`DefaultSinkResolver.validate` refuses
+    ``bigquery://`` for this field rather than inventing a column layout for it.
+    """
+
+    def __init__(self, sink: beam.PTransform) -> None:
+        super().__init__()
+        self._sink = sink
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        encoded = pcoll | "SerializeSnapshot" >> beam.Map(serialize_snapshot).with_output_types(
+            tuple[bytes, bytes]
+        )
+        return encoded | "WriteEncodedSnapshots" >> self._sink
 
 
 class _WriteErrors(beam.PTransform):
@@ -293,6 +319,12 @@ class DefaultSinkResolver:
                 "delivery failure) and is valid only for traces_to; intents and errors "
                 "need a lossless sink (kafka://, pubsub://, or bigquery://)"
             )
+        if scheme == "bigquery" and field_name == "snapshots_to":
+            raise UnknownSinkSchemeError(
+                f"{field_name}: a StateSnapshot is an opaque per-key state image with no "
+                "row encoding, so bigquery:// cannot carry it; use kafka:// or pubsub://, "
+                "whose sinks take the serialized proto keyed by entity_key"
+            )
 
     def resolve(self, field_name: str, uri: str) -> beam.PTransform:
         self.validate(field_name, uri)
@@ -301,6 +333,19 @@ class DefaultSinkResolver:
             return _KeyedWriteIntents(uri)
         if scheme == "otlp":
             return self._otlp_transform(uri)
+        return self._encoded_transform(field_name, scheme, parts)
+
+    def _encoded_transform(
+        self, field_name: str, scheme: str, parts: tuple[str, ...]
+    ) -> beam.PTransform:
+        """Wrap the scheme's writer in the field's encoding, if it needs one.
+
+        `.traces`, `.errors`, and `.snapshots` all carry types no write
+        transform accepts (two protos and a dataclass), so each gets its
+        encoder here; `.intents` reaches its writer already encoded.
+        """
+        if field_name == "snapshots_to":
+            return _WriteSnapshots(self._write_transform(scheme, parts))
         if field_name == "traces_to":
             if scheme == "bigquery":
                 return _WriteTraces(self._traces_bigquery_writer(parts), to_row=True)
@@ -421,6 +466,10 @@ class AgentConfig:
     intents_to: str | None = field(default=None, kw_only=True)
     traces_to: str | None = field(default=None, kw_only=True)
     errors_to: str | None = field(default=None, kw_only=True)
+    # Where `.snapshots` goes. `None` (the default) leaves the tagged output
+    # exposed and unconsumed: exporting state off the pipeline is a deliberate
+    # operator act, so no sink is provisioned by default (design D1).
+    snapshots_to: str | None = field(default=None, kw_only=True)
     sink_resolver: SinkResolver = field(default_factory=DefaultSinkResolver, kw_only=True)
     # The long-term `MemoryStore` URI. `None` (the default) leaves the tier off:
     # no store is constructed and `ctx.memory.longterm` raises actionably, so an
@@ -485,6 +534,9 @@ class RunAgentOutputs:
     intents: beam.pvalue.PCollection
     traces: beam.pvalue.PCollection
     errors: beam.pvalue.PCollection
+    #: `StateSnapshot`s answering `export_request` envelopes. Exposed whether or
+    #: not `snapshots_to` is configured; with no consumer Beam drops it.
+    snapshots: beam.pvalue.PCollection
     dead_letter: beam.pvalue.PCollection | None = None
 
 
@@ -529,7 +581,7 @@ class RunAgent(beam.PTransform):
             on_expire=self._config.on_expire,
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
-            INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
+            INTENTS_TAG, TRACES_TAG, ERRORS_TAG, SNAPSHOTS_TAG, main="output"
         )
         # The three branches are not symmetric: `errors_to` also drains the
         # intents dead letter, so it is attached last, once that branch exists.
@@ -542,6 +594,9 @@ class RunAgent(beam.PTransform):
         if self._config.traces_to is not None:
             sink = self._config.sink_resolver.resolve("traces_to", self._config.traces_to)
             tagged.traces | _SINK_LABELS["traces_to"] >> sink
+        if self._config.snapshots_to is not None:
+            sink = self._config.sink_resolver.resolve("snapshots_to", self._config.snapshots_to)
+            tagged.snapshots | _SINK_LABELS["snapshots_to"] >> sink
         if self._config.errors_to is not None:
             errors = tagged.errors
             if dead_letter is not None:
@@ -559,5 +614,6 @@ class RunAgent(beam.PTransform):
             intents=tagged.intents,
             traces=tagged.traces,
             errors=tagged.errors,
+            snapshots=tagged.snapshots,
             dead_letter=dead_letter,
         )

@@ -148,6 +148,17 @@ message AgentEnvelope {
     int64 decided_at_ms = 4;
   }
 
+  // An operator's in-band request for a `StateSnapshot` of this key. Handled
+  // read-only by the stateful DoFn: it observes state at a well-defined point
+  // in the key's serial history (no activation runs, no state is mutated, SEQ
+  // is not incremented) and emits one snapshot on `.snapshots`.
+  //
+  // `request_id` is opaque and operator-chosen; the runtime only echoes it
+  // into the emitted snapshot so a request can be correlated with its answer.
+  message StateExportRequest {
+    string request_id = 1;
+  }
+
   bytes entity_key = 1;
   int64 event_time_ms = 2;
   oneof payload {
@@ -155,7 +166,38 @@ message AgentEnvelope {
     bytes external_event = 3;
     ToolResult tool_result = 4;
     Approval approval = 5;
+    // Additive under state_schema_version = 1: an envelope written before this
+    // variant existed decodes unchanged, and a reader that predates it sees an
+    // unknown field rather than a parse failure.
+    StateExportRequest export_request = 6;
   }
+}
+
+// A point-in-time image of one key's runtime state, emitted on `.snapshots` in
+// answer to an `AgentEnvelope.StateExportRequest`.
+//
+// A wire message, not keyed state: it is never stored in a state cell, so it
+// stays additive-only like the other wire messages (no bump escape hatch). Its
+// own `state_schema_version` records the version of the *exporting* binary; the
+// embedded blobs carry their own stamps verbatim as committed, because
+// migration belongs to the loader (docs/replay.md), never to the export path.
+message StateSnapshot {
+  uint32 state_schema_version = 1;
+  bytes entity_key = 2;
+  // The key's SEQ counter at export: the seq the next activation would run at.
+  int64 seq = 3;
+  // The export request's `event_time_ms` — replay-deterministic, never a
+  // wall-clock reading, so a retried bundle re-emits identical bytes.
+  int64 snapshot_at_ms = 4;
+  MemoryBlob memory = 5;
+  LlmCacheBlob llm_cache = 6;
+  // Present only when the key is suspended; absence (not a zero-valued
+  // placeholder) is what distinguishes "not suspended" from "suspended at
+  // step 0".
+  Continuation continuation = 7;
+  repeated ToolIntent pending = 8;
+  // Echoed from the originating StateExportRequest.
+  string request_id = 9;
 }
 
 // A `.errors` dead letter on the wire: the triage fields a downstream consumer

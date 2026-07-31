@@ -33,6 +33,7 @@ from beam_agents._protos import (
     Continuation,
     LlmCacheBlob,
     MemoryBlob,
+    StateSnapshot,
     ToolIntent,
     ToolResult,
     TraceEvent,
@@ -218,6 +219,41 @@ def _continuation_escalated() -> Continuation:
     )
 
 
+def _agent_envelope_export() -> AgentEnvelope:
+    """An envelope carrying the `export_request` variant.
+
+    `export_request` was added after the v1 baseline blobs were written, so this
+    fixture (not `agent_envelope`, which is deliberately left as the pre-variant
+    approval bytes) is what pins the new oneof case's encoding.
+    """
+    return AgentEnvelope(
+        entity_key=b"entity-1",
+        event_time_ms=_T1,
+        export_request=AgentEnvelope.StateExportRequest(request_id="export-1"),
+    )
+
+
+def _state_snapshot() -> StateSnapshot:
+    """A fully-populated per-key state image, as `.snapshots` emits it.
+
+    Embedded blobs are the same fixtures the versioned-state entries use, so a
+    change to either shows up here too — the snapshot carries them verbatim.
+    """
+    snapshot = StateSnapshot(
+        state_schema_version=1,
+        entity_key=b"entity-1",
+        seq=7,
+        snapshot_at_ms=_T1,
+        request_id="export-1",
+    )
+    snapshot.memory.CopyFrom(_memory_blob())
+    snapshot.llm_cache.CopyFrom(_llm_cache_blob())
+    snapshot.continuation.CopyFrom(_continuation())
+    snapshot.pending.append(_tool_intent())
+    snapshot.pending.append(_tool_intent_approval())
+    return snapshot
+
+
 # name -> fully-populated message, for the v1 fixture set. Filenames are
 # `<name>.bin` under `v1/`. Every message type has at least one fixture; a type
 # gains a second one when a field is added (additively) within the version, so
@@ -235,6 +271,8 @@ GOLDEN_V1: dict[str, Message] = {
     "tool_result": _tool_result(),
     "trace_event": _trace_event(),
     "agent_envelope": _agent_envelope(),
+    "agent_envelope_export": _agent_envelope_export(),
+    "state_snapshot": _state_snapshot(),
     "continuation": _continuation(),
     "continuation_escalated": _continuation_escalated(),
     "llm_cache_blob": _llm_cache_blob(),

@@ -66,4 +66,6 @@
 #
 # add-yaml-provider: 0.9028 (the YAML provider's reference grammar, config
 # mapping, and row conversion are fully exercised by offline unit tests).
-branch_rate = 0.9028
+# add-replay-cli: 0.9070 (the replay package's bundle/provider/diff/CLI paths and
+# the DoFn's read-only export route are fully exercised by offline unit tests).
+branch_rate = 0.9070
