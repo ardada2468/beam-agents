@@ -55,8 +55,16 @@ function rng(seed: number): () => number {
   };
 }
 
-/** A fixed "now" so screenshots do not drift between runs. */
-export const FIXTURE_NOW = 1_785_000_000_000;
+/**
+ * The instant the fixture dataset is anchored on.
+ *
+ * Rounded to the hour rather than pinned to a date: a fixed past timestamp made
+ * every generated record permanently stale, so a "last 24 hours" window showed
+ * rows days old and every pending approval rendered overdue. Rounding keeps a
+ * screenshot stable for an hour, which is what reproducibility here is actually
+ * for, without lying about when the data is from.
+ */
+export const FIXTURE_NOW = Math.floor(Date.now() / 3_600_000) * 3_600_000;
 
 const random = rng(20260731);
 
@@ -246,12 +254,27 @@ function generate(): Generated {
         deadline_ms: startedMs + 3_600_000,
         expires_at_ms: startedMs + 3_600_000,
         escalations: random() < 0.2 ? 1 : 0,
-        decision: random() < 0.7 ? 'pending' : pick(['approved', 'denied', 'expired'] as const),
-        decided_ms: random() < 0.7 ? null : startedMs + 120_000,
+        // One draw, not two: drawing the decision and its timestamp
+        // independently produced `Pending` rows carrying a decided time.
+        ...(() => {
+          const decided = random() >= 0.7;
+          return {
+            decision: decided
+              ? pick(['approved', 'denied', 'expired'] as const)
+              : ('pending' as const),
+            decided_ms: decided ? startedMs + 120_000 : null,
+          };
+        })(),
       });
     }
 
-    details.set(activationKey(entityKey, seq), buildDetail(summary));
+    details.set(
+      activationKey(entityKey, seq),
+      buildDetail(
+        summary,
+        errors.filter((e) => e.entity_key === entityKey && e.seq === seq),
+      ),
+    );
   }
 
   activations.sort((a, b) => b.started_ms - a.started_ms);
@@ -259,7 +282,7 @@ function generate(): Generated {
   return { activations, details, errors, approvals };
 }
 
-function buildDetail(summary: ActivationSummary): ActivationDetail {
+function buildDetail(summary: ActivationSummary, own: ErrorRecord[]): ActivationDetail {
   const events: EventRecord[] = [];
   const spans: SpanNode[] = [];
   const intents: IntentSummary[] = [];
@@ -446,7 +469,10 @@ function buildDetail(summary: ActivationSummary): ActivationDetail {
     spans,
     events,
     intents,
-    errors: [],
+    // Was always empty, which made the failure-position panel unreachable from
+    // an error record — the primary path both the Errors and Activations pages
+    // render it from.
+    errors: own,
     snapshot:
       summary.status === 'suspended'
         ? {
@@ -490,9 +516,9 @@ function bucketize(items: { at: number }[], buckets: number, windowMs: number): 
   return counts;
 }
 
-function models(): ModelSummary[] {
+function models(since: number | null = null): ModelSummary[] {
   return MODELS.map((model) => {
-    const rows = DATA.activations.filter((a) => a.model === model);
+    const rows = inWindow(DATA.activations, since).filter((a) => a.model === model);
     const calls = rows.reduce((sum, a) => sum + a.llm_calls, 0);
     const cacheHits = rows.reduce((sum, a) => sum + a.cache_hits, 0);
     const prompt = rows.reduce((sum, a) => sum + (a.prompt_tokens ?? 0), 0);
@@ -512,9 +538,9 @@ function models(): ModelSummary[] {
   }).sort((a, b) => b.calls - a.calls);
 }
 
-function tools(): ToolSummary[] {
+function tools(since: number | null = null): ToolSummary[] {
   return TOOLS.map((tool) => {
-    const rows = DATA.activations.filter((a) => a.tools.includes(tool));
+    const rows = inWindow(DATA.activations, since).filter((a) => a.tools.includes(tool));
     const calls = rows.length;
     const errors = rows.filter((a) => a.status === 'error').length;
     return {
@@ -556,17 +582,19 @@ function entities(): EntitySummary[] {
     .sort((a, b) => b.last_seen_ms - a.last_seen_ms);
 }
 
-function errorGroups(): ErrorGroup[] {
+function errorGroups(since: number | null = null): ErrorGroup[] {
   const byReason = new Map<string, ErrorRecord[]>();
-  for (const error of DATA.errors) {
-    const key = `${error.reason} ${error.error_type ?? ''}`;
+  for (const error of since === null
+    ? DATA.errors
+    : DATA.errors.filter((e) => e.event_time_ms >= since)) {
+    const key = `${error.reason}\u0000${error.error_type ?? ''}`;
     const existing = byReason.get(key) ?? [];
     existing.push(error);
     byReason.set(key, existing);
   }
   return Array.from(byReason.entries())
     .map(([key, rows]) => {
-      const [reason, errorType] = key.split(' ');
+      const [reason, errorType] = key.split('\u0000');
       const windowMs = 24 * 3_600_000;
       return {
         reason: reason ?? 'unknown',
@@ -686,6 +714,23 @@ function traces(): TraceSummary[] {
   }));
 }
 
+/**
+ * The `since_ms` a request asked for, or null.
+ *
+ * The interceptor used to ignore this parameter entirely, so every window
+ * selector in the UI looked inert against fixtures and "last 24 hours" listed
+ * rows days old — a fixture that contradicts the control it is meant to
+ * exercise teaches the wrong thing about the page.
+ */
+function sinceMs(params: URLSearchParams): number | null {
+  const raw = params.get('since_ms');
+  return raw === null || raw === '' ? null : Number(raw);
+}
+
+function inWindow(rows: ActivationSummary[], since: number | null): ActivationSummary[] {
+  return since === null ? rows : rows.filter((a) => a.started_ms >= since);
+}
+
 function paginate<T>(items: T[], cursor: string | null, limit: number): Page<T> {
   const start = cursor ? Number(cursor) : 0;
   const slice = items.slice(start, start + limit);
@@ -774,16 +819,20 @@ function respond(path: string, params: URLSearchParams): unknown {
     } satisfies TraceDetail;
   }
 
-  if (path === '/api/errors/groups') return errorGroups();
+  if (path === '/api/errors/groups') {
+    return errorGroups(sinceMs(params));
+  }
 
   if (path === '/api/errors') {
     const reason = params.get('reason');
-    const rows = reason ? DATA.errors.filter((e) => e.reason === reason) : DATA.errors;
+    const since = sinceMs(params);
+    let rows = since === null ? DATA.errors : DATA.errors.filter((e) => e.event_time_ms >= since);
+    if (reason) rows = rows.filter((e) => e.reason === reason);
     return paginate(rows, cursor, limit);
   }
 
-  if (path === '/api/models') return models();
-  if (path === '/api/tools') return tools();
+  if (path === '/api/models') return models(sinceMs(params));
+  if (path === '/api/tools') return tools(sinceMs(params));
   if (path === '/api/approvals') {
     const pendingOnly = params.get('pending_only') === 'true';
     return pendingOnly ? DATA.approvals.filter((a) => a.decision === 'pending') : DATA.approvals;

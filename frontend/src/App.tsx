@@ -17,6 +17,7 @@ import { Route, Switch } from 'wouter';
 import { AppShell } from '@/components/layout/AppShell';
 import { EmptyState, SkeletonRows } from '@/components/ui';
 import { useLiveStream } from '@/lib/live';
+import { useLivePreference } from '@/pages/Settings/preferences';
 
 const Overview = lazy(() => import('@/pages/Overview'));
 const Activations = lazy(() => import('@/pages/Activations'));
@@ -46,7 +47,10 @@ function NotFound() {
 }
 
 export default function App() {
-  const live = useLiveStream();
+  // Settings ships a live-stream toggle; without threading its value through
+  // here the control only persisted a preference nothing read.
+  const [liveEnabled] = useLivePreference();
+  const live = useLiveStream(liveEnabled);
 
   return (
     <AppShell live={live}>

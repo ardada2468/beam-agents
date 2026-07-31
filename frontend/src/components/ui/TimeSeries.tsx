@@ -35,8 +35,8 @@ const TONE_VAR: Record<NonNullable<SeriesSpec['tone']>, string> = {
   warn: 'var(--series-3)',
 };
 
-const PAD_LEFT = 44;
-const PAD_BOTTOM = 22;
+const PAD_LEFT = 0;
+const PAD_BOTTOM = 0;
 const PAD_TOP = 8;
 const HEIGHT = 160;
 const VIEW_WIDTH = 720;
@@ -83,26 +83,35 @@ export default function TimeSeries({
 
   return (
     <figure style={{ margin: 0 }}>
-      <svg
-        className="series"
-        viewBox={`0 0 ${VIEW_WIDTH} ${HEIGHT}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={ariaLabel ?? `${series.label} over time`}
-        onMouseLeave={() => setHover(null)}
-      >
-        <title>{`${series.label}: peak ${format(max)}`}</title>
-        <defs>
-          <clipPath id={gradientId}>
-            <rect x={PAD_LEFT} y={PAD_TOP} width={plotWidth} height={plotHeight} />
-          </clipPath>
-        </defs>
+      <div className="series-frame">
+        <div className="series-ticks" aria-hidden="true">
+          {gridValues
+            .slice()
+            .reverse()
+            .map((value) => (
+              <span key={value}>{format(value)}</span>
+            ))}
+        </div>
+        <svg
+          className="series"
+          viewBox={`0 0 ${VIEW_WIDTH} ${HEIGHT}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label={ariaLabel ?? `${series.label} over time`}
+          onMouseLeave={() => setHover(null)}
+        >
+          <title>{`${series.label}: peak ${format(max)}`}</title>
+          <defs>
+            <clipPath id={gradientId}>
+              <rect x={PAD_LEFT} y={PAD_TOP} width={plotWidth} height={plotHeight} />
+            </clipPath>
+          </defs>
 
-        {gridValues.map((value) => {
-          const y = PAD_TOP + plotHeight - (value / max) * plotHeight;
-          return (
-            <g key={value}>
+          {gridValues.map((value) => {
+            const y = PAD_TOP + plotHeight - (value / max) * plotHeight;
+            return (
               <line
+                key={value}
                 x1={PAD_LEFT}
                 x2={VIEW_WIDTH}
                 y1={y}
@@ -110,38 +119,32 @@ export default function TimeSeries({
                 className="series__grid"
                 vectorEffect="non-scaling-stroke"
               />
-              <text x={0} y={y + 4} className="series__axis">
-                {format(value)}
-              </text>
-            </g>
-          );
-        })}
-
-        <g clipPath={`url(#${gradientId})`}>
-          {points.map((point, index) => {
-            const height = point.value > 0 ? Math.max(1.5, (point.value / max) * plotHeight) : 0;
-            return (
-              <rect
-                key={point.bucket_ms}
-                x={PAD_LEFT + index * barWidth}
-                y={PAD_TOP + plotHeight - height}
-                width={Math.max(barWidth - 1, 0.8)}
-                height={height}
-                fill={fill}
-                opacity={hover === null || hover === index ? 1 : 0.35}
-                onMouseEnter={() => setHover(index)}
-              />
             );
           })}
-        </g>
 
-        <text x={PAD_LEFT} y={HEIGHT - 6} className="series__axis">
-          {formatTime(points[0]?.bucket_ms)}
-        </text>
-        <text x={VIEW_WIDTH} y={HEIGHT - 6} className="series__axis" textAnchor="end">
-          {formatTime(points[points.length - 1]?.bucket_ms)}
-        </text>
-      </svg>
+          <g clipPath={`url(#${gradientId})`}>
+            {points.map((point, index) => {
+              const height = point.value > 0 ? Math.max(1.5, (point.value / max) * plotHeight) : 0;
+              return (
+                <rect
+                  key={point.bucket_ms}
+                  x={PAD_LEFT + index * barWidth}
+                  y={PAD_TOP + plotHeight - height}
+                  width={Math.max(barWidth - 1, 0.8)}
+                  height={height}
+                  fill={fill}
+                  opacity={hover === null || hover === index ? 1 : 0.35}
+                  onMouseEnter={() => setHover(index)}
+                />
+              );
+            })}
+          </g>
+        </svg>
+        <div className="series-times" aria-hidden="true">
+          <span>{formatTime(points[0]?.bucket_ms)}</span>
+          <span>{formatTime(points[points.length - 1]?.bucket_ms)}</span>
+        </div>
+      </div>
 
       <figcaption
         className="muted"

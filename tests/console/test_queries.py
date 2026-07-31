@@ -993,8 +993,17 @@ def test_search_locates_identifiers_and_attribute_values(store: _Store) -> None:
 def test_the_overview_headline_figures_come_from_stored_records(store: _Store) -> None:
     _seed_suspend_resume(store)
     _activation(store, entity_key="key-b", seq=1, started_ms=_T0 + 100, status="in_flight")
+    # `errors` on the rollup and the error record are two views of one failure;
+    # the store derives the count from the records, so a fixture that writes one
+    # without the other describes a state the store cannot produce.
     _activation(
-        store, entity_key="key-c", seq=1, started_ms=_T0 + 200, status="suspended", wall_ms=50
+        store,
+        entity_key="key-c",
+        seq=1,
+        started_ms=_T0 + 200,
+        status="suspended",
+        wall_ms=50,
+        errors=1,
     )
     _error(store, entity_key="key-c", seq=1, reason="budget_exceeded", event_time_ms=_T0 + 250)
 

@@ -179,11 +179,35 @@
 }
 
 .table__th--sortable {
+  padding: 0;
+}
+
+/* The header's control is a real button so it is focusable and operable from
+   the keyboard; it fills the cell so the whole header still reads as the
+   target. */
+.table__sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  height: var(--row-height);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: inherit;
   cursor: pointer;
   user-select: none;
 }
 
-.table__th--sortable:hover {
+.table__th--num .table__sort-btn {
+  justify-content: flex-end;
+}
+
+.table__sort-btn:hover {
   color: var(--ink);
 }
 
@@ -339,7 +363,9 @@
 
 .code__pre {
   margin: 0;
-  padding: var(--space-3);
+  /* Right padding reserves the copy button's gutter. Without it the button is
+     positioned over code that scrolls underneath it. */
+  padding: var(--space-3) calc(var(--space-3) + 68px) var(--space-3) var(--space-3);
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -357,7 +383,10 @@
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  /* `--tile-columns` when a page states its tile count, otherwise auto-fit.
+     auto-fit alone breaks a six-tile row 5 + 1 at some widths, leaving a
+     tile-sized hole in what should read as one instrument panel. */
+  grid-template-columns: repeat(var(--tile-columns, auto-fit), minmax(160px, 1fr));
   gap: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -580,6 +609,43 @@
   display: block;
   width: 100%;
   height: 160px;
+}
+
+/* The bars scale to the container with `preserveAspectRatio="none"`, which is
+   right for bars and wrong for text — a 720-wide viewBox drawn 350px wide
+   squashes every glyph to half width. So the axis labels are HTML around the
+   SVG rather than `<text>` inside it, and only the bars are ever scaled. */
+.series-frame {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: var(--space-2);
+  align-items: stretch;
+}
+
+.series-ticks {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 160px;
+  font-size: var(--text-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.series-frame .series {
+  grid-column: 2;
+}
+
+.series-times {
+  grid-column: 2;
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .series__axis {

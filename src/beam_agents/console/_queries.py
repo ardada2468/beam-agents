@@ -1503,6 +1503,10 @@ SELECT COUNT(*) AS activations,
        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
        SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) AS suspended,
        SUM(CASE WHEN status = 'in_flight' THEN 1 ELSE 0 END) AS in_flight,
+       -- Activations that failed, not error records. One activation can carry
+       -- several failures, so dividing records by activations is a ratio of two
+       -- different things and reads over 100% as readily as under it.
+       SUM(CASE WHEN errors > 0 THEN 1 ELSE 0 END) AS failed,
        SUM(total_tokens) AS total_tokens,
        SUM(llm_calls) AS llm_calls,
        SUM(tool_calls) AS tool_calls
@@ -1589,7 +1593,11 @@ def overview(store: ConsoleStore, *, window_ms: int, buckets: int = 48) -> Overv
             suspended=_int(headline, "suspended"),
             in_flight=_int(headline, "in_flight"),
             errors=len(error_rows),
-            error_ratio=_ratio(len(error_rows), activation_count),
+            # The fraction of activations that failed. `errors` beside it counts
+            # error *records*, which is a larger number whenever an activation
+            # failed more than once — the two must not be divided into each
+            # other.
+            error_ratio=_ratio(_int(headline, "failed"), activation_count),
             total_tokens=_opt_int(headline, "total_tokens"),
             llm_calls=_int(headline, "llm_calls"),
             tool_calls=_int(headline, "tool_calls"),

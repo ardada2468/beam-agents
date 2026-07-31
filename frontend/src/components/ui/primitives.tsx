@@ -220,14 +220,24 @@ export function DataTable<T>({
                   aria-sort={
                     sorted ? (sortDirection === 'asc' ? 'ascending' : 'descending') : undefined
                   }
-                  onClick={column.sortable && onSort ? () => onSort(column.key) : undefined}
                 >
-                  {column.header}
-                  {column.sortable ? (
-                    <span className="table__sort" aria-hidden="true">
-                      {sorted ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
-                    </span>
-                  ) : null}
+                  {column.sortable && onSort ? (
+                    // A real button, not a click handler on the `th`: a sort
+                    // control has to be reachable and operable from the
+                    // keyboard, and `th` is not focusable.
+                    <button
+                      type="button"
+                      className="table__sort-btn"
+                      onClick={() => onSort(column.key)}
+                    >
+                      {column.header}
+                      <span className="table__sort" aria-hidden="true">
+                        {sorted ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </button>
+                  ) : (
+                    column.header
+                  )}
                 </th>
               );
             })}
@@ -248,7 +258,19 @@ export function DataTable<T>({
               <tr
                 key={key}
                 className={classes}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                onClick={
+                  onRowClick
+                    ? (event) => {
+                        // A row is clickable and so are the `CopyableId`s inside
+                        // it. Without this every copy also navigates, and each
+                        // page otherwise wraps them in a stopPropagation span.
+                        if ((event.target as HTMLElement).closest('button,a,input,select')) {
+                          return;
+                        }
+                        onRowClick(row);
+                      }
+                    : undefined
+                }
                 tabIndex={onRowClick ? 0 : undefined}
                 onKeyDown={
                   onRowClick
@@ -315,11 +337,20 @@ export function KeyValueGrid({
 /* -- CodeBlock ------------------------------------------------------------- */
 
 /** Preformatted text with a copy affordance. Scrolls inside itself. */
-export function CodeBlock({ code, label = 'snippet' }: { code: string; label?: string }) {
+export function CodeBlock({
+  code,
+  label = 'snippet',
+  maxHeight,
+}: {
+  code: string;
+  label?: string;
+  /** Cap the height and scroll inside. A trace's event JSON is otherwise the page. */
+  maxHeight?: string;
+}) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="code">
-      <pre className="code__pre">
+      <pre className="code__pre" style={maxHeight ? { maxHeight, overflowY: 'auto' } : undefined}>
         <code>{code}</code>
       </pre>
       <Button
@@ -372,9 +403,22 @@ export function StatTile({
   );
 }
 
-/** The container that makes a row of tiles read as one instrument panel. */
-export function TileRow({ children }: { children: ReactNode }) {
-  return <div className="tiles">{children}</div>;
+/**
+ * The container that makes a row of tiles read as one instrument panel.
+ *
+ * `columns` states how many tiles the row holds. Without it the grid is
+ * `auto-fit`, which cannot express "never five" — a six-tile row breaks 5 + 1 at
+ * some widths and leaves a tile-sized hole in the panel.
+ */
+export function TileRow({ columns, children }: { columns?: number; children: ReactNode }) {
+  return (
+    <div
+      className="tiles"
+      style={columns ? ({ '--tile-columns': String(columns) } as React.CSSProperties) : undefined}
+    >
+      {children}
+    </div>
+  );
 }
 
 /* -- Tabs ------------------------------------------------------------------ */
