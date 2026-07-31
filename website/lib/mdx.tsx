@@ -9,6 +9,9 @@ import { Diagram, DgEdge, DgNode, DgText } from '@/components/Diagram';
 import { Figure } from '@/components/Figure';
 import { RepoDoc } from '@/components/RepoDoc';
 import { Spec } from '@/components/Spec';
+import { HitlApprovalSequence } from '@/components/diagrams/HitlApprovalSequence';
+import { HitlFailClosed } from '@/components/diagrams/HitlFailClosed';
+import { HitlReinjection } from '@/components/diagrams/HitlReinjection';
 
 /**
  * Render an MDX body to a server-rendered React tree.
@@ -48,6 +51,12 @@ export async function renderMdx(source: string): Promise<ReactElement> {
       Figure,
       RepoDoc,
       Spec,
+      // Page-specific diagrams. A diagram with real geometry is a component,
+      // not markup a content author retypes; naming it here is what lets the
+      // MDX call it by name without an import statement MDX cannot resolve.
+      HitlApprovalSequence,
+      HitlFailClosed,
+      HitlReinjection,
     },
   });
   return content;
