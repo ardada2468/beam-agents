@@ -9,6 +9,10 @@
 > the protobuf-pinning and bake-the-code-in discipline documented below and
 > nothing else; neither is derived from the other.
 
+> **Not the console stack either.** `console.Dockerfile` and
+> `compose.console.yaml` are a *separate* stack, described below. Nothing in
+> this directory is shared between the two beyond the Redpanda digest.
+
 `compose.yaml` brings up Redpanda (Kafka-compatible), Redis, and a Flink
 job/task manager pair for integration and semantics tests. Every image is
 pinned by digest so the stack behaves identically across machines and CI
@@ -69,3 +73,47 @@ make compose-logs     # collect service logs + Flink diagnostics (LOGS_DIR=...)
 
 Unit tests never require this stack. Only `integration`- and
 `semantics`-marked tests do.
+
+## The console stack (`compose.console.yaml`)
+
+A second, unrelated stack lives here: `console.Dockerfile` builds the
+[Beam Agents Console](../docs/console.md) image, and `compose.console.yaml`
+starts it alongside a demo pipeline that keeps feeding it, so one command lands
+on a populated console.
+
+```sh
+make console-build     # build the image (Node stage builds the UI bundle)
+make console-up        # start it: http://localhost:8787
+make console-logs      # follow the console and the demo pipeline
+make console-down      # stop, keeping the database volume
+make console-frontend  # build just the UI bundle, no docker (needs Node)
+```
+
+| Service                  | Container port | Host port |
+|--------------------------|----------------|-----------|
+| Console (API + UI)       | 8787           | 8787      |
+| Redpanda (`kafka` profile) | 9092         | 29092     |
+
+It is deliberately **not** an overlay on `compose.yaml`, and the separation is
+load-bearing in four places:
+
+- **Different purpose.** `compose.yaml` exists so `integration`- and
+  `semantics`-marked tests have a broker, a cache, and a Flink pair. The console
+  stack exists so somebody evaluating the library can see what the runtime
+  records. No test tier requires it and no CI lane starts it.
+- **Different cost.** Merging them would make the five-second "look at it" path
+  pay for a Flink JobManager, a TaskManager, a job server, and an SDK-harness
+  build. That trade is only worth making for a gate.
+- **Separate compose projects.** `compose.console.yaml` sets
+  `name: beam-agents-console`. Compose otherwise derives a project name from the
+  compose file's *directory*, so both files here would share the project
+  `docker` — and `docker compose -f docker/compose.console.yaml down` would tear
+  down a Flink stack a contributor had up for a test.
+- **Non-colliding host ports.** The console publishes 8787 unshifted, because
+  that port is the product: the `console://localhost:8787` sink URI and every
+  snippet in the docs name it, and shifting it would make the copied line wrong.
+  The `kafka` profile's Redpanda publishes 29092 rather than this stack's 19092
+  precisely so both can run at once.
+
+The only thing the two share is the Redpanda image digest, pinned identically in
+both files so a contributor running both pulls one image rather than two.
