@@ -31,7 +31,7 @@ None. The release *process* capability belongs to C25 `add-0-1-0-release` and is
 
 **New code:** none in `src/`. New artifacts: `docs/benchmarks/0.3.0-vs-flink-agents.md` (the comparison report) plus the committed run configurations/environment manifest it references; the 0.3.0 changelog section; a feedback-disposition table in the release notes. Any release-blocking partner fixes are separate change folders, not part of this one.
 
-**Modified code:** `pyproject.toml` version field only (`→ 0.3.0`). The changelog file C25 introduces gains a section. No runtime, wire-schema, or state-schema changes originate from this change.
+**Modified code:** the version bump touches three files, not one (amended — see tasks.md Revision 1): `pyproject.toml`'s version field (`→ 0.3.0`); `uv.lock`, which records the project's own version and which `docs/releasing.md` already says "always comes with" a bump; and `docs/yaml.md`'s `beam-agents==X.Y.Z` provider pin, which `tests/yaml/test_docs_example.py` asserts equals the installed version. The changelog file C25 introduces gains a section. No runtime, wire-schema, or state-schema changes originate from this change.
 
 **CI/build:** no new workflows. The C25 release workflow runs once for the tag; the C33 benchmark regression job and the existing `ci`/`integration`/`quality` checks are consumed as gate inputs. The comparison run against Flink Agents executes outside CI (dedicated benchmark environment, documented in the report) because CI runners cannot host both stacks under controlled, comparable conditions.
 
