@@ -1,0 +1,150 @@
+/*
+ * Overview-page layout only.
+ *
+ * Nothing here restyles a primitive's internals: every rule is either a grid
+ * the page owns or a small text treatment that has no primitive. Classes are
+ * flat, prefixed `ov-`, and never nested more than one level deep — the same
+ * rule `ui.css` follows, for the same reason.
+ *
+ * The breakpoints are *container* queries against `.ov-content`, not viewport
+ * media queries, because what decides whether six tiles fit is the width of the
+ * content column — and that changes when the shell's rail collapses, which a
+ * viewport query would have to guess at.
+ */
+
+/* The title row. Not `.page-title`: that aligns its children on the h1's
+   baseline, which drags a labelled control's caption up next to the heading. */
+.ov-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+/* Everything below the title, and the query container the rest of this file
+   measures against. Mirrors `.page`'s own column and gap so wrapping the page
+   body in it changes nothing about the vertical rhythm.
+
+   `container-type: inline-size` also makes this element the containing block
+   for any `position: fixed` descendant, so a floating primitive — the drawer,
+   a menu — must not be rendered inside it. Nothing on this page is. */
+.ov-content {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* The freshness line under the title. Small, muted, and never the loudest
+   thing on the page — the authoritative connection state is in the top bar. */
+.ov-freshness {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  margin-top: calc(-1 * var(--space-3));
+}
+
+/* Three series across, stacked once a third of the column stops being wide
+   enough to read a 48-bucket chart in. */
+.ov-charts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+/* Two tables side by side. A five-column table squeezed below ~380px is a
+   horizontal scrollbar pretending to be a layout, so they stack first. */
+.ov-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@container (max-width: 899px) {
+  .ov-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A five-column table wants ~550px before its last column starts scrolling out
+   of sight, so the pair stacks as soon as half the column is narrower than
+   that — a full-width table beats two clipped ones. */
+@container (max-width: 1099px) {
+  .ov-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Six tiles have to break 6 / 3 / 2. `TileRow`'s own `auto-fit` fills the row
+   with as many 160px tracks as fit, which at a middling width is five — and
+   five tracks for six tiles leaves a hole the size of a tile in the middle of
+   what is supposed to read as one instrument panel. Pinning the count at the
+   widths where auto-fit gets it wrong is the whole of this rule. */
+@container (max-width: 959px) {
+  .ov-content > .tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 479px) {
+  .ov-content > .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* A panel heading is an h2 for the document outline and a 15px line on screen;
+   the default h2 size would compete with the page title. */
+.ov-panel-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.ov-panel-link {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* The figure a panel header carries on its right — a total for the series
+   drawn below it, so the chart's shape and its magnitude read together. */
+.ov-panel-figure {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* An error detail is one line in a 32px row. The full text is the title
+   attribute, so truncating never loses it. */
+.ov-detail {
+  display: block;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+/* Store row counts: pairs on one wrapping line, because they are read at a
+   glance ("is anything in there at all") rather than as a table. */
+.ov-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+.ov-counts strong {
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The store panel answers a question you ask once. It sits quiet at the foot
+   of the page. */
+.ov-store {
+  color: var(--muted);
+}
