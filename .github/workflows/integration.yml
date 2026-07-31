@@ -60,15 +60,18 @@ jobs:
         if: always()
         run: make compose-down
 
-  # The Flink mini-cluster lane: full compose stack, the effectively-once
-  # e2e semantics gate, and the adapter conformance matrix's Flink leg. Runs
-  # in parallel with (never behind) the base integration job so the release
-  # gates have their own budget and re-run unit. The e2e gate runs a 10k-event
-  # chaos scenario against the full stack, budgeted ≤ 15 min on its own; the
-  # rest of this job's budget is stack bring-up, the harness build, and the
-  # conformance leg (~70 s per adapter).
+  # The Flink mini-cluster lane: the Flink services, the effectively-once e2e
+  # semantics gate, and the adapter conformance matrix's Flink leg. Runs in
+  # parallel with (never behind) the base integration job so the release gates
+  # have their own budget and re-run unit.
+  #
+  # Budget, measured 2026-07-31 on the first run whose e2e gate passed: harness
+  # build ~4 min, stack bring-up ~1 min, e2e gate ~15 min, conformance leg ~7
+  # min per adapter. That is ~41 min of the old 45, with no room for the retry
+  # the e2e gate is designed to take. 60 restores the margin the 45 was chosen
+  # for, back when the gate had never run to completion here.
   flink-minicluster:
-    timeout-minutes: 45
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
