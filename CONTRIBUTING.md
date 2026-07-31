@@ -17,6 +17,48 @@ exists in the tree. If you're doing exploratory work that genuinely doesn't
 warrant a change yet, set `BEAM_AGENTS_ALLOW_NO_CHANGE=1` to bypass it —
 sparingly, and expect reviewers to ask why.
 
+## Changelog fragments
+
+Every change touching `src/` also carries a changelog fragment:
+
+```
+changelog.d/<openspec-change-name>.<type>.md
+```
+
+named after the OpenSpec change folder backing the commit, holding one or two
+sentences in **user voice** — what someone installing the next release can now
+do, or must now do differently. The point is that the release note is written
+by the person who made the change, reviewed in the same diff as the code, and
+never reconstructed from commit archaeology at tag time.
+
+The type registry is closed: `breaking`, `added`, `changed` (each requires a
+MINOR release), `fixed`, `docs` (PATCH-compatible), and `internal` (satisfies
+the requirement, renders nowhere — use it for refactors with no user-visible
+effect). An unregistered type fails the hook and `make changelog` alike.
+
+A local pre-commit hook (`changelog-fragment-required`) enforces this the same
+way `openspec-change-required` does, with its own escape hatch:
+`BEAM_AGENTS_ALLOW_NO_FRAGMENT=1`. The two hooks are independent — bypassing
+one does not bypass the other.
+
+Preview what the next release will say with `make changelog-draft` (writes
+nothing). See [`changelog.d/README.md`](changelog.d/README.md) for the format
+and [`docs/releasing.md`](docs/releasing.md) for the versioning policy the
+types map onto.
+
+## Releasing
+
+The project is pre-1.0 (`0.MINOR.PATCH`): a MINOR release may add features and
+may break the documented compatibility surface; a PATCH release carries fixes
+and docs only. The version is a single static string in `pyproject.toml` and
+must agree with both the release tag and `uv.lock` — which is why a version
+bump is the one routine reason to run `uv lock`.
+
+Releases are cut by pushing an annotated `vX.Y.Z` tag, which is the only human
+action that publishes; `.github/workflows/release.yml` builds, verifies, gates,
+and publishes to PyPI via trusted publishing (no API token exists in secrets).
+Full policy, compatibility surface, and checklist: [`docs/releasing.md`](docs/releasing.md).
+
 ## Makefile is the CI/local contract
 
 Every CI workflow step is a `make <target>` call. Whatever you run locally

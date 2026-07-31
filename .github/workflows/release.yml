@@ -1,0 +1,183 @@
+name: release
+
+# Tag-triggered, and the ONLY path to PyPI. Pushing an annotated `vX.Y.Z` tag
+# is the single human action that publishes; everything between the tag and
+# PyPI is automated, verified, and fails closed. This workflow is not a
+# required status check and can never block a PR — it blocks *publishing*.
+#
+# workflow_dispatch runs the same build-and-verify job and publishes to
+# TestPyPI instead, which is how the OIDC bindings and the rendered metadata
+# get rehearsed before a real tag. PyPI filenames are immutable: a botched
+# first upload of a version can only be yanked, never replaced.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      rehearse:
+        description: "Publish to TestPyPI instead of PyPI (rehearsal)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # No publish permissions and no OIDC token: this job runs the test suite,
+  # so it must not be able to reach PyPI even in principle.
+  build-and-verify:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: scripts/check_release.py proves the tagged commit is an
+      # ancestor of main, which is undecidable in a shallow clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # `--locked`: the lockfile records the project's own version, so a bump
+      # without `uv lock` fails here before check_release.py even runs.
+      - name: Install dependencies
+        run: uv sync --locked --group lint --group typecheck --group test
+
+      - name: Build sdist and wheel
+        run: make build
+
+      # Tag == [project].version == uv.lock's beam-agents version, tagged
+      # commit is an ancestor of main, and the pending changelog fragment
+      # types fit the version component the tag moves.
+      - name: Verify tag, lockfile, and versioning policy
+        run: uv run python scripts/check_release.py "${GITHUB_REF_NAME}"
+        if: github.event_name == 'push'
+
+      # On a rehearsal there is no tag to check against; the artifact-content
+      # checks below still run in full.
+      - name: Verify changelog fragments (rehearsal)
+        run: uv run python scripts/check_release.py --fragments-only
+        if: github.event_name == 'workflow_dispatch'
+
+      - name: Verify distribution contents
+        run: uv run python scripts/check_wheel.py dist
+
+      # The same offline gate roster the required `ci` check runs, re-run on
+      # the exact tagged ref. The docker-backed gates are deliberately NOT
+      # re-run: they are required checks on `main`, check_release.py just
+      # proved the tagged commit is an ancestor of `main`, and repeating the
+      # compose-backed run adds latency and flake surface for no new
+      # information.
+      - name: Lint
+        run: make lint
+
+      - name: Type check
+        run: make type
+
+      - name: Unit tests
+        run: make test-unit
+
+      - name: Semantics tests (offline)
+        run: make test-semantics-offline
+
+      - name: Semantics tier partition check
+        run: uv run python scripts/check_semantics_partition.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
+  # Split out so the OIDC token never coexists with the job that executes the
+  # test suite, and so the `pypi` environment can later require a reviewer
+  # approval without touching this workflow. `needs:` makes publishing
+  # unreachable unless every verification and gate above passed.
+  publish:
+    needs: build-and-verify
+    if: github.event_name == 'push'
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/beam-agents
+    permissions:
+      # id-token: trusted publishing (OIDC). No PyPI API token exists in this
+      # repository's secrets — same no-long-lived-credential stance nightly.yml
+      # takes with Workload Identity Federation.
+      id-token: write
+      # contents: creating the GitHub Release for the tag.
+      contents: write
+    steps:
+      # Checkout FIRST: it cleans the workspace (including ignored paths), so
+      # downloading dist/ before it would silently wipe the artifact.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      # The Release body is that version's CHANGELOG.md section, taken from
+      # the tagged tree — the release notes are the reviewed ones, not a
+      # commit-log dump.
+      - name: Extract the released version's changelog section
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          {
+            echo "body<<CHANGELOG_EOF"
+            awk -v v="## ${version} " '
+              index($0, v) == 1 { found = 1; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ steps.notes.outputs.body }}
+        run: |
+          printf '%s\n' "$NOTES" > release-notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md
+
+  # Rehearsal target for `workflow_dispatch`. Same artifact, same verification,
+  # a second trusted-publisher binding — so the OIDC exchange, the upload, and
+  # the rendered metadata are all exercised without burning a version number on
+  # PyPI, where filenames are immutable.
+  publish-testpypi:
+    needs: build-and-verify
+    if: github.event_name == 'workflow_dispatch' && inputs.rehearse
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/beam-agents
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Publish to TestPyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

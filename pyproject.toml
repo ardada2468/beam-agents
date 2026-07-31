@@ -1,6 +1,11 @@
 [project]
 name = "beam-agents"
-version = "0.0.0"
+# Single-sourced, static, bumped only by a release PR (docs/releasing.md). The
+# `vX.Y.Z` tag, this string, and uv.lock's own `beam-agents` entry must agree —
+# scripts/check_release.py fails the release workflow before anything builds if
+# they don't. Never derived from git state: uv.lock records the project version,
+# so a VCS-derived version would break `uv sync --locked` determinism.
+version = "0.1.0"
 description = "A runtime for protobuf-native, per-key-deterministic streaming agents on Apache Beam."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -96,6 +101,7 @@ dev = [
   { include-group = "bench" },
   { include-group = "docs" },
   { include-group = "precommit" },
+  { include-group = "release" },
 ]
 test = [
   "pytest",
@@ -172,6 +178,14 @@ docs = [
 precommit = [
   "pre-commit",
   "grpcio-tools",
+]
+# Changelog assembly only (`make changelog`). towncrier is a CLI, never
+# imported by src/ or by the test suite: the closed-registry gate that fronts
+# assembly lives in scripts/check_release.py precisely so the unit lane can
+# exercise it without this group installed. No CI lane installs it except the
+# release workflow.
+release = [
+  "towncrier>=23.11",
 ]
 
 [tool.uv]
@@ -600,6 +614,61 @@ omit = ["*/_protos/*_pb2.py"]
 # a hard backstop so coverage can't silently collapse if the ratchet step is
 # ever skipped.
 fail_under = 90
+
+# Changelog assembly. One fragment per OpenSpec change under changelog.d/,
+# named `<openspec-change-name>.<type>.md` — the changelog entry is reviewed in
+# the same diff as the code it describes. `make changelog` runs the
+# closed-registry gate (scripts/check_release.py --fragments-only) and then
+# `towncrier build`, which prepends the assembled section to CHANGELOG.md and
+# deletes the fragments it consumed.
+#
+# The type registry below is CLOSED and is the versioning policy's input
+# (docs/releasing.md): breaking/added/changed are MINOR-requiring, fixed/docs
+# are PATCH-compatible, and `internal` exists so a change with no user-visible
+# effect can satisfy the fragment-required hook. `internal` is deliberately NOT
+# registered as a towncrier type — towncrier skips fragments whose type it does
+# not know, which is exactly "renders nowhere" — while
+# scripts/check_release.py still accepts it, which is what makes it
+# distinguishable from a typo'd type. towncrier also never *deletes* what it
+# skips, so `make changelog` finishes with
+# `check_release.py --consume-internal` to keep the exactly-one-release
+# property true for internal fragments too.
+[tool.towncrier]
+package = "beam_agents"
+package_dir = "src"
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+# Keep-a-Changelog-style heading; the seeded 0.1.0 section uses the same shape.
+title_format = "## {version} - {project_date}"
+# Everything above this marker (the intro and the curated 0.1.0 section's
+# preamble) is preserved; assembled sections are inserted directly below it.
+start_string = "<!-- towncrier release notes start -->\n"
+issue_format = "{issue}"
+
+[[tool.towncrier.type]]
+directory = "breaking"
+name = "Breaking changes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "docs"
+name = "Documentation"
+showcontent = true
 
 [tool.mutmut]
 # Mutation scope is core/ ONLY. The killing test suite is tests/core, so a mutant

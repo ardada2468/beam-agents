@@ -4,7 +4,7 @@ COMPOSE := docker compose -f docker/compose.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-down compose-logs harness-build proto docs docs-serve
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-down compose-logs harness-build proto docs docs-serve build changelog changelog-draft
 
 BENCH_RESULTS := bench-results
 # Local-iteration knob only. CI pins the modules' own sampling constants by
@@ -163,3 +163,31 @@ docs: ## Build the docs site strictly (broken links/snippets fail)
 
 docs-serve: ## Serve the docs site locally with live reload
 	uv run mkdocs serve
+
+# `rm -rf dist` first: a stale artifact from an earlier version would otherwise
+# be picked up by `scripts/check_wheel.py dist/` and — worse — uploaded by the
+# publish job. Releases are built ONLY by .github/workflows/release.yml from a
+# clean tag checkout; a local `make build` is for inspection and never uploads
+# (there is no `uv publish` path anywhere in this repo).
+build: ## Build the sdist and wheel into a clean dist/
+	rm -rf dist
+	uv build
+
+# Assembly is gated on the closed fragment-type registry BEFORE towncrier runs:
+# towncrier ignores a fragment whose type it does not know, so a typo'd
+# `.feature.md` would be silently dropped from the release notes. The gate lives
+# in check_release.py (not in towncrier config) so the unit lane can exercise it
+# without the `release` group installed.
+# VERSION is required and explicit — never inferred from the package — so the
+# assembled section can never disagree with the tag that publishes it.
+changelog: ## Assemble changelog.d/ fragments into CHANGELOG.md (VERSION=X.Y.Z)
+	@test -n "$(VERSION)" || { echo "usage: make changelog VERSION=X.Y.Z" >&2; exit 1; }
+	uv run --group release python scripts/check_release.py --fragments-only
+	uv run --group release towncrier build --version "$(VERSION)" --yes
+	uv run --group release python scripts/check_release.py --consume-internal
+
+# Side-effect free by construction: `--draft` prints the rendered section to
+# stdout and touches neither CHANGELOG.md nor changelog.d/.
+changelog-draft: ## Print the pending changelog section without writing anything
+	uv run --group release python scripts/check_release.py --fragments-only
+	uv run --group release towncrier build --version "$(or $(VERSION),UNRELEASED)" --draft
