@@ -48,3 +48,9 @@ website/tsconfig.tsbuildinfo
 # runners and the host-side harness cannot write the run spool.
 docker/e2e-spool/*
 !docker/e2e-spool/.gitkeep
+
+# Scratch worktrees created by the agent harness when it runs work in
+# isolation. Transient by construction — each one is a checkout of a branch
+# that already lives in .git, so committing them would vendor the repository
+# into itself.
+.claude/worktrees/
