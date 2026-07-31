@@ -1,0 +1,62 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Strict build on every PR and push: a broken internal link or an
+  # unresolvable example-snippet inclusion fails here, before anything
+  # publishes. Only the `docs` dependency group is installed — the site builds
+  # from text alone and must never need apache-beam.
+  build:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install docs toolchain
+        run: uv sync --locked --group docs
+
+      - name: Build site (strict)
+        run: make docs
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # Deploys only from main, via the official Pages actions with a
+  # permissions-scoped GITHUB_TOKEN — no gh-pages branch, no long-lived
+  # credential. Prerequisite (one-time repository setting): Settings → Pages →
+  # Source = GitHub Actions.
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

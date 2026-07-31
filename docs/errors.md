@@ -25,15 +25,46 @@ Consuming `.errors` directly gives you `ActivationError` dataclasses:
 |---|---|
 | `activation_error` | The agent raised. `detail` leads with the original exception's `repr`, then the failure position. |
 | `activation_timeout` | The activation exceeded `activation_timeout_s` and was cancelled. `detail` is empty: there is no exception to name. |
+| `budget_exceeded` | The activation crossed `AgentConfig.max_tokens_per_activation`. `detail` is `BudgetExceeded(limit=<n>, consumed=<n>)` followed by the same failure position. |
 | `orphaned_result` | A tool result or approval arrived with no live continuation to admit it. `detail` is `<why>:<intent_id>` — one of `no_continuation`, `unknown_intent`, `deadline_passed`, `intent_expired`. |
 | `hitl_timeout` | An approval never arrived and the policy's timeout route dropped it. |
 | `ttl_wiped_suspension` | Working-memory GC reached a key still awaiting an answer; the suspension is unrecoverable. |
+| `ttl_wiped_batch` | Working-memory GC reached a key with un-flushed buffered events (`docs/batching.md`). One record per wiped envelope; `detail` is `buffered=<n>,index=<i>`. |
+| `batch_buffer_overflow` | An event arrived at a key whose batching buffer already held `max_buffered_events`. `detail` is `buffered=<n>,cap=<n>`. |
 | `intent_dead_letter` | An intent could not be serialized for the outbox. `detail` is JSON: `{reason, intent_id, seq, tool_name}`. |
 
 Two identities hold by construction and are worth alerting on if they break
 (see [metrics.md](metrics.md)): `agent_errors + orphaned_results` equals the
 element count on `.errors`, and `intents_emitted` equals the element count on
 `.intents`.
+
+### `budget_exceeded`
+
+`AgentConfig(max_tokens_per_activation=..., decode=...)` bounds what one
+activation *attempt* may consume. Both are required together: without a decoder
+a call's token counts are unknown, and the config refuses the pair rather than
+metering nothing. Unset (the default) is unlimited.
+
+The meter is charged the decoded total of every response the agent receives,
+replay-cache hits included ([`docs/metrics.md`](metrics.md) explains why), and
+trips when the running total *strictly exceeds* the limit — so an activation
+landing exactly on its budget is within it, and the crossing call is paid for
+before it raises. The real guarantee is therefore
+`consumed < limit + one call's worth`.
+
+A tripped activation commits nothing: staged intents, memory writes, cache
+inserts, traces, and outputs are all discarded, and `SEQ` does not advance, the
+same all-or-nothing rule every other activation failure obeys. A resume starts a
+fresh meter — the budget bounds an attempt, not a `seq`.
+
+**The catch-and-wrap-up caveat.** `BudgetExceeded` (importable from
+`beam_agents.model`) is an ordinary exception, so an agent may catch it and
+return `Complete` — and then its staged effects *do* commit. That is deliberate:
+graceful wrap-up under a budget is a legitimate authoring pattern. What the
+runtime does guarantee is that a swallowing agent cannot spend again: every
+later model call raises at entry, before the replay cache and before the
+provider, so not even a free cache hit is served. The committed trace carries
+the trip's `LLM_CALL` event, so the behavior is visible.
 
 ## Configuring a sink
 

@@ -28,6 +28,14 @@ from beam_agents.core import dofn as _dofn_module
 from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.core.loop import ActivationResult
 
+__all__ = [
+    "ChaosBundleFailure",
+    "Matcher",
+    "fail_first_hitl_fire",
+    "fail_first_matching_commit",
+    "match_any",
+]
+
 Matcher = Callable[[ActivationResult], bool]
 
 # ``_commit``'s state/timer parameters are Beam's dynamic StateParam/TimerParam
@@ -74,6 +82,11 @@ def fail_first_matching_commit(matcher: Matcher | None = None) -> Iterator[None]
         seq: _State,
         ttl_timer: _Timer,
         hitl_timer: _Timer,
+        *,
+        batch: _State | None = None,
+        flush_timer: _Timer | None = None,
+        flush_size: int | None = None,
+        flush_trigger: str = "",
     ) -> Iterator[object]:
         nonlocal already_failed
         if not already_failed and active_matcher(result):
@@ -81,6 +94,11 @@ def fail_first_matching_commit(matcher: Matcher | None = None) -> Iterator[None]
             raise ChaosBundleFailure(
                 f"chaos: forced commit failure for seq={result.seq} status={result.status}"
             )
+        # The adaptive-batching parameters are mirrored (and forwarded)
+        # verbatim: a flush's buffer clear and its trigger's counters live
+        # inside `_commit`, so a wrapper that dropped them would make a
+        # chaos-retried flush commit something the unwrapped runtime never
+        # would -- the opposite of what this gate measures.
         yield from original_commit(
             self,
             result,
@@ -93,6 +111,10 @@ def fail_first_matching_commit(matcher: Matcher | None = None) -> Iterator[None]
             seq,
             ttl_timer,
             hitl_timer,
+            batch=batch,
+            flush_timer=flush_timer,
+            flush_size=flush_size,
+            flush_trigger=flush_trigger,
         )
 
     _dofn_module._AgentDoFn._commit = chaos_commit  # type: ignore[method-assign]
@@ -131,6 +153,8 @@ def fail_first_hitl_fire() -> Iterator[None]:
         pending: _State = beam.DoFn.StateParam(_AgentDoFn.PENDING),  # noqa: B008
         hitl_timer: _Timer = beam.DoFn.TimerParam(_AgentDoFn.HITL_TIMER),  # noqa: B008
         ttl_timer: _Timer = beam.DoFn.TimerParam(_AgentDoFn.TTL_TIMER),  # noqa: B008
+        batch: _State = beam.DoFn.StateParam(_AgentDoFn.BATCH),  # noqa: B008
+        flush_timer: _Timer = beam.DoFn.TimerParam(_AgentDoFn.FLUSH_TIMER),  # noqa: B008
     ) -> Iterator[object]:
         nonlocal already_failed
         emitted = list(
@@ -142,6 +166,8 @@ def fail_first_hitl_fire() -> Iterator[None]:
                 pending=pending,
                 hitl_timer=hitl_timer,
                 ttl_timer=ttl_timer,
+                batch=batch,
+                flush_timer=flush_timer,
             )
         )
         if not already_failed:

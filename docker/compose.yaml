@@ -64,6 +64,27 @@ services:
       retries: 10
       start_period: 10s
 
+  # The long-term MemoryStore's Firestore backend is exercised against the
+  # emulator: transactions are the backend's atomic upsert guard, which is the
+  # part that has to hold for real.
+  firestore-emulator:
+    image: google/cloud-sdk@sha256:5fa0e7f1a6eadda7144614c3c6c737651e69fbd9b547a7e1372006ee5cc5e005
+    command:
+      - gcloud
+      - beta
+      - emulators
+      - firestore
+      - start
+      - --host-port=0.0.0.0:8087
+    ports:
+      - "8087:8087"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8087"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     ports:

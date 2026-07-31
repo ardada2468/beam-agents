@@ -26,7 +26,7 @@ from beam_agents.effector.dedup import (
     DedupStore,
     Done,
     InFlight,
-    encode_lease_expiry,
+    _encode_lease_expiry,
 )
 
 from ._dedup_conformance import LEASE_MS, TTL_MS, DedupStoreConformance, a_result
@@ -206,7 +206,7 @@ async def test_ownership_survives_a_lease_expiry_byte_containing_a_newline() -> 
     # A lease expiry whose big-endian encoding contains 0x0A would defeat an
     # RE2 `.*` prefix, so the token lives in its own column.
     newline_expiry = int.from_bytes(b"\x00\x00\x01\x8b\x0a\xe5\x68\x00", "big")
-    assert b"\x0a" in encode_lease_expiry(newline_expiry)
+    assert b"\x0a" in _encode_lease_expiry(newline_expiry)
     now = [newline_expiry - LEASE_MS]
     store = _store(clock=lambda: now[0])
     try:

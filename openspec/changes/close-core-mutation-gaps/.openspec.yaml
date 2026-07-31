@@ -1,0 +1,8 @@
+schema: spec-driven
+created: 2026-07-31
+# This change adds test coverage for behavior the specs already require: the
+# surviving mutants are unasserted decisions inside already-specified paths, not
+# new or changed requirements. Where a mutant reveals an unasserted scenario the
+# test is derived from that scenario, so the specs are the source rather than the
+# target. Nothing here changes what the system must do.
+skip_specs: true

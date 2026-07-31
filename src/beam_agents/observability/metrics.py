@@ -56,6 +56,19 @@ COUNTER_AGENT_ERRORS = "agent_errors"
 COUNTER_SUSPENSIONS = "suspensions"
 # One dead letter on `.errors` with reason `orphaned_result`.
 COUNTER_ORPHANED_RESULTS = "orphaned_results"
+# One long-term memory row flushed through the `MemoryStore` in an activation's
+# commit tail. Counted per row, on committed activations only: a failed
+# activation flushes nothing and a failed flush fails the activation.
+COUNTER_LONGTERM_UPSERTS = "longterm_upserts"
+# One `event` element appended to the `BATCH` buffer under `BatchPolicy.ADAPTIVE`.
+# Buffering is not an activation, so this is the only counter a buffered element
+# moves; under `NONE` it reads zero.
+COUNTER_EVENTS_BUFFERED = "events_buffered"
+# One *committed* flush activation, by the trigger that produced it. Committed
+# only, so the two together reconcile with `activations` and the SEQ increments;
+# a failed flush is visible through `agent_errors` instead.
+COUNTER_BATCH_FLUSHES_SIZE = "batch_flushes_size"
+COUNTER_BATCH_FLUSHES_TIMER = "batch_flushes_timer"
 
 # -- distributions (Beam distributions are integer-only) ----------------------
 # Wall time of running the agent for one element, on every exit including
@@ -71,10 +84,22 @@ DISTRIBUTION_OVERHEAD_MS = "overhead_ms"
 DISTRIBUTION_LLM_MS = "llm_ms"
 # Total tokens for an activation, sampled only when usage was actually decoded.
 DISTRIBUTION_TOKENS = "tokens"
+# The same activation's input/output split -- what every provider price sheet is
+# quoted in, and what a total alone cannot be multiplied by. Sampled under the
+# identical decoded-usage rule as `tokens`, so all three counts move together.
+# Billed, not consumed: the token *budget* meter deliberately charges cache hits
+# for replay determinism, while these stay provider-reached-only, so a replayed
+# activation may consume tokens here while billing zero.
+DISTRIBUTION_PROMPT_TOKENS = "prompt_tokens"
+DISTRIBUTION_COMPLETION_TOKENS = "completion_tokens"
 # Committed working-memory size for an activation.
 DISTRIBUTION_MEMORY_BYTES = "memory_bytes"
 # Agent steps consumed by an activation (the step cursor's advance).
 DISTRIBUTION_ITERATIONS = "iterations"
+# Envelopes in a committed flush's batch. One sample per committed flush, so the
+# sample count equals `batch_flushes_size + batch_flushes_timer` and the mean is
+# the batching ratio a cost model wants.
+DISTRIBUTION_BATCH_SIZE = "batch_size"
 
 # Declaration order is the surface's documented order; a name is part of the
 # observable contract, so adding one is a change and renaming one is breaking.
@@ -86,19 +111,46 @@ COUNTERS = (
     COUNTER_AGENT_ERRORS,
     COUNTER_SUSPENSIONS,
     COUNTER_ORPHANED_RESULTS,
+    COUNTER_LONGTERM_UPSERTS,
+    COUNTER_EVENTS_BUFFERED,
+    COUNTER_BATCH_FLUSHES_SIZE,
+    COUNTER_BATCH_FLUSHES_TIMER,
 )
 DISTRIBUTIONS = (
     DISTRIBUTION_ACTIVATION_MS,
     DISTRIBUTION_OVERHEAD_MS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_TOKENS,
+    DISTRIBUTION_PROMPT_TOKENS,
+    DISTRIBUTION_COMPLETION_TOKENS,
     DISTRIBUTION_MEMORY_BYTES,
     DISTRIBUTION_ITERATIONS,
+    DISTRIBUTION_BATCH_SIZE,
 )
 
 __all__ = [
     "COUNTERS",
+    "COUNTER_ACTIVATIONS",
+    "COUNTER_AGENT_ERRORS",
+    "COUNTER_BATCH_FLUSHES_SIZE",
+    "COUNTER_BATCH_FLUSHES_TIMER",
+    "COUNTER_EVENTS_BUFFERED",
+    "COUNTER_INTENTS_EMITTED",
+    "COUNTER_LLM_CALLS",
+    "COUNTER_LONGTERM_UPSERTS",
+    "COUNTER_ORPHANED_RESULTS",
+    "COUNTER_SUSPENSIONS",
+    "COUNTER_TOOL_CALLS",
     "DISTRIBUTIONS",
+    "DISTRIBUTION_ACTIVATION_MS",
+    "DISTRIBUTION_BATCH_SIZE",
+    "DISTRIBUTION_COMPLETION_TOKENS",
+    "DISTRIBUTION_ITERATIONS",
+    "DISTRIBUTION_LLM_MS",
+    "DISTRIBUTION_MEMORY_BYTES",
+    "DISTRIBUTION_OVERHEAD_MS",
+    "DISTRIBUTION_PROMPT_TOKENS",
+    "DISTRIBUTION_TOKENS",
     "NAMESPACE",
     "ActivationTally",
     "MetricsSink",
@@ -128,6 +180,11 @@ class ActivationTally:
     iterations: int = 0
     #: Total tokens summed across decoded provider responses.
     total_tokens: int = 0
+    #: The same responses' input/output split, summed. Kept beside the total
+    #: rather than derived from it: the two are priced differently and neither
+    #: is recoverable from the other.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     #: Whether any usage was decoded at all. Distinguishes "nobody decoded
     #: usage" from "the model genuinely reported zero", so the `tokens`
     #: distribution is not padded with zeros from a path that never decodes.
@@ -146,9 +203,13 @@ class MetricsSink(Protocol):
     on this protocol.
     """
 
-    def incr(self, name: str, n: int = 1) -> None: ...
+    def incr(self, name: str, n: int = 1) -> None:
+        """Add ``n`` to the counter ``name``."""
+        ...
 
-    def observe(self, name: str, value: int) -> None: ...
+    def observe(self, name: str, value: int) -> None:
+        """Record one observation of ``value`` for the distribution ``name``."""
+        ...
 
 
 class RuntimeMetrics:
@@ -169,12 +230,19 @@ class RuntimeMetrics:
         }
 
     def incr(self, name: str, n: int = 1) -> None:
+        """Increment the Beam counter for ``name``.
+
+        Off a Beam worker thread Beam finds no state sampler and drops the
+        update; that is the documented behavior the staging design works
+        around, not an error the caller handles.
+        """
         # Off a Beam worker thread (or outside a pipeline entirely) Beam finds
         # no state sampler and drops this; that is the documented behavior the
         # staging design exists to work around, not an error the caller handles.
         self._counters[name].inc(n)
 
     def observe(self, name: str, value: int) -> None:
+        """Update the Beam distribution for ``name`` with ``value``."""
         self._distributions[name].update(value)
 
 
@@ -186,7 +254,9 @@ class NullMetrics:
     """
 
     def incr(self, name: str, n: int = 1) -> None:
+        """Discard the increment."""
         return None
 
     def observe(self, name: str, value: int) -> None:
+        """Discard the observation."""
         return None

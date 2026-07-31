@@ -13,10 +13,64 @@ permissions:
   contents: read
 
 jobs:
+  # The base integration lane: Kafka/Redis/emulator client tests only
+  # (`integration and not semantics` — no test in that selection touches
+  # Flink). Keeps the job name `integration`: that exact status-check context
+  # is required on `main`, so renaming it would strand branch protection.
   integration:
-    # The effectively-once end-to-end semantics gate runs a 10k-event chaos
-    # scenario against the full compose stack (budgeted ≤ 15 min on its own),
-    # on top of the integration suite.
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --group test --group integration
+
+      # Only Redpanda, Redis, and the GCP emulators — no Flink services, no
+      # jobserver image pull, no SDK-harness build.
+      - name: Start core services (no Flink)
+        run: make compose-up-core
+
+      - name: Integration tests
+        run: make test-integration
+
+      # Capture-before-teardown ordering is load-bearing: compose-logs runs
+      # only on failure, the artifact uploads from the still-running stack,
+      # and compose-down (always) tears down afterwards.
+      - name: Collect service logs
+        if: failure()
+        run: make compose-logs LOGS_DIR=compose-diagnostics
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-diagnostics-attempt-${{ github.run_attempt }}
+          path: compose-diagnostics/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Stop local stack
+        if: always()
+        run: make compose-down
+
+  # The Flink mini-cluster lane: the Flink services, the effectively-once e2e
+  # semantics gate, and the adapter conformance matrix's Flink leg. Runs in
+  # parallel with (never behind) the base integration job so the release gates
+  # have their own budget and re-run unit.
+  #
+  # Budget, measured 2026-07-31 on the first run whose e2e gate passed: harness
+  # build ~4 min, stack bring-up ~1 min, e2e gate ~15 min, conformance leg ~7
+  # min per adapter. That is ~41 min of the old 45, with no room for the retry
+  # the e2e gate is designed to take. 60 restores the margin the 45 was chosen
+  # for, back when the gate had never run to completion here.
+  flink-minicluster:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
@@ -31,15 +85,42 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --group test --group integration
 
-      # `make compose-up` passes `--wait --build`: it builds the SDK-harness
-      # image (which bakes in the current src/ and tests/) and blocks until
-      # every service, including flink-jobserver, reports healthy.
+      # docker-container driver: required for the type=gha layer cache.
+      - uses: docker/setup-buildx-action@v3
+
+      # Builds the SDK-harness image (which bakes in the current src/ and
+      # tests/) from THIS checkout, restoring the third-party pip layer from
+      # the GHA cache when the dependency set is unchanged. A cache miss or
+      # cache-backend outage degrades to a full build, never a stale image.
+      - name: Build SDK-harness image (layer-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/sdk-harness.Dockerfile
+          tags: beam-agents-sdk-harness:2.72.0
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # `--build` is suppressed (COMPOSE_UP_FLAGS=--wait) ONLY because the
+      # step above just built the image from the same checkout — a compose
+      # `--build` in the daemon's builder could not see the buildx cache and
+      # would rebuild cold. If the build step is ever removed, compose fails
+      # on the missing tag rather than silently running a stale image.
+      # `--wait` still blocks until every service, including flink-jobserver,
+      # reports healthy.
+      #
+      # `compose-up-flink`, not `compose-up`: the three GCP emulators belong to
+      # the base lane's selection and are never reached from `tests/semantics`
+      # or `tests/conformance`. Their JVMs took memory this job's JobManager
+      # needs — see the target's comment in the Makefile.
       - name: Start local stack
-        run: make compose-up
+        run: make compose-up-flink COMPOSE_UP_FLAGS=--wait
 
-      - name: Integration tests
-        run: make test-integration
-
+      # This step is the ONLY place the docker-backed semantics release gates
+      # run (`make test-integration` excludes them so they are not paid for
+      # twice); deleting it silently removes the effectively-once release
+      # gate, so treat any edit here as review-sensitive.
       - name: Semantics tests (docker-backed)
         run: make test-semantics
 
@@ -47,6 +128,24 @@ jobs:
       # adapter-conformance failure are distinguishable in CI.
       - name: Adapter conformance matrix (Flink leg)
         run: make test-conformance-flink
+
+      # Capture-before-teardown ordering is load-bearing: compose-logs runs
+      # only on failure (service logs, harness *-tm-threads.txt thread dumps,
+      # Flink REST snapshots), the artifact uploads from the still-running
+      # stack, and compose-down (always) tears down afterwards. A green run
+      # uploads nothing.
+      - name: Collect Flink diagnostics
+        if: failure()
+        run: make compose-logs LOGS_DIR=compose-diagnostics
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flink-minicluster-diagnostics-attempt-${{ github.run_attempt }}
+          path: compose-diagnostics/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Stop local stack
         if: always()

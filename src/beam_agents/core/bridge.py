@@ -21,6 +21,11 @@ import threading
 from collections.abc import Callable, Coroutine
 from typing import TypeVar
 
+__all__ = [
+    "ActivationTimeout",
+    "AsyncBridge",
+]
+
 _T = TypeVar("_T")
 
 # Grace period to let a cancelled coroutine unwind after a timeout before the

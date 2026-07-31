@@ -6,7 +6,7 @@ named `RunAgentOutputs`, and sink-URI attachment.
 from __future__ import annotations
 
 import sys
-from dataclasses import FrozenInstanceError, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 from unittest import mock
 
@@ -25,7 +25,7 @@ from apache_beam.testing.test_stream import TestStream
 from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
-from beam_agents._protos import AgentEnvelope, TraceEvent
+from beam_agents._protos import AgentEnvelope, StateSnapshot, TraceEvent
 from beam_agents.core.dofn import (
     DETAIL_NO_CONTINUATION,
     REASON_ERROR,
@@ -34,6 +34,7 @@ from beam_agents.core.dofn import (
     _AgentDoFn,
 )
 from beam_agents.core.error_records import activation_error_to_row, serialize_error_envelope
+from beam_agents.core.migration import CURRENT_STATE_SCHEMA_VERSION
 from beam_agents.core.transform import (
     AgentConfig,
     DefaultSinkResolver,
@@ -42,9 +43,12 @@ from beam_agents.core.transform import (
     UnknownSinkSchemeError,
     _validate_kv_input,
     _WriteErrors,
+    _WriteSnapshots,
     _WriteTraces,
 )
 from beam_agents.hitl import HitlPolicy
+from beam_agents.memory import DropOldestCompactor, FlushToLongterm
+from beam_agents.memory.facade import HARD_CAP_BYTES
 from beam_agents.observability import trace_event_to_row, trace_id_for
 from beam_agents.observability.exporters import TRACE_TABLE_SCHEMA
 from beam_agents.observability.otlp import WriteTracesToOtlp
@@ -186,23 +190,13 @@ class _RejectingSinkResolver:
 
 
 # --- Requirement: AgentConfig bundles runtime configuration and validates ------
-
-
-def test_valid_config_constructs_and_is_immutable() -> None:
-    config = AgentConfig(provider_factory=make_pong_provider)
-    assert config.activation_timeout_s == 30.0
-    assert config.ttl_ms == 3_600_000
-    assert config.cancel_grace_s == 5.0
-    with pytest.raises(FrozenInstanceError):
-        config.ttl_ms = 1  # type: ignore[misc]
-
-
-@pytest.mark.parametrize("knob", ["activation_timeout_s", "ttl_ms", "cancel_grace_s"])
-@pytest.mark.parametrize("bad_value", [0, -1])
-def test_non_positive_knob_is_rejected(knob: str, bad_value: float) -> None:
-    kwargs: dict[str, Any] = {knob: bad_value}
-    with pytest.raises(ValueError, match=knob):
-        AgentConfig(provider_factory=make_pong_provider, **kwargs)
+#
+# The runner-free half of this requirement — the numeric knobs' positivity
+# boundary and immutability — lives in `test_config_validation.py`, which the
+# mutation selection reaches; this suite drives TestPipeline/TestStream and is
+# deselected under mutmut, so a mutant in the shared `_require_positive`
+# validator could never be killed from here. The sink-URI half stays put: see
+# that module's docstring.
 
 
 def test_config_carries_a_default_hitl_policy() -> None:
@@ -221,6 +215,120 @@ def test_config_carries_an_empty_default_tool_registry_or_the_supplied_one() -> 
     registry = ToolRegistry()
     config = AgentConfig(provider_factory=make_pong_provider, tool_registry=registry)
     assert config.tool_registry is registry
+
+
+def test_config_carries_the_default_drop_oldest_compactor() -> None:
+    # Requirement: the default compactor is wired through AgentConfig into every
+    # activation. Before this, the compactor parameter was dead and the hard
+    # cap's only behavior was MemoryOverflow -> dead letter, forever.
+    config = AgentConfig(provider_factory=make_pong_provider)
+    assert isinstance(config.compactor, DropOldestCompactor)
+    assert config.compactor.target_bytes == HARD_CAP_BYTES // 2
+    assert config.compactor.protected_prefixes == ("__langgraph__/",)
+
+    # ...and opting out is expressible, restoring strict-overflow semantics.
+    assert AgentConfig(provider_factory=make_pong_provider, compactor=None).compactor is None
+
+
+def test_the_compactor_and_summarizer_reach_the_dofn() -> None:
+    compactor = DropOldestCompactor(target_bytes=99)
+    config = AgentConfig(provider_factory=make_pong_provider, compactor=compactor)
+    dofn = _AgentDoFn(
+        seq_agent,
+        provider_factory=config.provider_factory,
+        compactor=config.compactor,
+        summarizer=config.summarizer,
+    )
+    assert dofn._compactor is compactor
+    assert dofn._summarizer is None
+
+
+def test_the_summarizer_is_opt_in() -> None:
+    assert AgentConfig(provider_factory=make_pong_provider).summarizer is None
+
+
+def test_on_expire_without_a_long_term_store_is_rejected_at_construction() -> None:
+    # The hook writes through the long-term tier; configuring one without the
+    # other is a misconfiguration, and it fails at the site of the typo rather
+    # than at the first TTL fire in production.
+    with pytest.raises(ValueError, match="longterm_memory"):
+        AgentConfig(provider_factory=make_pong_provider, on_expire=FlushToLongterm())
+
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        on_expire=FlushToLongterm(),
+        longterm_memory="memory://",
+    )
+    assert config.on_expire is not None
+
+
+def test_on_expire_is_unset_by_default() -> None:
+    # Unset means today's wipe-only behavior, unchanged.
+    assert AgentConfig(provider_factory=make_pong_provider).on_expire is None
+
+
+# --- Requirement: `max_tokens_per_activation` is a validated field ------------
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_a_non_positive_budget_fails_at_construction(limit: int) -> None:
+    # Scenario: A non-positive budget fails at construction. The `ValueError`
+    # names the field, at the construction site, before any pipeline exists.
+    with pytest.raises(ValueError, match="max_tokens_per_activation"):
+        AgentConfig(
+            provider_factory=make_pong_provider,
+            decode=decode_len_based,
+            max_tokens_per_activation=limit,
+        )
+
+
+def test_a_budget_without_a_decoder_fails_at_construction() -> None:
+    # Scenario: A budget without a decoder fails at construction. Without a
+    # decoder the token counts are genuinely unknown, and both readings of
+    # unknown are worse than failing here: unknown-is-free meters nothing and is
+    # discovered on an invoice, unknown-is-fatal makes the knob unusable.
+    with pytest.raises(ValueError, match="decode"):
+        AgentConfig(provider_factory=make_pong_provider, max_tokens_per_activation=1_000)
+
+
+def test_the_budget_is_unset_by_default_and_reaches_the_dofn_when_set() -> None:
+    # Scenario: Unset means unlimited -- the config half of it. And when set,
+    # the value rides the same `RunAgent -> _AgentDoFn` thread `decode` does.
+    assert AgentConfig(provider_factory=make_pong_provider).max_tokens_per_activation is None
+
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        decode=decode_len_based,
+        max_tokens_per_activation=5_000,
+    )
+    dofn = _AgentDoFn(
+        seq_agent,
+        provider_factory=config.provider_factory,
+        decode=config.decode,
+        max_tokens_per_activation=config.max_tokens_per_activation,
+    )
+    assert dofn._max_tokens_per_activation == 5_000
+
+
+def test_run_agent_expand_passes_the_budget_through_to_the_dofn() -> None:
+    # The knob is only worth validating if it actually reaches the runtime:
+    # `expand` is the one place that thread is woven, so the real DoFn is built
+    # through a recording wrapper rather than a mock that would break `ParDo`.
+    config = AgentConfig(
+        provider_factory=make_pong_provider, decode=decode_len_based, max_tokens_per_activation=777
+    )
+    built: list[_AgentDoFn] = []
+    real = _AgentDoFn
+
+    def recording(*args: Any, **kwargs: Any) -> _AgentDoFn:
+        dofn = real(*args, **kwargs)
+        built.append(dofn)
+        return dofn
+
+    with mock.patch("beam_agents.core.transform._AgentDoFn", recording), BeamTestPipeline() as p:
+        _keyed(p, _event(b"k", b"go")) | RunAgent(seq_agent, config=config)
+
+    assert [dofn._max_tokens_per_activation for dofn in built] == [777]
 
 
 @pytest.mark.parametrize(
@@ -768,6 +876,104 @@ def test_a_configured_errors_sink_receives_encoded_records_not_dataclasses() -> 
         # ...and `.errors` still exposes the dataclass to a direct consumer.
         reasons = outputs.errors | "reasons" >> beam.Map(lambda e: e.reason)
         assert_that(reasons, equal_to([REASON_ORPHANED]), label="errors-still-exposed")
+
+
+# --- Requirement: The snapshots output resolves a sink like traces ------------
+
+
+def _export_request(key: bytes, request_id: str = "req-1", t_ms: int = 1000) -> AgentEnvelope:
+    return AgentEnvelope(
+        entity_key=key,
+        event_time_ms=t_ms,
+        export_request=AgentEnvelope.StateExportRequest(request_id=request_id),
+    )
+
+
+class _RecordingSnapshotsResolver:
+    """Resolves ``snapshots_to`` to the *real* encoder over a recording writer."""
+
+    def __init__(self) -> None:
+        self.sink = _RecordingWrite()
+
+    def validate(self, field_name: str, uri: str) -> None:
+        pass
+
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        return _WriteSnapshots(self.sink)
+
+
+def test_a_configured_snapshots_sink_receives_serialized_snapshots_keyed_by_entity() -> None:
+    # Scenario: A configured snapshots sink receives serialized snapshots keyed
+    # by entity. The resolver hands back the real encoding wrapped around a
+    # recording writer, so this exercises the production path.
+    resolver = _RecordingSnapshotsResolver()
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        snapshots_to="stub://snapshots",
+        sink_resolver=resolver,
+    )
+    expected = StateSnapshot(
+        state_schema_version=CURRENT_STATE_SCHEMA_VERSION,
+        entity_key=b"k",
+        seq=0,
+        snapshot_at_ms=1000,
+        request_id="req-1",
+    )
+    with BeamTestPipeline() as p:
+        keyed = _keyed(p, _export_request(b"k"))
+        outputs = keyed | RunAgent(seq_agent, config=config)
+        assert_that(
+            resolver.sink.written,
+            equal_to([(b"k", expected.SerializeToString(deterministic=True))]),
+            label="keyed-serialized-at-the-writer",
+        )
+        # ...and `.snapshots` still exposes the proto to a direct consumer.
+        request_ids = outputs.snapshots | "request-ids" >> beam.Map(lambda s: s.request_id)
+        assert_that(request_ids, equal_to(["req-1"]), label="snapshots-still-exposed")
+
+
+def test_no_snapshots_sink_configured_still_constructs_and_runs() -> None:
+    # Scenario: No sink configured still constructs and runs. The tagged output
+    # stays exposed and unconsumed; nothing about pipeline construction needs it.
+    config = AgentConfig(provider_factory=make_pong_provider)
+    with BeamTestPipeline() as p:
+        keyed = _keyed(p, _export_request(b"k"), _event(b"k", b"go"))
+        outputs = keyed | RunAgent(seq_agent, config=config)
+        assert isinstance(outputs.snapshots, beam.pvalue.PCollection)
+        # The activation still runs; only the export produces a snapshot.
+        assert_that(outputs.output, equal_to([b"0"]), label="activation-unaffected")
+
+
+def test_a_snapshots_sink_encodes_before_writing() -> None:
+    # A raw write transform cannot accept a `StateSnapshot` proto, so resolution
+    # for `snapshots_to` must wrap the writer in the serializer — the same shape
+    # `traces_to` has.
+    for uri in ("kafka://broker:9092/snapshots", "pubsub://my-project/snapshots"):
+        transform = DefaultSinkResolver().resolve("snapshots_to", uri)
+        assert isinstance(transform, _WriteSnapshots)
+
+
+def test_the_snapshots_encoder_hands_the_sink_keyed_deterministic_bytes() -> None:
+    snapshot = StateSnapshot(state_schema_version=1, entity_key=b"key-1", seq=3, snapshot_at_ms=7)
+    with BeamTestPipeline() as p:
+        written = p | beam.Create([snapshot]) | _WriteSnapshots(beam.Map(lambda x: x))
+        assert_that(
+            written,
+            equal_to([(b"key-1", snapshot.SerializeToString(deterministic=True))]),
+        )
+
+
+def test_a_bigquery_snapshots_sink_is_refused_at_construction() -> None:
+    # A `StateSnapshot` is an opaque per-key state image with no row encoding,
+    # so the misconfiguration is refused where it is written rather than
+    # failing inside a bundle.
+    with pytest.raises(UnknownSinkSchemeError, match="snapshots_to"):
+        DefaultSinkResolver().validate("snapshots_to", "bigquery://my-project/my_dataset/snaps")
+    with pytest.raises(UnknownSinkSchemeError, match="snapshots_to"):
+        AgentConfig(
+            provider_factory=make_pong_provider,
+            snapshots_to="bigquery://my-project/my_dataset/snaps",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

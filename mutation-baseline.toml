@@ -96,7 +96,57 @@
 # +129 is the `otlp://` grammar plus `_traces_bigquery_writer`, and no line is
 # touched by both. The combined ceiling is 242 + 38 + 129 = 409; both changes'
 # reasoning above stands unchanged for its own territory.
+#
+# close-core-mutation-gaps raises transform.py 409 -> 474, and this is the first
+# raise made against a *measured* attribution rather than a reading of the diff.
+# The 409 ceiling was set at commit 5afd49b, where transform.py had exactly 409
+# mutants and every one of them was "no tests" -- the ceiling was the whole
+# module. Re-running mutmut's generator over that revision's file and over HEAD
+# attributes the growth exactly:
+#
+#   DefaultSinkResolver._encoded_transform   0 -> 47  (+47)
+#   DefaultSinkResolver.resolve             64 -> 31  (-33)
+#   DefaultSinkResolver.validate            17 -> 29  (+12)
+#   RunAgent.expand                         99 -> 127 (+28)
+#   _WriteSnapshots.__init__                 0 -> 1   (+1)
+#   _WriteSnapshots.expand                   0 -> 13  (+13)
+#                                                    -----
+#                                                     +68 mutants
+#
+# All +68 are the `snapshots_to` sink (add-replay-cli, add-1-0-api-freeze): the
+# new `_WriteSnapshots` transform, the `snapshots_to` arms of `validate` and
+# `resolve`, the `.snapshots` wiring in `RunAgent.expand`, and the extraction of
+# the shared encoded-sink writer out of `resolve` into `_encoded_transform`
+# (which is why `resolve` FELL by 33 while the pair grew by 14 net). It is the
+# same territory, function for function, that this file's earlier entries
+# describe: transforms that only exist inside a built pipeline, and resolver
+# arms only test_transform.py reaches -- and test_transform.py drives
+# TestPipeline/TestStream, so mutmut deselects it (see the [tool.mutmut] comment
+# in pyproject.toml). Covering any of these functions from inside the selection
+# is the move that was tried and reverted for the otlp work above: mutmut
+# resolves reach per *function*, so a partial cover reclassifies every
+# cross-language writer-arm mutant in the same function from "no tests" to
+# "survived", and killing those means asserting `WriteToKafka`/`WriteToPubSub`
+# construction internals.
+#
+# The ceiling rises by 65, not 68, because 3 mutants moved the other way:
+# `_require_positive`'s three became reachable once test_batching.py started
+# constructing `AgentConfig`, and this change kills all three from
+# test_config_validation.py -- the runner-free half of the `AgentConfig`
+# validation suite, split out of test_transform.py precisely so the mutation
+# selection can reach it. 409 + 68 - 3 = 474.
+#
+# The behavior itself is covered in the normal suite: test_transform.py's
+# snapshots-sink resolver tests (including the `bigquery://` refusal) and its
+# `.snapshots` pipeline run, plus tests/core/test_dofn_export.py for the export
+# route and tests/replay for the loader that consumes the bytes.
+#
+# snapshot.py is NOT raised. It regressed 0 -> 2 when `serialize_snapshot` was
+# added and left reachable only from `_WriteSnapshots`; it is a pure function,
+# so tests/core/test_dofn_export.py now drives it directly and the module is
+# back to the implicit zero. Its two remaining survivors are genuinely
+# equivalent and carry reasons in mutation-exclusions.toml.
 [no_tests]
 "context.py" = 0
 "dofn.py" = 3
-"transform.py" = 409
+"transform.py" = 474

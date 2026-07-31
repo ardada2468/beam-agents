@@ -39,10 +39,12 @@ from beam_agents.observability.metrics import (
     COUNTER_SUSPENSIONS,
     COUNTER_TOOL_CALLS,
     DISTRIBUTION_ACTIVATION_MS,
+    DISTRIBUTION_COMPLETION_TOKENS,
     DISTRIBUTION_ITERATIONS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_MEMORY_BYTES,
     DISTRIBUTION_OVERHEAD_MS,
+    DISTRIBUTION_PROMPT_TOKENS,
     DISTRIBUTION_TOKENS,
     ActivationTally,
     MetricsSink,
@@ -262,8 +264,11 @@ def test_a_model_call_is_counted_and_timed_through_the_commit() -> None:
     assert COUNTER_TOOL_CALLS not in metrics.counters
     # Scenario: An activation with no decoded usage contributes no sample. The
     # runtime's own `call_model` never decodes the opaque response, so nothing
-    # reports usage on this path and a zero sample would be a fiction.
+    # reports usage on this path and a zero sample would be a fiction. The cost
+    # pair obeys the same rule, so all three stay absent together.
     assert DISTRIBUTION_TOKENS not in metrics.samples
+    assert DISTRIBUTION_PROMPT_TOKENS not in metrics.samples
+    assert DISTRIBUTION_COMPLETION_TOKENS not in metrics.samples
 
 
 def test_activation_ms_is_measured_from_the_injected_clock() -> None:
@@ -591,6 +596,8 @@ def test_a_tally_carrying_tool_calls_and_usage_records_both() -> None:
             tool_calls=3,
             iterations=5,
             total_tokens=41,
+            prompt_tokens=30,
+            completion_tokens=11,
             usage_observed=True,
             llm_ms=[7, 9],
             tool_ms=[2, 1, 1],
@@ -609,11 +616,43 @@ def test_a_tally_carrying_tool_calls_and_usage_records_both() -> None:
     assert metrics.samples == {
         DISTRIBUTION_MEMORY_BYTES: [12],
         DISTRIBUTION_ITERATIONS: [5],
+        # Scenario: Decoded usage is sampled. The total plus the input/output
+        # split a provider price sheet is quoted in, one sample each.
         DISTRIBUTION_TOKENS: [41],
+        DISTRIBUTION_PROMPT_TOKENS: [30],
+        DISTRIBUTION_COMPLETION_TOKENS: [11],
         DISTRIBUTION_LLM_MS: [7, 9],
         # 30 - (7+9) llm - (2+1+1) tool.
         DISTRIBUTION_OVERHEAD_MS: [10],
     }
+
+
+def test_an_activation_with_no_decoded_usage_records_no_cost_sample() -> None:
+    # Scenario: An activation with no decoded usage contributes no sample. And
+    # Scenario: A replayed walk bills nothing -- an all-cache-hit activation
+    # accumulates no usage (the facade bills only provider-reached calls), so it
+    # reaches the recorder with `usage_observed` false however many tokens its
+    # budget meter charged.
+    metrics = _RecordingMetrics()
+    dofn = _AgentDoFn(_unused_agent, provider_factory=make_pong_provider, metrics=metrics)
+    result = ActivationResult(
+        status="completed",
+        seq=0,
+        memory_blob=MemoryBlob(),
+        cache_blob=LlmCacheBlob(),
+        intents=[],
+        traces=[],
+        outputs=[],
+        continuation=None,
+        hitl_deadline_ms=None,
+        tally=ActivationTally(iterations=2, usage_observed=False),
+    )
+
+    dofn._record_commit(result, activation_ms=5)
+
+    assert DISTRIBUTION_TOKENS not in metrics.samples
+    assert DISTRIBUTION_PROMPT_TOKENS not in metrics.samples
+    assert DISTRIBUTION_COMPLETION_TOKENS not in metrics.samples
 
 
 def test_concurrent_call_durations_clamp_overhead_at_zero() -> None:

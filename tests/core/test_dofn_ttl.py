@@ -73,6 +73,12 @@ def _fire(cont: Continuation | None) -> tuple[list[Any], list[_FakeState]]:
     llm_cache = _FakeState(LlmCacheBlob())
     pending = _FakeState([ToolIntent(intent_id="intent-1")])
     seq = _FakeState(3)
+    # `BATCH`/`FLUSH_TIMER` are declared under both policies, so the callback
+    # is always handed them; this DoFn is `BatchPolicy.NONE` (no `batch=`),
+    # under which the wipe must leave them alone. The ADAPTIVE wipe, and the
+    # `ttl_wiped_batch` records that precede it, live in test_dofn_batching.py.
+    batch = _FakeState([])
+    flush_timer = _FakeState()
     emitted = list(
         dofn.on_ttl(
             key=_KEY,
@@ -82,8 +88,12 @@ def _fire(cont: Continuation | None) -> tuple[list[Any], list[_FakeState]]:
             llm_cache=llm_cache,
             pending=pending,
             seq=seq,
+            batch=batch,
+            flush_timer=flush_timer,
         )
     )
+    assert batch.cleared is False
+    assert flush_timer.cleared is False
     return emitted, [memory, continuation, llm_cache, pending, seq]
 
 

@@ -18,17 +18,24 @@ from beam_agents.memory import facade as memory_facade
 from beam_agents.observability.metrics import (
     COUNTER_ACTIVATIONS,
     COUNTER_AGENT_ERRORS,
+    COUNTER_BATCH_FLUSHES_SIZE,
+    COUNTER_BATCH_FLUSHES_TIMER,
+    COUNTER_EVENTS_BUFFERED,
     COUNTER_INTENTS_EMITTED,
     COUNTER_LLM_CALLS,
+    COUNTER_LONGTERM_UPSERTS,
     COUNTER_ORPHANED_RESULTS,
     COUNTER_SUSPENSIONS,
     COUNTER_TOOL_CALLS,
     COUNTERS,
     DISTRIBUTION_ACTIVATION_MS,
+    DISTRIBUTION_BATCH_SIZE,
+    DISTRIBUTION_COMPLETION_TOKENS,
     DISTRIBUTION_ITERATIONS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_MEMORY_BYTES,
     DISTRIBUTION_OVERHEAD_MS,
+    DISTRIBUTION_PROMPT_TOKENS,
     DISTRIBUTION_TOKENS,
     DISTRIBUTIONS,
     NAMESPACE,
@@ -41,7 +48,7 @@ from beam_agents.observability.metrics import (
 # --- Requirement: the runtime publishes a fixed metric surface ----------------
 
 
-def test_the_declared_names_are_the_seven_counters_and_five_distributions() -> None:
+def test_the_declared_names_are_the_eleven_counters_and_nine_distributions() -> None:
     # Scenario: Every declared metric is queryable after a pipeline run -- the
     # half of it that does not need a pipeline. Names are the observable
     # contract: a rename silently breaks every dashboard built on them, so the
@@ -55,14 +62,21 @@ def test_the_declared_names_are_the_seven_counters_and_five_distributions() -> N
         "agent_errors",
         "suspensions",
         "orphaned_results",
+        "longterm_upserts",
+        "events_buffered",
+        "batch_flushes_size",
+        "batch_flushes_timer",
     )
     assert DISTRIBUTIONS == (
         "activation_ms",
         "overhead_ms",
         "llm_ms",
         "tokens",
+        "prompt_tokens",
+        "completion_tokens",
         "memory_bytes",
         "iterations",
+        "batch_size",
     )
     assert (
         COUNTER_ACTIVATIONS,
@@ -72,14 +86,21 @@ def test_the_declared_names_are_the_seven_counters_and_five_distributions() -> N
         COUNTER_AGENT_ERRORS,
         COUNTER_SUSPENSIONS,
         COUNTER_ORPHANED_RESULTS,
+        COUNTER_LONGTERM_UPSERTS,
+        COUNTER_EVENTS_BUFFERED,
+        COUNTER_BATCH_FLUSHES_SIZE,
+        COUNTER_BATCH_FLUSHES_TIMER,
     ) == COUNTERS
     assert (
         DISTRIBUTION_ACTIVATION_MS,
         DISTRIBUTION_OVERHEAD_MS,
         DISTRIBUTION_LLM_MS,
         DISTRIBUTION_TOKENS,
+        DISTRIBUTION_PROMPT_TOKENS,
+        DISTRIBUTION_COMPLETION_TOKENS,
         DISTRIBUTION_MEMORY_BYTES,
         DISTRIBUTION_ITERATIONS,
+        DISTRIBUTION_BATCH_SIZE,
     ) == DISTRIBUTIONS
 
 

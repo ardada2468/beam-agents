@@ -18,26 +18,53 @@
 #    forbids. Baking the dependencies in makes worker restart a process spawn.
 #
 # Built by `docker compose -f docker/compose.yaml build beam-sdk-harness`, which
-# `make compose-up` performs as part of bringing the stack up.
+# `make compose-up` performs as part of bringing the stack up. In CI the
+# flink-minicluster job builds the same tag via buildx with a GHA layer cache
+# (`make harness-build` is the local-parity command) and then starts compose
+# with the rebuild suppressed (`COMPOSE_UP_FLAGS=--wait`).
 
 FROM apache/beam_python3.11_sdk:2.72.0@sha256:9f42fcb45dd6831662830c36f107be4e60036170fb344d5bf55c3cdf5c46448e
 
-# `--no-deps` for beam_agents itself: apache-beam is already present at exactly
-# the matching version, and letting pip resolve `apache-beam[gcp]>=2.60` would
-# fight the image's own install. The runtime deps beam_agents actually needs at
-# import time are named explicitly instead. `aiokafka` is for the e2e gate's
-# outbox DoFn, which publishes intents to Kafka from inside this container.
+# Third-party dependencies FIRST, before any repo files are copied: this layer
+# depends only on the pins in this Dockerfile line, so a `src/`-only change
+# reuses it from cache instead of re-downloading everything (the
+# flink-minicluster CI job persists it via a buildx type=gha layer cache).
+# The runtime deps beam_agents actually needs at import time are named
+# explicitly (see the `--no-deps` install below). `aiokafka` is for the e2e
+# gate's outbox DoFn, which publishes intents to Kafka from inside this
+# container. `langgraph`/`langchain-core` mirror the `langgraph` extra,
+# `google-adk` mirrors the `adk` extra, and `pydantic-ai-slim` mirrors the
+# `pydantic-ai` extra: the adapter conformance matrix's Flink leg runs EVERY
+# framework adapter's cells inside this harness, so each framework must be
+# importable here (their e2e cells would otherwise fail worker-side instead of
+# skipping host-side).
+#
+# `pydantic>=2` is the validation library and is NOT a substitute for
+# `pydantic-ai-slim`, the agent framework. Conflating the two left all five
+# runnable Pydantic AI Flink cells failing as opaque submission stalls: the
+# adapter's import died inside the SDK worker, no bundle was ever processed,
+# and the harness surfaced an `InfraFailure` rather than a missing dependency.
+# Both are named explicitly so neither can be mistaken for the other again.
+RUN pip install --no-cache-dir "protobuf==6.33.6" "httpx[http2]" "pydantic>=2" "aiokafka" \
+    "langgraph>=1.0,<2" "langchain-core>=1.0,<2" "google-adk>=2.6,<3" \
+    "pydantic-ai-slim>=2.21,<3"
+
 COPY pyproject.toml README.md /src/
 COPY src /src/src
-# `langgraph`/`langchain-core` mirror the `langgraph` extra: the adapter
-# conformance matrix's Flink leg runs the LangGraph adapter's cells inside
-# this harness, so the framework must be importable here (the LangGraph e2e
-# cells would otherwise fail worker-side instead of skipping host-side).
-RUN pip install --no-cache-dir "protobuf==6.33.6" "httpx[http2]" "pydantic>=2" "aiokafka" \
-    "langgraph>=1.0,<2" "langchain-core>=1.0,<2" \
- && pip install --no-cache-dir --no-deps /src \
+# `--no-deps` for beam_agents itself: apache-beam is already present at exactly
+# the matching version, and letting pip resolve `apache-beam[gcp]>=2.60` would
+# fight the image's own install — its real import-time deps were installed in
+# the cached layer above.
+# The import assertion is the build-time guard that every framework the
+# conformance matrix drives is actually present. It must name EVERY framework
+# adapter: an omission here is invisible at build time and only surfaces as a
+# worker-side stall during the Flink leg, which reads as infrastructure flake
+# rather than a packaging defect. Add the framework here whenever one is added
+# to the pip install above.
+RUN pip install --no-cache-dir --no-deps /src \
  && python -c "import apache_beam; import beam_agents.core.transform; \
-import beam_agents._protos; import langgraph; print('sdk harness ready', apache_beam.__version__)"
+import beam_agents._protos; import langgraph; import google.adk; import pydantic_ai; \
+print('sdk harness ready', apache_beam.__version__)"
 
 # The e2e gate's pipeline-side DoFns (spool source, outbox producer, test
 # agent) live under tests/semantics/_e2e — deliberately NOT in the beam_agents

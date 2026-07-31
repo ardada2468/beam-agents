@@ -18,6 +18,15 @@ from dataclasses import dataclass
 
 from beam_agents._protos import LlmCacheBlob
 
+__all__ = [
+    "BLOB_CAP_BYTES",
+    "MAX_ENTRIES",
+    "TTL_MS",
+    "ReplayCache",
+    "ReplayEntry",
+    "compute_cache_key",
+]
+
 # Content-hash cache stays useful only for recent activations; these three
 # bounds keep per-key cache state small and predictable (correctness invariant
 # 3, project constraints).
@@ -144,11 +153,17 @@ class ReplayCache:
 
     @property
     def dirty(self) -> bool:
+        """Whether the cache changed since the blob was last serialized."""
         return self._dirty
 
     # -- access ---------------------------------------------------------------
 
     def get(self, cache_key: str) -> ReplayEntry | None:
+        """The entry for ``cache_key``, or ``None`` on a miss.
+
+        An expired entry is purged and reported as a miss. A hit refreshes
+        the entry's LRU recency.
+        """
         entry = self._entries.get(cache_key)
         if entry is None:
             return None  # never stored: a clean miss, no state change
@@ -160,6 +175,12 @@ class ReplayCache:
         return ReplayEntry(entry.response, entry.response_digest, entry.digest_only)
 
     def put(self, cache_key: str, response: bytes) -> None:
+        """Insert ``response`` under ``cache_key``, evicting to stay within bounds.
+
+        Enforces the max-entries LRU bound and the per-blob size cap;
+        a response past the cap is recorded by digest only, so a retry
+        still detects divergence without the cache growing unboundedly.
+        """
         self._purge_expired()
 
         digest = hashlib.sha256(response).digest()
@@ -200,7 +221,19 @@ class ReplayCache:
     # -- serialization --------------------------------------------------------
 
     def to_blob(self) -> LlmCacheBlob:
-        blob = LlmCacheBlob(state_schema_version=1)
+        """Serialize the cache into the ``LlmCacheBlob`` written to keyed state.
+
+        Stamps the current state schema version, read at call time so a
+        version bump in ``core/migration.py`` moves every writer at once.
+        """
+        # Imported lazily: `beam_agents.core`'s package init imports the
+        # context, which imports this package — a top-level import here would
+        # make `import beam_agents.model` order-dependent. The call-time read
+        # also means a version bump in core/migration.py moves this stamp with
+        # no edit here.
+        from beam_agents.core import migration
+
+        blob = LlmCacheBlob(state_schema_version=migration.CURRENT_STATE_SCHEMA_VERSION)
         for cache_key, entry in self._entries.items():
             blob.entries.add(
                 cache_key=cache_key,
@@ -279,11 +312,12 @@ def _entry_wire_size(cache_key: str, entry: _Entry) -> int:
 def _blob_header_size(total_response_bytes: int) -> int:
     """Serialized size of the blob's non-repeated fields.
 
-    ``state_schema_version`` is always set to 1 (tag + one varint byte).
+    ``state_schema_version`` is always set to ``CURRENT_STATE_SCHEMA_VERSION``
+    (tag + one varint byte while the version stays below 128).
     ``total_response_bytes`` (field 3, int64) is omitted by proto3 when zero,
     else a tag byte plus its varint.
     """
-    size = 2  # state_schema_version = 1
+    size = 2  # state_schema_version: tag + single-byte varint
     if total_response_bytes != 0:
         size += 1 + _varint_len(total_response_bytes)
     return size

@@ -49,11 +49,15 @@ if TYPE_CHECKING:
 
     from beam_agents.memory.facade import Memory
 
+__all__ = [
+    "BeamCheckpointSaver",
+]
+
 # The reserved working-memory namespace for LangGraph state. The adapter owns
 # every key under this prefix; nothing else may write here.
-RESERVED_NAMESPACE = "__langgraph__/"
-_CKPT_KEY = RESERVED_NAMESPACE + "ckpt"
-_WRITES_KEY = RESERVED_NAMESPACE + "writes"
+_RESERVED_NAMESPACE = "__langgraph__/"
+_CKPT_KEY = _RESERVED_NAMESPACE + "ckpt"
+_WRITES_KEY = _RESERVED_NAMESPACE + "writes"
 
 # Frame a (serde type tag, payload) pair into one scalar value: u16 big-endian
 # tag length + tag + payload. The tag is serde-defined ("msgpack", "json", ...)
@@ -90,6 +94,11 @@ class BeamCheckpointSaver(BaseCheckpointSaver[str]):
     # -- sync implementation ---------------------------------------------------
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        """The stored checkpoint, or ``None`` when none is stored or the id differs.
+
+        Reads working memory rather than an external store: the checkpoint
+        *is* the keyed state, so it commits with the bundle.
+        """
         raw = self._memory.get(_CKPT_KEY)
         if raw is None:
             return None
@@ -124,6 +133,11 @@ class BeamCheckpointSaver(BaseCheckpointSaver[str]):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> Iterator[CheckpointTuple]:
+        """Yield the one stored checkpoint when it matches the filters.
+
+        Working memory holds exactly one checkpoint per key, so history is a
+        sequence of at most one — LangGraph time travel is not supported.
+        """
         # Latest-only: there is at most one tuple, and `before` any checkpoint
         # there is nothing older to return.
         if config is None or before is not None or (limit is not None and limit < 1):
@@ -139,6 +153,11 @@ class BeamCheckpointSaver(BaseCheckpointSaver[str]):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
+        """Stage the checkpoint into working memory and return its config.
+
+        Staged, not written: it reaches keyed state only when the
+        activation commits (invariant 1).
+        """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         envelope = {
@@ -170,6 +189,7 @@ class BeamCheckpointSaver(BaseCheckpointSaver[str]):
         task_id: str,
         task_path: str = "",
     ) -> None:
+        """Stage intermediate channel writes alongside the checkpoint."""
         checkpoint_id = config["configurable"]["checkpoint_id"]
         rows = self._all_writes()
         # Dict semantics on (checkpoint_id, task_id, idx): a re-executed task
@@ -192,6 +212,7 @@ class BeamCheckpointSaver(BaseCheckpointSaver[str]):
     # -- async delegation (all I/O is staged in memory; nothing blocks) --------
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
+        """Async alias for :meth:`get_tuple`; the store is in-memory, so no await."""
         return self.get_tuple(config)
 
     async def alist(
@@ -202,6 +223,7 @@ class BeamCheckpointSaver(BaseCheckpointSaver[str]):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
+        """Async alias for :meth:`list`; the store is in-memory, so no await."""
         for checkpoint_tuple in self.list(config, filter=filter, before=before, limit=limit):
             yield checkpoint_tuple
 
@@ -212,6 +234,7 @@ class BeamCheckpointSaver(BaseCheckpointSaver[str]):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
+        """Async alias for :meth:`put`; the store is in-memory, so no await."""
         return self.put(config, checkpoint, metadata, new_versions)
 
     async def aput_writes(
@@ -221,6 +244,7 @@ class BeamCheckpointSaver(BaseCheckpointSaver[str]):
         task_id: str,
         task_path: str = "",
     ) -> None:
+        """Async alias for :meth:`put_writes`; the store is in-memory, so no await."""
         self.put_writes(config, writes, task_id, task_path)
 
     # -- internals -------------------------------------------------------------

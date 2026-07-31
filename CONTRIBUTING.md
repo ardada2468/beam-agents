@@ -17,6 +17,104 @@ exists in the tree. If you're doing exploratory work that genuinely doesn't
 warrant a change yet, set `BEAM_AGENTS_ALLOW_NO_CHANGE=1` to bypass it —
 sparingly, and expect reviewers to ask why.
 
+## Changelog fragments
+
+Every change touching `src/` also carries a changelog fragment:
+
+```
+changelog.d/<openspec-change-name>.<type>.md
+```
+
+named after the OpenSpec change folder backing the commit, holding one or two
+sentences in **user voice** — what someone installing the next release can now
+do, or must now do differently. The point is that the release note is written
+by the person who made the change, reviewed in the same diff as the code, and
+never reconstructed from commit archaeology at tag time.
+
+The type registry is closed: `breaking`, `added`, `changed` (each requires a
+MINOR release), `fixed`, `docs` (PATCH-compatible), and `internal` (satisfies
+the requirement, renders nowhere — use it for refactors with no user-visible
+effect). An unregistered type fails the hook and `make changelog` alike.
+
+A local pre-commit hook (`changelog-fragment-required`) enforces this the same
+way `openspec-change-required` does, with its own escape hatch:
+`BEAM_AGENTS_ALLOW_NO_FRAGMENT=1`. The two hooks are independent — bypassing
+one does not bypass the other.
+
+Preview what the next release will say with `make changelog-draft` (writes
+nothing). See [`changelog.d/README.md`](changelog.d/README.md) for the format
+and [`docs/releasing.md`](docs/releasing.md) for the versioning policy the
+types map onto.
+
+## Releasing
+
+The project is pre-1.0 (`0.MINOR.PATCH`): a MINOR release may add features and
+may break the documented compatibility surface; a PATCH release carries fixes
+and docs only. The version is a single static string in `pyproject.toml` and
+must agree with both the release tag and `uv.lock` — which is why a version
+bump is the one routine reason to run `uv lock`.
+
+Releases are cut by pushing an annotated `vX.Y.Z` tag, which is the only human
+action that publishes; `.github/workflows/release.yml` builds, verifies, gates,
+and publishes to PyPI via trusted publishing (no API token exists in secrets).
+Full policy, compatibility surface, and checklist: [`docs/releasing.md`](docs/releasing.md).
+
+## Public API surface and the deprecation policy
+
+`public-surface.toml` is the frozen public API: one entry per public module
+holding the public top-level names it declares and its `__all__`. It is
+**generated, never hand-edited**:
+
+```
+uv run python tests/test_public_surface.py
+```
+
+`tests/test_public_surface.py` re-derives the surface from the sources with
+`ast` and compares by exact equality in *both* directions, so an unreviewed
+addition and an unreviewed removal both fail `make test-unit`. Regenerating is
+not a way to make the gate pass — the resulting diff is the API review, and it
+must appear in the same PR as the code that moved a name. Every public name a
+public module declares must also be in that module's `__all__`; anything else
+carries a leading underscore. Modules under a `_`-prefixed package, or with a
+`_`-prefixed name, are internal machinery by their path and are outside the
+surface entirely. Every frozen name also needs a line on
+[`docs/api.md`](docs/api.md), which a drift test enforces.
+
+`ruff`'s `D1` rules (pydocstyle *completeness* — not style) ride `make lint`, so
+a new public function, class, method, module, or package without a docstring
+fails the build. `D105` (magic methods) and `D107` (`__init__`) are ignored:
+dunder semantics come from the language protocol, and constructor contracts
+belong in the class docstring.
+
+**The deprecation window.** From 1.0 on, a frozen public name may not be removed
+or renamed without a deprecation window of **at least one minor release**. During
+the window the old name MUST keep working and MUST emit a `DeprecationWarning`
+naming the replacement (or stating there is none) and the first release that may
+remove it. Serve it from a module-level `__getattr__` — the PEP 562 pattern
+`beam_agents/__init__.py` already uses for lazy adapter classes — calling the
+single helper in `beam_agents/_deprecation.py`:
+
+```python
+def __getattr__(name: str) -> object:
+    if name == "old_name":
+        return deprecated_attribute(
+            name, replacement="beam_agents.pkg.new_name",
+            removed_in="1.1.0", value=new_name, module=__name__,
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+```
+
+Serving it that way keeps the deprecated name out of the module namespace, so
+**both edges of the window are snapshot diffs**: opening it removes a declared
+name (reviewers check that the `__getattr__` shim and the warning exist), and
+closing it one minor later removes the shim. Neither can happen silently — CI
+cannot know whether a window elapsed, but it guarantees no removal is invisible.
+
+**Pre-1.0 exemption.** The bulk privatization performed by `add-1-0-api-freeze`
+itself is exempt: it landed in the 0.x line, before the surface was declared
+frozen, and pruning accidental names cheaply is exactly what pre-1.0 semantics
+are for. Once 1.0 ships, no further exemptions.
+
 ## Makefile is the CI/local contract
 
 Every CI workflow step is a `make <target>` call. Whatever you run locally

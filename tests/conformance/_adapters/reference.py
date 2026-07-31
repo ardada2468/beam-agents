@@ -83,8 +83,8 @@ class ReferenceAgent:
 
 async def _start(spec: ScenarioSpec, ctx: ActivationContext) -> Outcome:
     if spec.uses_memory:
-        ctx.memory.append("log", ctx.event or b"-", max_items=64)
-    transcript = [f"event:{ctx.event.decode()}"]
+        ctx.memory.append("log", ctx.single_event or b"-", max_items=64)
+    transcript = [f"event:{ctx.single_event.decode()}"]
     tool_values: list[str] = []
     while True:
         response = await ctx.call_model(_request(spec, transcript))

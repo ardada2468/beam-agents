@@ -2,7 +2,9 @@ import ast
 from pathlib import Path
 
 import beam_agents
+from beam_agents.core.agent import StreamAgent as CanonicalStreamAgent
 from beam_agents.hitl import HITL_TIMEOUT_OUTPUT
+from beam_agents.tools.registry import tool as canonical_tool
 
 
 def test_import_succeeds() -> None:
@@ -11,12 +13,19 @@ def test_import_succeeds() -> None:
 
 def test_public_surface_is_run_agent_config_outputs_and_hitl_policy() -> None:
     # `beam_agents/__init__.py` re-exports exactly the transform surface named
-    # in project.md plus the HITL policy types a caller must name to configure
-    # a timeout route.
+    # in project.md, plus the HITL policy types a caller must name to configure
+    # a timeout route, the caller-side key-sharding utilities, and — since the
+    # 1.0 API freeze resolved the constitution-versus-code drift — the two names
+    # project.md always promised: the `tool` authoring decorator and the
+    # `StreamAgent` protocol adapter authors implement.
     assert beam_agents.RunAgent is not None
     assert beam_agents.AgentConfig is not None
     assert beam_agents.RunAgentOutputs is not None
+    assert beam_agents.ShardKeys is not None
+    assert beam_agents.shard_key is not None
+    assert beam_agents.unshard_key is not None
     assert set(beam_agents.__all__) == {
+        "AdkAgent",
         "AgentConfig",
         "Deny",
         "Drop",
@@ -24,9 +33,24 @@ def test_public_surface_is_run_agent_config_outputs_and_hitl_policy() -> None:
         "FallbackContext",
         "HitlPolicy",
         "LangGraphAgent",
+        "PydanticAIAgent",
         "RunAgent",
         "RunAgentOutputs",
+        "ShardKeys",
+        "StreamAgent",
+        "shard_key",
+        "tool",
+        "unshard_key",
     }
+
+
+def test_the_names_project_md_promises_resolve_eagerly() -> None:
+    # A user following the constitution runs `from beam_agents import tool,
+    # StreamAgent`; before the freeze that raised AttributeError. Neither name
+    # drags in an optional extra, so both resolve without the lazy
+    # `__getattr__` path the adapter classes need.
+    assert beam_agents.tool is canonical_tool
+    assert beam_agents.StreamAgent is CanonicalStreamAgent
 
 
 def test_hitl_timeout_output_keeps_its_value() -> None:

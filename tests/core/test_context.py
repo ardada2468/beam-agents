@@ -29,7 +29,18 @@ from beam_agents.core.context import (
     AgentResult,
 )
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
-from beam_agents.model import FakeLLM, LlmRequest, StagingSink, TokenUsage, match_any, respond_with
+from beam_agents.memory.facade import LongtermMemory, Memory
+from beam_agents.memory.stores import InMemoryMemoryStore, MemoryRecord
+from beam_agents.model import (
+    BudgetExceeded,
+    DecodedResponse,
+    FakeLLM,
+    LlmRequest,
+    StagingSink,
+    TokenUsage,
+    match_any,
+    respond_with,
+)
 from beam_agents.model.replay_cache import compute_cache_key as real_compute_cache_key
 from beam_agents.observability import ROLE_ACTIVATION, span_id_for, trace_id_for
 from beam_agents.tools import SideEffectToolError, ToolNotFoundError, ToolRegistry, tool
@@ -581,6 +592,33 @@ async def test_result_carries_every_staged_effect_category() -> None:
     assert result.cache_blob is not None
 
 
+def test_the_drained_result_carries_the_staged_long_term_upserts() -> None:
+    # The staged upserts are how the activation's owner learns there is a
+    # commit-tail flush to perform; a result that dropped them would leave a
+    # `longterm.save` silently unflushed, with the agent, the working tier, and
+    # every other drained field looking exactly as they do here. Nothing else
+    # on this surface exposes them, so nothing else can notice.
+    store = InMemoryMemoryStore()
+    handle = LongtermMemory(store, entity_key=b"key-1", seq=4, now_ms=1_000_000)
+    ctx = make_context(memory=Memory(now_ms=1_000_000, longterm=handle))
+
+    ctx.memory.longterm.save("profile", b"v1")
+
+    result = ctx.drain()
+
+    assert result.upserts == (
+        MemoryRecord(
+            entity_key=b"key-1", key="profile", value=b"v1", seq=4, updated_at_ms=1_000_000
+        ),
+    )
+
+
+def test_an_activation_without_a_long_term_tier_drains_no_upserts() -> None:
+    # The unconfigured shape: no store, so nothing staged and nothing for the
+    # owner to flush -- empty, never `None`, because the owner iterates it.
+    assert make_context().drain().upserts == ()
+
+
 def test_a_clean_activation_yields_an_empty_result() -> None:
     # Scenario: A clean activation yields an empty result.
     ctx = make_context()
@@ -652,6 +690,9 @@ def test_agent_context_wires_every_model_facade_dependency(
         "retry_policy": retry_policy,
         "decode": decode,
         "staging": ctx,
+        # `None` unless `max_tokens_per_activation` is set: the facade is this
+        # surface's only model path, so the budget reaches enforcement here.
+        "budget": None,
     }
 
 
@@ -662,8 +703,18 @@ def test_activation_context_preserves_inputs_and_wires_state_facades(
     memory = object()
     replay_cache = object()
 
-    def fake_memory(blob: object, *, now_ms: int, compactor: object | None = None) -> object:
+    def fake_memory(
+        blob: object,
+        *,
+        now_ms: int,
+        compactor: object | None = None,
+        longterm: object | None = None,
+    ) -> object:
+        # `longterm` is None here: this context is constructed without a
+        # `longterm_store`, so the facade is handed no handle and the tier is
+        # off (the unconfigured default).
         captured["memory"] = (blob, now_ms, compactor)
+        assert longterm is None
         return memory
 
     def fake_replay_cache(blob: object, *, now_ms: int) -> object:
@@ -723,6 +774,91 @@ def test_activation_context_defaults_event_snapshot_and_resume_state() -> None:
     assert ctx.resume_result is None
     assert ctx.resume_approval is None
     assert ctx.is_resume is False
+
+
+# --- Requirement: Batch activations are batch-visible with ctx.event as a list
+
+
+def _batch_context(events: list[bytes] | None, **kwargs: object) -> ActivationContext:
+    return ActivationContext(
+        entity_key=b"key",
+        seq=0,
+        now_ms=1_000,
+        provider=FakeLLM([]),
+        memory_blob=None,
+        cache_blob=None,
+        events=events,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def test_the_agent_receives_the_batch_as_a_list_in_arrival_order() -> None:
+    # Scenario: The agent receives the batch as a list in arrival order.
+    ctx = _batch_context([b"a", b"b", b"c"])
+
+    assert ctx.event == [b"a", b"b", b"c"]
+    assert ctx.is_batch is True
+    assert ctx.events == (b"a", b"b", b"c")
+
+
+def test_a_single_event_flush_is_still_a_list() -> None:
+    # Scenario: A single-event flush is still a list. The shape is fixed by the
+    # configured policy, not by runtime batch size, so an ADAPTIVE agent is
+    # written against exactly one shape.
+    ctx = _batch_context([b"only"])
+
+    assert ctx.event == [b"only"]
+    assert ctx.is_batch is True
+    assert ctx.events == (b"only",)
+
+
+def test_under_the_none_policy_the_event_stays_bytes_and_events_is_a_singleton() -> None:
+    ctx = _batch_context(None, event=b"solo")
+
+    assert ctx.event == b"solo"
+    assert ctx.is_batch is False
+    assert ctx.events == (b"solo",)
+
+
+def test_events_is_empty_on_a_resume() -> None:
+    # A resume answers a suspension; the events that opened it are the
+    # snapshot's business, not the runtime's (design D5).
+    ctx = _batch_context(None, resume_result=ToolResult(intent_id="i", status=ToolResult.OK))
+
+    assert ctx.is_resume is True
+    assert ctx.is_batch is False
+    assert ctx.events == ()
+
+
+def test_a_single_event_consumer_refuses_a_batch_rather_than_guessing() -> None:
+    # Scenario: A single-event consumer refuses a batch rather than guessing.
+    # `single_event` is what keeps every agent, adapter, and example written
+    # against one event statically typed against the widened `ctx.event`; under
+    # ADAPTIVE, which event "the" event is belongs to the consumer, not to this
+    # surface.
+    assert _batch_context(None, event=b"solo").single_event == b"solo"
+
+    batched = _batch_context([b"a", b"b"])
+    with pytest.raises(TypeError, match=r"ctx\.events"):
+        _ = batched.single_event
+
+
+def test_an_empty_batch_is_refused_rather_than_presented() -> None:
+    # A flush only ever runs over a non-empty buffer; an empty list would give
+    # the agent an activation with nothing to act on and a batch clock with no
+    # source, so it is a construction error, not a runtime shape.
+    with pytest.raises(ValueError) as exc_info:
+        _batch_context([])
+
+    # The whole message. `events=[]` is the one construction that is neither
+    # the batch shape nor the per-event one, and the reader has to be told
+    # *which* of the two they meant -- "a flush only runs over a non-empty
+    # buffer" and "an empty batch has no activation clock" are both reasons a
+    # caller needs, and a `match="events"` substring pins neither.
+    assert str(exc_info.value) == (
+        "ActivationContext(events=[]) is not a valid activation: a flush only ever runs "
+        "over a non-empty buffer, and an empty batch has no activation clock to derive"
+    )
 
 
 def test_activation_context_stages_complete_intents_and_continuations() -> None:
@@ -1424,3 +1560,221 @@ async def test_agent_result_carries_the_tally() -> None:
     assert result.tally.usage_observed is True
     # One staged intent, so one step consumed.
     assert result.tally.iterations == 1
+
+
+# --- Requirement: The budget charges every consumed model response ------------
+# (`token-budgets`, on the raw `ActivationContext.call_model` surface: it
+# bypasses the facade and awaits the provider directly, so it enforces itself.)
+
+
+def _budgeted_context(limit: int, **kwargs: object) -> ActivationContext:
+    defaults: dict[str, object] = {
+        "decode": decode_len_based,
+        "max_tokens_per_activation": limit,
+        "monotonic_ns": lambda: 0,
+    }
+    defaults.update(kwargs)
+    return _activation_context(**defaults)
+
+
+async def test_the_raw_path_charges_the_decoded_total_of_a_provider_reached_call() -> None:
+    # Scenario: Enforcement holds on both surfaces. `decode_len_based` reports
+    # `2 * len(response)`, so the 8-byte b"response" costs 16.
+    ctx = _budgeted_context(100)
+
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+    )
+
+    assert ctx._budget is not None
+    assert ctx._budget.consumed == 16
+
+
+async def test_the_raw_path_charges_a_cache_hit_the_same_as_its_miss() -> None:
+    # Scenario: A cache hit charges the same as the miss that stored it. The
+    # provider is reached once; the budget is charged twice. Billed accounting
+    # disagrees on purpose -- that disagreement IS the replay cache working.
+    fake = FakeLLM([(match_any(), respond_with(b"0123456789"))])
+    ctx = _budgeted_context(1_000, provider=fake)
+    request = LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+
+    await ctx.call_model(request)
+    await ctx.call_model(request)
+
+    assert fake.call_count == 1
+    assert ctx._budget is not None
+    assert ctx._budget.consumed == 40
+
+
+async def test_the_raw_path_decodes_each_response_exactly_once() -> None:
+    # The charge and the trace's usage attributes come from ONE decode: the two
+    # branches were refactored to decode once and pass the usage down, so a
+    # counting decoder sees exactly one call per response -- hit branch included.
+    calls: list[bytes] = []
+
+    def counting_decode(response: bytes) -> DecodedResponse:
+        calls.append(response)
+        return decode_len_based(response)
+
+    fake = FakeLLM([(match_any(), respond_with(b"resp"))])
+    ctx = _budgeted_context(1_000, provider=fake, decode=counting_decode)
+    request = LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+
+    await ctx.call_model(request)
+    await ctx.call_model(request)
+
+    assert calls == [b"resp", b"resp"]
+
+
+async def test_the_raw_paths_crossing_call_trips_and_stages_its_trace() -> None:
+    # Scenario: The crossing call fails fast, on the surface with no facade
+    # between it and the provider. The call's own LLM_CALL event is staged
+    # before the raise, so a swallowing agent's committed trace shows the trip.
+    ctx = _budgeted_context(20)
+
+    await ctx.call_model(
+        LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+    )
+    with pytest.raises(BudgetExceeded) as excinfo:
+        await ctx.call_model(
+            LlmRequest(model_id="m", messages=["b"], tools_schema=None, sampling_params=None)
+        )
+
+    assert excinfo.value.limit == 20
+    assert excinfo.value.consumed == 32
+    llm_events = [e for e in ctx.staged_traces if e.event_type == TraceEvent.LLM_CALL]
+    assert len(llm_events) == 2
+
+
+async def test_the_raw_path_refuses_a_post_trip_call_at_entry() -> None:
+    # Scenario: A swallowed trip cannot spend again. The entry check precedes
+    # the cache lookup and the provider, and does not advance the step cursor --
+    # a refused call is not a step, so the intent IDs an agent mints after
+    # swallowing the trip stay where the deterministic walk put them.
+    fake = FakeLLM([(match_any(), respond_with(b"0123456789"))])
+    ctx = _budgeted_context(10, provider=fake)
+    request = LlmRequest(model_id="m", messages=["a"], tools_schema=None, sampling_params=None)
+
+    with pytest.raises(BudgetExceeded):
+        await ctx.call_model(request)
+    step_after_trip = ctx.step_index
+    traces_after_trip = len(ctx.staged_traces)
+
+    with pytest.raises(BudgetExceeded):
+        await ctx.call_model(request)
+
+    assert fake.call_count == 1
+    assert ctx.step_index == step_after_trip
+    assert len(ctx.staged_traces) == traces_after_trip
+
+
+async def test_an_unbudgeted_raw_path_is_unlimited() -> None:
+    # Scenario: Unset means unlimited. The default is `None`, and under it no
+    # meter exists at all.
+    ctx = _activation_context(decode=decode_len_based, monotonic_ns=lambda: 0)
+
+    for index in range(5):
+        await ctx.call_model(
+            LlmRequest(model_id="m", messages=[str(index)], tools_schema=None, sampling_params=None)
+        )
+
+    assert ctx._budget is None
+
+
+def test_a_budget_without_a_decoder_is_refused_at_context_construction() -> None:
+    # Scenario: A budget without a decoder fails at construction. `AgentConfig`
+    # rejects the pair first, but `ActivationContext` is buildable without one
+    # (the loop driver's own tests do), so it re-checks defensively: unknown
+    # usage must not silently mean free.
+    with pytest.raises(ValueError) as exc_info:
+        _activation_context(max_tokens_per_activation=100)
+
+    # The whole message, because the whole message is the requirement: the
+    # spec's word is that it "explain[s] that budget enforcement requires the
+    # provider's response decoder", and the explanation -- unknown counts are
+    # not free, and an unenforceable budget must not meter nothing -- is the
+    # part a caller acts on. A substring match on "decode" survives every
+    # rewrite of that reasoning.
+    assert str(exc_info.value) == (
+        "max_tokens_per_activation requires a provider response decode: without one a "
+        "call's token counts are unknown, and an unenforceable budget must not silently "
+        "meter nothing"
+    )
+
+
+def test_charging_an_unknown_usage_against_a_budget_names_the_wiring_bug() -> None:
+    # `_charge`'s guard, driven directly. The constructor above refuses the
+    # budget-without-decoder pair, so `usage is None` is unreachable while a
+    # budget exists -- and that unreachability is exactly what the assertion
+    # asserts. Charging nothing would silently meter a call as free, which is
+    # the failure mode the whole requirement exists to prevent, so the guard
+    # has to fail loudly and say why.
+    ctx = _budgeted_context(100)
+
+    with pytest.raises(AssertionError) as exc_info:
+        ctx._charge(None)
+
+    assert str(exc_info.value) == "a budget without a decoder is refused at construction"
+    assert ctx._budget is not None
+    assert ctx._budget.consumed == 0
+
+
+def test_a_non_positive_budget_is_refused_at_context_construction() -> None:
+    with pytest.raises(ValueError, match="max_tokens_per_activation"):
+        _activation_context(max_tokens_per_activation=0, decode=decode_len_based)
+
+
+def test_the_budget_meter_is_fresh_per_activation_attempt() -> None:
+    # Scenario: A resume starts a fresh budget. The meter is built in the
+    # constructor and never persisted, so a resumed attempt -- a new context
+    # over the same seq, seeded at the suspension's step cursor -- starts at
+    # zero.
+    first = _budgeted_context(100)
+    assert first._budget is not None
+    first._budget.charge(90)
+
+    resumed = _budgeted_context(100, step_index=4)
+
+    assert resumed._budget is not None
+    assert resumed._budget.consumed == 0
+
+
+# --- Requirement: `tokens` is sampled only from decoded provider usage --------
+
+
+def test_activation_context_accumulates_the_prompt_completion_split() -> None:
+    # Scenario: Decoded usage is sampled. The input/output split is what a
+    # provider price sheet multiplies, and the tally kept only the total before
+    # this capability.
+    ctx = _activation_context()
+
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7))
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2))
+
+    tally = ctx.tally()
+    assert (tally.prompt_tokens, tally.completion_tokens, tally.total_tokens) == (4, 5, 9)
+
+
+def test_agent_context_accumulates_the_prompt_completion_split() -> None:
+    ctx = make_context()
+
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3))
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=4, completion_tokens=6, total_tokens=10))
+
+    tally = ctx.drain().tally
+    assert (tally.prompt_tokens, tally.completion_tokens, tally.total_tokens) == (5, 8, 13)
+
+
+async def test_agent_context_hands_its_budget_to_the_facade_it_builds() -> None:
+    # The facade is this surface's only model path, so handing it the budget is
+    # the whole of the enforcement here.
+    fake = FakeLLM([(match_any(), respond_with(b"0123456789"))])
+    ctx = make_context(provider=fake, max_tokens_per_activation=10)
+
+    with pytest.raises(BudgetExceeded):
+        await ctx.model.complete(
+            LlmRequest(model_id="m-1", messages=[], tools_schema=[], sampling_params={}),
+            entity_key=ctx.entity_key,
+            seq=ctx.seq,
+            step_index=0,
+        )

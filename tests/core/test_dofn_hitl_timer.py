@@ -468,10 +468,13 @@ def test_escalation_is_bounded(max_escalations: int, escalations: int) -> None:
 
 def test_the_fallback_never_touches_seq() -> None:
     # Scenario: A timer fire does not increment SEQ. The callback does not even
-    # declare the SEQ state param, so it cannot.
+    # declare the SEQ state param, so it cannot. `batch` is declared (the
+    # Deny/Drop routes end a suspension, which is what unblocks a deferred
+    # adaptive-batching buffer), and it is still not `seq`.
     params = _AgentDoFn.on_hitl.__defaults__ or ()
     state_tags = {p.state_spec.name for p in params if isinstance(p, beam.DoFn.StateParam)}
-    assert state_tags == {"continuation", "pending"}
+    assert state_tags == {"continuation", "pending", "batch"}
+    assert "seq" not in state_tags
 
 
 # --- Construction: the DoFn holds exactly what it was configured with ---------

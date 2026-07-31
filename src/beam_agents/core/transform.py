@@ -4,10 +4,11 @@ stateful, fault-tolerant Beam step.
 Usage::
 
     outputs = keyed_envelopes | RunAgent(agent, config=AgentConfig(provider_factory=make_client))
-    outputs.output   # terminal agent outputs (bytes)
-    outputs.intents  # ToolIntent side-effect requests -> outbox topic
-    outputs.traces   # TraceEvent observability records
-    outputs.errors   # ActivationError dead-letter records
+    outputs.output    # terminal agent outputs (bytes)
+    outputs.intents   # ToolIntent side-effect requests -> outbox topic
+    outputs.traces    # TraceEvent observability records
+    outputs.errors    # ActivationError dead-letter records
+    outputs.snapshots # StateSnapshot exports answering an export_request
 
 Input is a pre-keyed ``PCollection[KV[bytes, AgentEnvelope]]`` — the caller
 ``Flatten``s its event/tool-result/approval streams and keys them with
@@ -17,7 +18,7 @@ elements itself; it validates the input is KV-shaped at pipeline-construction
 (``expand``) time and raises ``ValueError`` otherwise.
 
 ``AgentConfig`` bundles the provider factory, runtime knobs, and optional sink
-URIs (``intents_to``/``traces_to``/``errors_to``); it validates itself at
+URIs (``intents_to``/``traces_to``/``errors_to``/``snapshots_to``); it validates itself at
 construction time so misconfiguration fails at the site of the typo rather than
 deep inside a runner. Configured sink URIs are resolved to Beam write
 transforms via a pluggable ``SinkResolver`` and attached as terminal branches
@@ -38,8 +39,9 @@ from beam_agents._protos import ToolIntent
 from beam_agents.actions.write_intents import (
     WriteIntents,
     WriteIntentsResult,
-    is_kv_shaped,
+    _is_kv_shaped,
 )
+from beam_agents.core.batching import BatchPolicy, BatchSettings, resolve_batch_settings
 from beam_agents.core.coders import register_coders
 from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.core.error_records import (
@@ -47,7 +49,10 @@ from beam_agents.core.error_records import (
     intent_dead_letter_to_error,
     serialize_error_envelope,
 )
+from beam_agents.core.snapshot import serialize_snapshot
 from beam_agents.hitl import HitlPolicy
+from beam_agents.memory.compaction import DropOldestCompactor
+from beam_agents.memory.stores import parse_memory_store_uri
 from beam_agents.observability import serialize_trace_event, trace_event_to_row
 from beam_agents.tools import ToolRegistry
 
@@ -55,23 +60,40 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from beam_agents.core.agent import Agent
+    from beam_agents.memory.compaction import ExpireHook, Summarizer
+    from beam_agents.memory.facade import Compactor
     from beam_agents.model.client import LLMClient
     from beam_agents.model.facade import Decode
+
+__all__ = [
+    "ERRORS_TAG",
+    "INTENTS_TAG",
+    "SNAPSHOTS_TAG",
+    "TRACES_TAG",
+    "AgentConfig",
+    "DefaultSinkResolver",
+    "RunAgent",
+    "RunAgentOutputs",
+    "SinkResolver",
+    "UnknownSinkSchemeError",
+]
 
 # Output tags. ``output`` is the main (untagged) output.
 INTENTS_TAG = "intents"
 TRACES_TAG = "traces"
 ERRORS_TAG = "errors"
+SNAPSHOTS_TAG = "snapshots"
 
 _DEFAULT_ACTIVATION_TIMEOUT_S = 30.0
 _DEFAULT_TTL_MS = 3_600_000
 _DEFAULT_CANCEL_GRACE_S = 5.0
 
-_SINK_FIELDS = ("intents_to", "traces_to", "errors_to")
+_SINK_FIELDS = ("intents_to", "traces_to", "errors_to", "snapshots_to")
 _SINK_LABELS = {
     "intents_to": "WriteIntents",
     "traces_to": "WriteTraces",
     "errors_to": "WriteErrors",
+    "snapshots_to": "WriteSnapshots",
 }
 
 
@@ -168,13 +190,21 @@ class SinkResolver(Protocol):
     import-free, raising :class:`UnknownSinkSchemeError` for an unrecognized
     scheme or a malformed URI. ``resolve`` runs only at ``RunAgent.expand`` and
     may construct real IO clients. Both take ``field_name`` (one of
-    ``intents_to``/``traces_to``/``errors_to``) so a resolver can special-case
-    a field independently of URI scheme.
+    ``intents_to``/``traces_to``/``errors_to``/``snapshots_to``) so a resolver
+    can special-case a field independently of URI scheme.
     """
 
-    def validate(self, field_name: str, uri: str) -> None: ...
+    def validate(self, field_name: str, uri: str) -> None:
+        """Raise ``UnknownSinkSchemeError`` if ``uri`` cannot serve ``field_name``.
 
-    def resolve(self, field_name: str, uri: str) -> beam.PTransform: ...
+        Called at pipeline-construction time, so a bad URI fails before a
+        worker starts. Must not import IO clients or touch the network.
+        """
+        ...
+
+    def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        """Build the writer transform ``uri`` names for ``field_name``."""
+        ...
 
 
 class _KeyedWriteIntents(beam.PTransform):
@@ -218,6 +248,28 @@ class _WriteTraces(beam.PTransform):
                 serialize_trace_event
             ).with_output_types(tuple[bytes, bytes])
         return encoded | "WriteEncodedTraces" >> self._sink
+
+
+class _WriteSnapshots(beam.PTransform):
+    """Serializes ``StateSnapshot``s for a message-bus sink, then writes them.
+
+    ``.snapshots`` is a ``PCollection[StateSnapshot]`` and no write transform
+    accepts a proto message, so without this step a configured ``snapshots_to``
+    fails at runtime — the same shape (and the same reason) as
+    :class:`_WriteTraces`. There is no row form: a snapshot is an opaque per-key
+    state image, and :meth:`DefaultSinkResolver.validate` refuses
+    ``bigquery://`` for this field rather than inventing a column layout for it.
+    """
+
+    def __init__(self, sink: beam.PTransform) -> None:
+        super().__init__()
+        self._sink = sink
+
+    def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        encoded = pcoll | "SerializeSnapshot" >> beam.Map(serialize_snapshot).with_output_types(
+            tuple[bytes, bytes]
+        )
+        return encoded | "WriteEncodedSnapshots" >> self._sink
 
 
 class _WriteErrors(beam.PTransform):
@@ -282,6 +334,12 @@ class DefaultSinkResolver:
     _BIGQUERY_URI_SEGMENTS = 2  # <dataset>/<table>
 
     def validate(self, field_name: str, uri: str) -> None:
+        """Validate a sink URI without importing its IO client.
+
+        ``otlp://`` is rejected for anything but ``traces_to``: it is a
+        best-effort exporter that drops on delivery failure, and intents and
+        errors need a lossless sink.
+        """
         scheme, _ = self._parse(field_name, uri)
         if scheme == "otlp" and field_name != "traces_to":
             raise UnknownSinkSchemeError(
@@ -289,14 +347,38 @@ class DefaultSinkResolver:
                 "delivery failure) and is valid only for traces_to; intents and errors "
                 "need a lossless sink (kafka://, pubsub://, or bigquery://)"
             )
+        if scheme == "bigquery" and field_name == "snapshots_to":
+            raise UnknownSinkSchemeError(
+                f"{field_name}: a StateSnapshot is an opaque per-key state image with no "
+                "row encoding, so bigquery:// cannot carry it; use kafka:// or pubsub://, "
+                "whose sinks take the serialized proto keyed by entity_key"
+            )
 
     def resolve(self, field_name: str, uri: str) -> beam.PTransform:
+        """Validate, then build the writer, importing its IO client only now.
+
+        ``intents_to`` gets the keyed writer so intents are partitioned by
+        ``entity_key``, preserving per-entity ordering into the outbox.
+        """
         self.validate(field_name, uri)
         scheme, parts = self._parse("<sink>", uri)
         if field_name == "intents_to" and scheme in ("kafka", "pubsub"):
             return _KeyedWriteIntents(uri)
         if scheme == "otlp":
             return self._otlp_transform(uri)
+        return self._encoded_transform(field_name, scheme, parts)
+
+    def _encoded_transform(
+        self, field_name: str, scheme: str, parts: tuple[str, ...]
+    ) -> beam.PTransform:
+        """Wrap the scheme's writer in the field's encoding, if it needs one.
+
+        `.traces`, `.errors`, and `.snapshots` all carry types no write
+        transform accepts (two protos and a dataclass), so each gets its
+        encoder here; `.intents` reaches its writer already encoded.
+        """
+        if field_name == "snapshots_to":
+            return _WriteSnapshots(self._write_transform(scheme, parts))
         if field_name == "traces_to":
             if scheme == "bigquery":
                 return _WriteTraces(self._traces_bigquery_writer(parts), to_row=True)
@@ -417,7 +499,65 @@ class AgentConfig:
     intents_to: str | None = field(default=None, kw_only=True)
     traces_to: str | None = field(default=None, kw_only=True)
     errors_to: str | None = field(default=None, kw_only=True)
+    # Where `.snapshots` goes. `None` (the default) leaves the tagged output
+    # exposed and unconsumed: exporting state off the pipeline is a deliberate
+    # operator act, so no sink is provisioned by default (design D1).
+    snapshots_to: str | None = field(default=None, kw_only=True)
     sink_resolver: SinkResolver = field(default_factory=DefaultSinkResolver, kw_only=True)
+    # The long-term `MemoryStore` URI. `None` (the default) leaves the tier off:
+    # no store is constructed and `ctx.memory.longterm` raises actionably, so an
+    # unconfigured pipeline behaves exactly as before. Validated below by the
+    # import-free grammar check, like the sink URIs.
+    longterm_memory: str | None = field(default=None, kw_only=True)
+    # Tier-1 compaction, invoked by the memory facade itself at the soft-cap
+    # crossing and before hard-cap rejection. Defaults to LRU eviction with the
+    # LangGraph checkpoint namespace protected: an unconfigured pipeline now
+    # survives hard-cap pressure instead of dead-lettering the activation
+    # forever. `compactor=None` restores the strict-overflow semantics
+    # (`MemoryOverflow` -> `.errors`) pipelines had before this default existed.
+    compactor: Compactor | None = field(default_factory=DropOldestCompactor, kw_only=True)
+    # Tier-2 compaction, invoked by the loop driver inside the activation so its
+    # model calls go through the replay cache. `None` (the default) is purely
+    # opt-out-by-absence: no summarization pass, no provider call, no change.
+    summarizer: Summarizer | None = field(default=None, kw_only=True)
+    # Demotion hook run at `TTL_TIMER` fire, before the wipe. `None` (the
+    # default) leaves expiry exactly as it was: wipe-only, no store interaction.
+    # Setting it requires `longterm_memory`, since the hook writes through that
+    # tier -- checked below so the misconfiguration surfaces at the config's
+    # construction site rather than at the first expiry in production.
+    on_expire: ExpireHook | None = field(default=None, kw_only=True)
+    # Adaptive batching, opt-in and off by default: under `BatchPolicy.NONE`
+    # the runtime is byte-for-byte what it was before the capability existed
+    # (one activation per event, `ctx.event` as bytes, `BATCH`/`FLUSH_TIMER`
+    # untouched). The three bounds are meaningful only under `ADAPTIVE` and
+    # default to `None` so "unset" is distinguishable from "set to the default"
+    # -- setting one under `NONE` is a misconfiguration, not a no-op, and
+    # `__post_init__` says so.
+    batch_policy: BatchPolicy = field(default=BatchPolicy.NONE, kw_only=True)
+    max_batch_size: int | None = field(default=None, kw_only=True)
+    max_wait_ms: int | None = field(default=None, kw_only=True)
+    max_buffered_events: int | None = field(default=None, kw_only=True)
+    # The per-activation-attempt token bound. `None` (the default) is unlimited
+    # and byte-for-byte today's behavior. Requires `decode`: without a decoder a
+    # call's token counts are genuinely unknown, and an unenforceable budget
+    # must fail at the site of the misconfiguration rather than silently meter
+    # nothing (checked below). The meter is worker-local and never persisted, so
+    # there is no wire, state, or `--update` implication.
+    max_tokens_per_activation: int | None = field(default=None, kw_only=True)
+
+    def batch_settings(self) -> BatchSettings | None:
+        """The resolved batching bounds, or ``None`` under `BatchPolicy.NONE`.
+
+        Recomputed rather than cached: the dataclass is frozen with slots, and
+        the resolution is three comparisons over integers on a path that runs
+        at pipeline construction, not per element.
+        """
+        return resolve_batch_settings(
+            self.batch_policy,
+            max_batch_size=self.max_batch_size,
+            max_wait_ms=self.max_wait_ms,
+            max_buffered_events=self.max_buffered_events,
+        )
 
     def __post_init__(self) -> None:
         _require_positive("activation_timeout_s", self.activation_timeout_s)
@@ -432,6 +572,30 @@ class AgentConfig:
             uri = getattr(self, field_name)
             if uri is not None:
                 self.sink_resolver.validate(field_name, uri)
+        if self.longterm_memory is not None:
+            # Grammar only, and deliberately import-free: no backend client is
+            # imported until the DoFn's `setup()` builds the store.
+            parse_memory_store_uri(self.longterm_memory, field="longterm_memory")
+        elif self.on_expire is not None:
+            raise ValueError(
+                "AgentConfig.on_expire flushes expiring working memory to the long-term "
+                "tier, so it requires AgentConfig.longterm_memory to name a store URI"
+            )
+
+        if self.max_tokens_per_activation is not None:
+            _require_positive("max_tokens_per_activation", self.max_tokens_per_activation)
+            if self.decode is None:
+                raise ValueError(
+                    "AgentConfig.max_tokens_per_activation requires AgentConfig.decode: "
+                    "budget enforcement reads the provider's response decoder, and "
+                    "without one a call's token counts are unknown -- which must not "
+                    "silently mean free"
+                )
+
+        # Raises for a non-positive bound, a cap below the flush threshold, or a
+        # batch knob set without opting in -- at the construction site, like
+        # every other knob here.
+        self.batch_settings()
 
 
 @dataclass(frozen=True, slots=True)
@@ -450,6 +614,9 @@ class RunAgentOutputs:
     intents: beam.pvalue.PCollection
     traces: beam.pvalue.PCollection
     errors: beam.pvalue.PCollection
+    #: `StateSnapshot`s answering `export_request` envelopes. Exposed whether or
+    #: not `snapshots_to` is configured; with no consumer Beam drops it.
+    snapshots: beam.pvalue.PCollection
     dead_letter: beam.pvalue.PCollection | None = None
 
 
@@ -459,7 +626,7 @@ def _validate_kv_input(pcoll: beam.pvalue.PCollection) -> None:
     An absent/erased element type is allowed to pass (the DoFn's downstream KV
     requirement is the backstop); only a definite non-pair type is rejected.
     """
-    if not is_kv_shaped(pcoll.element_type):
+    if not _is_kv_shaped(pcoll.element_type):
         raise ValueError(
             "RunAgent requires a PCollection[KV[bytes, AgentEnvelope]] input "
             f"(pre-keyed by entity_key); got element type {pcoll.element_type!r}. Key "
@@ -477,6 +644,11 @@ class RunAgent(beam.PTransform):
         self._config = config
 
     def expand(self, pcoll: beam.pvalue.PCollection) -> RunAgentOutputs:
+        """Wire the stateful agent DoFn and its four tagged outputs.
+
+        Raises ``ValueError`` on non-KV input: Beam's stateful DoFn requires
+        a keyed ``PCollection``, and failing here beats failing on a worker.
+        """
         _validate_kv_input(pcoll)
         register_coders()
         dofn = _AgentDoFn(
@@ -488,9 +660,15 @@ class RunAgent(beam.PTransform):
             hitl_policy=self._config.hitl_policy,
             decode=self._config.decode,
             tool_registry=self._config.tool_registry,
+            longterm_memory=self._config.longterm_memory,
+            compactor=self._config.compactor,
+            summarizer=self._config.summarizer,
+            on_expire=self._config.on_expire,
+            batch=self._config.batch_settings(),
+            max_tokens_per_activation=self._config.max_tokens_per_activation,
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
-            INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
+            INTENTS_TAG, TRACES_TAG, ERRORS_TAG, SNAPSHOTS_TAG, main="output"
         )
         # The three branches are not symmetric: `errors_to` also drains the
         # intents dead letter, so it is attached last, once that branch exists.
@@ -503,6 +681,9 @@ class RunAgent(beam.PTransform):
         if self._config.traces_to is not None:
             sink = self._config.sink_resolver.resolve("traces_to", self._config.traces_to)
             tagged.traces | _SINK_LABELS["traces_to"] >> sink
+        if self._config.snapshots_to is not None:
+            sink = self._config.sink_resolver.resolve("snapshots_to", self._config.snapshots_to)
+            tagged.snapshots | _SINK_LABELS["snapshots_to"] >> sink
         if self._config.errors_to is not None:
             errors = tagged.errors
             if dead_letter is not None:
@@ -520,5 +701,6 @@ class RunAgent(beam.PTransform):
             intents=tagged.intents,
             traces=tagged.traces,
             errors=tagged.errors,
+            snapshots=tagged.snapshots,
             dead_letter=dead_letter,
         )

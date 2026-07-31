@@ -60,6 +60,20 @@ if TYPE_CHECKING:
 
     from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
+__all__ = [
+    "COUNTERS",
+    "COUNTER_BATCHES_SENT",
+    "COUNTER_EXPORT_FAILURES",
+    "COUNTER_SPANS_DROPPED",
+    "COUNTER_SPANS_EXPORTED",
+    "DEFAULT_BATCH_SIZE",
+    "DEFAULT_FLUSH_DEADLINE_S",
+    "DEFAULT_QUEUE_BATCHES",
+    "DEFAULT_SERVICE_NAME",
+    "NAMESPACE",
+    "WriteTracesToOtlp",
+]
+
 DEFAULT_SERVICE_NAME = "beam-agents"
 DEFAULT_BATCH_SIZE = 512
 DEFAULT_FLUSH_DEADLINE_S = 5.0
@@ -104,7 +118,7 @@ def _require_otlp() -> Any:
     return trace_service_pb2, common_pb2, resource_pb2, trace_pb2
 
 
-def event_to_span(event: TraceEvent) -> Span | None:
+def _event_to_span(event: TraceEvent) -> Span | None:
     """Map one ``TraceEvent`` to one OTLP span; ``None`` for ``ACTIVATION_START``.
 
     A pure function of the event: mapping the same event twice yields
@@ -135,7 +149,7 @@ def event_to_span(event: TraceEvent) -> Span | None:
     return span
 
 
-def encode_batch(spans: Sequence[Span], *, service_name: str) -> bytes:
+def _encode_batch(spans: Sequence[Span], *, service_name: str) -> bytes:
     """Encode one batch as a deterministic ``ExportTraceServiceRequest``."""
     trace_service_pb2, common_pb2, resource_pb2, trace_pb2 = _require_otlp()
     request = trace_service_pb2.ExportTraceServiceRequest(
@@ -276,7 +290,7 @@ class _OtlpExportDoFn(beam.DoFn):
         self._sender.start()
 
     def process(self, element: TraceEvent) -> None:
-        span = event_to_span(element)
+        span = _event_to_span(element)
         if span is None:
             return
         self._batch.append(span)
@@ -356,7 +370,7 @@ class _OtlpExportDoFn(beam.DoFn):
 
     def _send(self, batch: list[Span]) -> None:
         """POST one batch, retrying with backoff inside the flush deadline."""
-        payload = encode_batch(batch, service_name=self._service_name)
+        payload = _encode_batch(batch, service_name=self._service_name)
         state = self._state
         deadline = self._monotonic() + self._flush_deadline_s
         backoff = _INITIAL_BACKOFF_S
@@ -421,6 +435,12 @@ class WriteTracesToOtlp(beam.PTransform):
         self._transport_factory = transport_factory
 
     def expand(self, pcoll: beam.pvalue.PCollection) -> beam.pvalue.PCollection:
+        """Attach the batched, non-blocking OTLP export DoFn to ``pcoll``.
+
+        Best-effort by construction: the exporter drops spans rather than
+        blocking the pipeline on a slow collector, which is why ``otlp://``
+        is rejected for the lossless sinks.
+        """
         return pcoll | "ExportOtlp" >> beam.ParDo(
             _OtlpExportDoFn(
                 self._endpoint,

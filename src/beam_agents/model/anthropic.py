@@ -20,12 +20,16 @@ from beam_agents.model._http import raise_for_status_taxonomy, wrap_timeout
 from beam_agents.model.client import LlmRequest, LlmResponse, ProviderRequestError
 from beam_agents.model.facade import DecodedResponse, TokenUsage
 
+__all__ = [
+    "AnthropicProvider",
+]
+
 _DEFAULT_BASE_URL = "https://api.anthropic.com"
 _DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_TIMEOUT_S = 60.0
 
 
-def decode(response_bytes: bytes) -> DecodedResponse:
+def _decode(response_bytes: bytes) -> DecodedResponse:
     """Extract `TokenUsage` and response text from an Anthropic Messages body."""
     body = _parse(response_bytes)
     usage = body.get("usage")
@@ -98,6 +102,12 @@ class AnthropicProvider:
         return self._client
 
     async def complete(self, request: LlmRequest) -> LlmResponse:
+        """POST one Messages-API request and return the raw response bytes.
+
+        HTTP status is mapped to the :class:`ProviderError` taxonomy and
+        ``httpx`` timeouts to :class:`ProviderTimeout`; no retry happens
+        here.
+        """
         client = self._ensure_client()
         body: dict[str, object] = {
             "model": request.model_id,
@@ -123,7 +133,7 @@ class AnthropicProvider:
         raise_for_status_taxonomy(response)
 
         try:
-            decode(response.content)
+            _decode(response.content)
         except ValueError as exc:
             raise ProviderRequestError(status=response.status_code) from exc
 

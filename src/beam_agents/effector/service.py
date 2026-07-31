@@ -1,9 +1,16 @@
-"""The effector loop: consume, refuse, claim, execute, complete, publish, commit.
+"""The effector loop: verify, refuse, claim, execute, complete, publish, commit.
 
 The phase order is load-bearing (see the change design, D3); each edge is a
 crash argument:
 
-1. **Refuse-expired first.** Expiry is decided before the dedup store is
+0. **Verify first, when verification is enabled.** An unauthenticated message
+   must not drive *any* behavior — not a tool, not a dedup claim, not even a
+   published ``EXPIRED`` result, since a result inherits the delivery's
+   ``entity_key``/``intent_id`` and those are attacker-chosen bytes on a
+   message that failed verification. Verification is a pure function of the
+   delivered bytes, so it acquires nothing a crash could leak and every crash
+   argument below is preserved unchanged (add-effector-security, D3/D4).
+1. **Refuse-expired next.** Expiry is decided before the dedup store is
    touched, so an expired intent can never consume a claim, reach a tool, or
    depend on store availability to be refused (correctness invariant 6, layer 2).
 2. **Claim before execute.** Nothing runs without exclusive ownership.
@@ -38,8 +45,9 @@ from typing import TYPE_CHECKING, Protocol
 
 from beam_agents._protos import ToolIntent, ToolResult
 from beam_agents.effector.dedup import Claimed, DedupStore, Done, InFlight
-from beam_agents.effector.runner import EffectorToolRunner, execute_intent
+from beam_agents.effector.runner import EffectorToolRunner, _execute_intent
 from beam_agents.hitl import refuse_expired
+from beam_agents.intent_signing import Keyring, VerificationResult, verify_intent
 
 if TYPE_CHECKING:
     from beam_agents.effector.config import EffectorConfig
@@ -47,15 +55,26 @@ if TYPE_CHECKING:
     from beam_agents.effector.sources import DeliveredIntent, IntentSource
     from beam_agents.tools.registry import ToolRegistry
 
+__all__ = [
+    "CountingMetrics",
+    "EffectorService",
+    "MetricsSink",
+    "PublishFailedError",
+]
+
 _LOG = logging.getLogger(__name__)
 
 
 class MetricsSink(Protocol):
     """Counters and timings. Wiring these to OTel belongs to `observability/`."""
 
-    def incr(self, name: str, value: int = 1) -> None: ...
+    def incr(self, name: str, value: int = 1) -> None:
+        """Add ``value`` to the counter ``name``."""
+        ...
 
-    def observe(self, name: str, value: float) -> None: ...
+    def observe(self, name: str, value: float) -> None:
+        """Record one observation of ``value`` for the distribution ``name``."""
+        ...
 
 
 @dataclass
@@ -66,9 +85,11 @@ class CountingMetrics:
     observations: dict[str, list[float]] = field(default_factory=dict)
 
     def incr(self, name: str, value: int = 1) -> None:
+        """Add ``value`` to the in-process counter ``name``."""
         self.counters[name] = self.counters.get(name, 0) + value
 
     def observe(self, name: str, value: float) -> None:
+        """Append ``value`` to the in-process observations for ``name``."""
         self.observations.setdefault(name, []).append(value)
 
 
@@ -113,6 +134,8 @@ class EffectorService:
         clock: Callable[[], int] = _wall_clock_ms,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         metrics: MetricsSink | None = None,
+        keyring: Keyring | None = None,
+        dead_letter_sink: MessageSink | None = None,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -120,6 +143,10 @@ class EffectorService:
         self._result_sink = result_sink
         self._approval_sink = approval_sink
         self._dedup = dedup
+        # Loaded once at startup from the config's reference and passed by
+        # value: nothing holds key material whose repr could leak it.
+        self._keyring: Keyring = keyring if keyring is not None else {}
+        self._dead_letter_sink = dead_letter_sink
         self._runner = runner or EffectorToolRunner(tool_timeout_ms=config.tool_timeout_ms)
         self._clock = clock
         self._sleep = sleep
@@ -256,6 +283,10 @@ class EffectorService:
         """Take one delivery through every phase, in order."""
         intent = delivered.intent
 
+        # Phase 0: authenticity, before anything else observes this delivery.
+        if not await self._verified(delivered):
+            return
+
         # Phase 1: expiry, before the dedup store is touched.
         refusal = refuse_expired(intent, self._clock())
         if refusal is not None:
@@ -289,6 +320,73 @@ class EffectorService:
         else:
             if self._claims.get(delivered.partition) is claim:
                 del self._claims[delivered.partition]
+
+    # -- phase 0: verification -------------------------------------------------
+
+    async def _verified(self, delivered: DeliveredIntent) -> bool:
+        """Decide whether this delivery may proceed; dead-letter it if not.
+
+        Returns ``True`` when the delivery is authentic (or when verification
+        is ``off``, or when an unsigned intent is accepted under ``permissive``).
+        Returns ``False`` after dead-lettering and committing, so the caller
+        simply stops — the point of putting this ahead of every other phase is
+        that a refusal reaches none of them.
+        """
+        mode = self._config.verify_intents
+        if mode == "off":
+            return True
+
+        outcome = verify_intent(delivered.intent, self._keyring)
+        if outcome is VerificationResult.OK:
+            return True
+        if outcome is VerificationResult.UNSIGNED and mode == "permissive":
+            # The rollout's coexistence window: retained unsigned intents keep
+            # draining while the pipeline switches over. Counted, because a
+            # deployment that never reaches zero here has signing theater.
+            self.metrics.incr("unsigned_intents_accepted")
+            return True
+
+        await self._dead_letter(delivered, outcome)
+        return False
+
+    async def _dead_letter(self, delivered: DeliveredIntent, reason: VerificationResult) -> None:
+        """Preserve an unverifiable delivery, count it, and commit past it.
+
+        Deliberately publishes **no** ``ToolResult`` of any status. Every other
+        never-invoked failure reports as ``REJECTED``, but a result inherits the
+        delivery's ``entity_key``, ``intent_id`` and ``seq`` — unauthenticated
+        bytes here — and would enter the keyed re-injection path, letting an
+        attacker who learns a genuine pending ``intent_id`` race a forged
+        refusal against the real result (design D4).
+
+        Committing rather than stalling is also deliberate: a partition head
+        wedged on a forged message is a denial of service an attacker can
+        produce at will. The cost is that a *genuine* intent corrupted in
+        flight (or signed with a retired key) is dead-lettered and its
+        activation waits for the HITL timer — fail-closed at both layers,
+        exactly the shape correctness invariant 6 prescribes.
+        """
+        self.metrics.incr(reason.value)
+        self.metrics.incr("intents_dead_lettered")
+        if self._dead_letter_sink is not None:
+            payload = delivered.raw_payload()
+            await self._with_retry(
+                lambda: self._dead_letter_sink.publish(delivered.raw_key(), payload),  # type: ignore[union-attr]
+                what=f"dead letter for a {reason.value} delivery on {delivered.partition}",
+            )
+        else:
+            # Identity fields only. `args_json` is attacker-chosen on exactly
+            # the deliveries that reach here, so logging it would be a
+            # log-injection surface and a data-spray in one.
+            _LOG.warning(
+                "refusing intent %r on partition %s: %s (signing_key_id=%r); no dead-letter "
+                "channel is configured, so the payload is not retained",
+                delivered.intent.intent_id,
+                delivered.partition,
+                reason.value,
+                delivered.intent.signing_key_id,
+            )
+        await self._source.commit(delivered)
 
     async def _claim(self, intent_id: str) -> Claimed | Done:
         """Claim ``intent_id``, waiting out any live lease held elsewhere.
@@ -328,7 +426,7 @@ class EffectorService:
     async def _execute(self, delivered: DeliveredIntent, claim: _ActiveClaim) -> None:
         intent = delivered.intent
         started_ms = self._clock()
-        result = await execute_intent(
+        result = await _execute_intent(
             intent,
             self._registry,
             self._runner,

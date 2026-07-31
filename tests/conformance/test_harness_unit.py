@@ -21,9 +21,17 @@ from tests.conformance._registry import (
     validate_bundle,
 )
 from tests.conformance._spec import (
+    APPROVAL_TIMEOUT_FALLBACK,
+    DIRECT,
+    FLINK,
+    LEGS,
     MULTI_TOOL_INLINE,
     SCENARIOS,
+    SINGLE_SHOT,
+    SPARK,
+    SPARK_SCENARIOS,
     SUSPENSION_RESUME,
+    skip_inventory,
     tool_for,
 )
 
@@ -105,29 +113,38 @@ def test_equivalence_check_names_a_deadline_divergence() -> None:
         validate_bundle(doctored, SUSPENSION_RESUME)
 
 
-def test_langgraph_cells_skip_cleanly_when_the_framework_is_absent() -> None:
-    # Scenario: A missing optional framework skips its cells cleanly. The test
-    # environment installs LangGraph (the adapter cells need it), so absence
-    # is simulated in a subprocess with the same meta-path blocker the
-    # import-isolation tests use: the reference cell must still run and pass,
-    # the LangGraph cell must report as a skip, and collection must not error.
+def _run_single_shot_without(blocked: tuple[str, ...]) -> str:
+    """Collect and run the single_shot cells in a subprocess where `blocked`
+    distributions are unimportable, returning pytest's output.
+
+    The test environment installs every adapter framework (the cells need
+    them), so absence is simulated with the same meta-path blocker the
+    import-isolation tests use.
+    """
     import subprocess
 
     script = textwrap.dedent(
-        """
+        f"""
         import sys
 
-        class _BlockLangGraph:
-            _blocked = ("langgraph", "langchain", "langchain_core")
+        class _Blocker:
+            _blocked = {blocked!r}
 
             def find_spec(self, fullname, path=None, target=None):
-                if fullname.partition(".")[0] in self._blocked:
+                # Exact-or-dotted-prefix match, not a top-level-name match:
+                # ADK lives under the `google` namespace package that core
+                # installs already populate, so blocking "google" wholesale
+                # would take out google-cloud too.
+                if any(
+                    fullname == blocked or fullname.startswith(f"{blocked}.")
+                    for blocked in self._blocked
+                ):
                     raise ModuleNotFoundError(
-                        f"import of {fullname!r} blocked for test", name=fullname
+                        f"import of {{fullname!r}} blocked for test", name=fullname
                     )
                 return None
 
-        sys.meta_path.insert(0, _BlockLangGraph())
+        sys.meta_path.insert(0, _Blocker())
 
         import pytest
 
@@ -143,15 +160,78 @@ def test_langgraph_cells_skip_cleanly_when_the_framework_is_absent() -> None:
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=180, check=False
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 passed" in result.stdout, result.stdout
-    assert "1 skipped" in result.stdout, result.stdout
-    assert "optional framework 'langgraph' is not installed" in result.stdout, result.stdout
+    return result.stdout
+
+
+def _passing_cells() -> int:
+    """Cells that still run when exactly one adapter's framework is absent."""
+    return len(ADAPTERS) - 1
+
+
+def test_langgraph_cells_skip_cleanly_when_the_framework_is_absent() -> None:
+    # Scenario: A missing optional framework skips its cells cleanly — the
+    # other adapters' cells still run and pass, the LangGraph cell reports as a
+    # skip naming the missing package, and collection does not error.
+    stdout = _run_single_shot_without(("langgraph", "langchain", "langchain_core"))
+    assert f"{_passing_cells()} passed" in stdout, stdout
+    assert "1 skipped" in stdout, stdout
+    assert "optional framework 'langgraph' is not installed" in stdout, stdout
+
+
+def test_pydantic_ai_cells_skip_cleanly_when_the_framework_is_absent() -> None:
+    # Scenario: Missing extra skips cells without shrinking the matrix silently
+    # (pydantic-ai-adapter) — the same clean-skip contract for the Pydantic AI
+    # axis entry.
+    stdout = _run_single_shot_without(("pydantic_ai", "pydantic_graph"))
+    assert f"{_passing_cells()} passed" in stdout, stdout
+    assert "1 skipped" in stdout, stdout
+    assert "optional framework 'pydantic_ai' is not installed" in stdout, stdout
 
 
 def test_every_scenario_declares_every_leg() -> None:
+    # Scenario: A scenario without a spark declaration cannot build a cell.
     # The meta-test's expected-cell arithmetic assumes a complete legs mapping;
-    # an absent declaration must be impossible, not defaulted.
+    # an absent declaration must be impossible, not defaulted. Derived from
+    # LEGS, so adding a leg to the vocabulary without declaring it on every
+    # scenario fails here by name instead of as a KeyError at cell build.
     for spec in SCENARIOS:
-        assert set(spec.legs) == {"direct", "flink"}, (
-            f"scenario {spec.name!r} must declare both legs, got {sorted(spec.legs)}"
+        assert set(spec.legs) == set(LEGS), (
+            f"scenario {spec.name!r} must declare every leg {sorted(LEGS)}, "
+            f"got {sorted(spec.legs)} (undeclared: {sorted(set(LEGS) - set(spec.legs))})"
         )
+
+
+def test_leg_vocabulary_is_the_declared_legs() -> None:
+    # Pins the vocabulary itself (names, not counts): the offline DirectRunner
+    # leg, the docker-backed Flink leg, and the weekly Spark leg.
+    assert LEGS == (DIRECT, FLINK, SPARK)
+
+
+def test_every_spark_skip_names_a_specific_constraint() -> None:
+    # Scenario: A spark-inexpressible scenario is an explicit skip with a
+    # reason — and the reason must name the concrete missing runner feature or
+    # harness constraint, never "doesn't work" (design D6).
+    for name, reason in skip_inventory(SPARK).items():
+        assert len(reason) > 60, f"spark skip for {name!r} is not a specific reason: {reason!r}"
+        assert not reason.lower().startswith(("doesn't", "does not work", "unsupported")), (
+            f"spark skip for {name!r} states no constraint: {reason!r}"
+        )
+
+
+def test_spark_runnable_scenarios_exclude_the_declared_skips() -> None:
+    # SPARK_SCENARIOS is what the harness publishes events for; a declared skip
+    # must never reach the job.
+    assert {spec.name for spec in SPARK_SCENARIOS} == {spec.name for spec in SCENARIOS} - set(
+        skip_inventory(SPARK)
+    )
+
+
+def test_real_time_variant_applies_to_both_portable_legs() -> None:
+    # design D1: the flink and spark legs share the one real-time HITL
+    # override; the DirectRunner leg keeps the scripted deadline.
+    spec = APPROVAL_TIMEOUT_FALLBACK
+    assert spec.variant_for(DIRECT).hitl_timeout_ms == spec.hitl_timeout_ms
+    assert spec.variant_for(FLINK).hitl_timeout_ms == spec.flink_hitl_timeout_ms
+    assert spec.variant_for(SPARK).hitl_timeout_ms == spec.flink_hitl_timeout_ms
+    # A scenario with no real-time override is unchanged on every leg.
+    assert all(SINGLE_SHOT.variant_for(leg) is SINGLE_SHOT for leg in LEGS)

@@ -1,7 +1,7 @@
 """Intent-identity injection for the effector-execution capability.
 
 Covers the "Intent identity is injected into tools that declare it"
-requirement (change ``add-intent-info-for-tools``): `execute_intent` builds an
+requirement (change ``add-intent-info-for-tools``): `_execute_intent` builds an
 `IntentInfo` from the executing `ToolIntent`'s wire fields and passes it as the
 keyword argument ``intent`` iff the tool's ``accepts_intent`` is true.
 """
@@ -12,7 +12,7 @@ import asyncio
 import json
 
 from beam_agents._protos import ToolIntent, ToolResult
-from beam_agents.effector.runner import EffectorToolRunner, execute_intent
+from beam_agents.effector.runner import EffectorToolRunner, _execute_intent
 from beam_agents.tools import IntentInfo, ToolRegistry, tool
 
 NOW_MS = 1_700_000_000_000
@@ -59,7 +59,7 @@ async def test_a_declaring_tool_receives_the_executing_intents_identity() -> Non
         return f"receipt-{key}"
 
     intent = an_intent()
-    result = await execute_intent(intent, a_registry(charge), a_runner, now_ms=NOW_MS)
+    result = await _execute_intent(intent, a_registry(charge), a_runner, now_ms=NOW_MS)
 
     assert result.status == ToolResult.OK
     assert json.loads(result.payload) == "receipt-k-1"
@@ -84,7 +84,7 @@ async def test_a_non_declaring_tool_is_invoked_unchanged() -> None:
         calls.append(key)
         return f"receipt-{key}"
 
-    result = await execute_intent(an_intent(), a_registry(charge), a_runner, now_ms=NOW_MS)
+    result = await _execute_intent(an_intent(), a_registry(charge), a_runner, now_ms=NOW_MS)
 
     assert result.status == ToolResult.OK
     assert calls == ["k-1"]
@@ -101,10 +101,10 @@ async def test_injection_does_not_alter_argument_validation() -> None:
         calls.append(key)
         return "receipt"
 
-    ok = await execute_intent(an_intent(), a_registry(charge), a_runner, now_ms=NOW_MS)
+    ok = await _execute_intent(an_intent(), a_registry(charge), a_runner, now_ms=NOW_MS)
     assert ok.status == ToolResult.OK
 
-    bad = await execute_intent(
+    bad = await _execute_intent(
         an_intent(args_json='{"wrong":"field"}'), a_registry(charge), a_runner, now_ms=NOW_MS
     )
     assert bad.status == ToolResult.REJECTED
@@ -120,7 +120,7 @@ async def test_an_intent_key_inside_args_json_is_rejected_not_shadowed() -> None
         calls.append(intent)
         return "receipt"
 
-    result = await execute_intent(
+    result = await _execute_intent(
         an_intent(args_json='{"key":"k-1","intent":{"intent_id":"spoof"}}'),
         a_registry(charge),
         a_runner,
@@ -144,8 +144,8 @@ async def test_a_re_executed_intent_carries_identical_identity() -> None:
         return "receipt"
 
     registry = a_registry(charge)
-    await execute_intent(an_intent(), registry, a_runner, now_ms=NOW_MS)
-    await execute_intent(an_intent(), registry, a_runner, now_ms=NOW_MS + 5_000)
+    await _execute_intent(an_intent(), registry, a_runner, now_ms=NOW_MS)
+    await _execute_intent(an_intent(), registry, a_runner, now_ms=NOW_MS + 5_000)
 
     assert len(received) == 2
     assert received[0] == received[1]
@@ -162,7 +162,7 @@ async def test_an_async_declaring_tool_is_injected_identically() -> None:
         received.append(intent)
         return f"receipt-{key}"
 
-    result = await execute_intent(an_intent(), a_registry(charge), a_runner, now_ms=NOW_MS)
+    result = await _execute_intent(an_intent(), a_registry(charge), a_runner, now_ms=NOW_MS)
 
     assert result.status == ToolResult.OK
     assert json.loads(result.payload) == "receipt-k-1"

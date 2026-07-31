@@ -40,9 +40,16 @@ from beam_agents._protos import (
     ToolResult,
     TraceEvent,
 )
+
+# The module, not the constant: the version stamp is read at call time so a
+# `CURRENT_STATE_SCHEMA_VERSION` bump (one edit in core/migration.py) moves
+# this writer with it, and tests can pin the coupling by patching the one
+# authoritative module attribute.
+from beam_agents.core import migration
 from beam_agents.core.agent import intent_id_for
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
-from beam_agents.memory.facade import Compactor, Memory
+from beam_agents.memory.facade import Compactor, LongtermMemory, Memory
+from beam_agents.memory.stores import MemoryRecord, MemoryStore
 from beam_agents.model.client import LLMClient, LlmRequest, LlmResponse
 from beam_agents.model.facade import (
     CircuitBreaker,
@@ -50,6 +57,7 @@ from beam_agents.model.facade import (
     LlmFacade,
     RetryPolicy,
     Sleep,
+    TokenBudget,
     TokenUsage,
 )
 from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
@@ -64,6 +72,13 @@ from beam_agents.observability import (
 from beam_agents.observability.metrics import ActivationTally
 from beam_agents.tools.registry import ToolRegistry
 from beam_agents.tools.runner import ToolRunner
+
+__all__ = [
+    "ActivationContext",
+    "AgentContext",
+    "AgentResult",
+    "MonotonicNs",
+]
 
 # Injected monotonic clock for duration measurement. Injected like every other
 # non-determinism source (`now_ms`, `rng`, `sleep`) so tests script exact
@@ -93,6 +108,10 @@ class AgentResult:
     #: Worker-local metric tally (never persisted). Defaulted so the historical
     #: construction sites keep working.
     tally: ActivationTally = field(default_factory=ActivationTally)
+    #: Long-term upserts staged via `ctx.memory.longterm.save`, flushed by the
+    #: activation's owner only after a successful return. Empty when no store
+    #: is configured; defaulted so historical construction sites keep working.
+    upserts: tuple[MemoryRecord, ...] = ()
 
 
 class AgentContext:
@@ -130,6 +149,7 @@ class AgentContext:
         tool_runner: ToolRunner | None = None,
         intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
         approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
+        max_tokens_per_activation: int | None = None,
     ) -> None:
         self._entity_key = entity_key
         self._seq = seq
@@ -140,9 +160,18 @@ class AgentContext:
         self._replay_cache = replay_cache
         self._tool_registry = tool_registry
         self._tool_runner = tool_runner if tool_runner is not None else ToolRunner()
+        # Fresh per attempt and never persisted (design D6). `decode` is required
+        # on this surface, so unlike `ActivationContext` there is no
+        # budget-without-a-decoder pair to reject here.
+        self._budget = (
+            TokenBudget(max_tokens_per_activation)
+            if max_tokens_per_activation is not None
+            else None
+        )
         # Built with `staging=self`: the context is structurally the facade's
         # StagingSink, so every trace/usage effect the facade stages lands in
-        # this same accumulator (design D1).
+        # this same accumulator (design D1). The facade is this surface's only
+        # model path, so handing it the budget is the whole of the enforcement.
         self.model = LlmFacade(
             provider,
             replay_cache,
@@ -153,6 +182,7 @@ class AgentContext:
             retry_policy=retry_policy,
             decode=decode,
             staging=self,
+            budget=self._budget,
         )
 
         # The activation's trace. Every event staged through this context is
@@ -178,14 +208,21 @@ class AgentContext:
 
     @property
     def entity_key(self) -> bytes:
+        """The Beam key this activation is running on."""
         return self._entity_key
 
     @property
     def seq(self) -> int:
+        """The per-key monotonic activation counter (see the glossary)."""
         return self._seq
 
     @property
     def now_ms(self) -> int:
+        """Processing time at activation start, in epoch milliseconds.
+
+        Read once and held fixed for the activation, so two reads inside one
+        activation cannot disagree and a replay sees the same value.
+        """
         return self._now_ms
 
     # -- side effects: the only path is act() ------------------------------
@@ -324,14 +361,24 @@ class AgentContext:
         self._traces.append(self._trace.stamp(event))
 
     def accumulate_usage(self, usage: TokenUsage) -> None:
+        """Add one call's token usage to the activation tally.
+
+        Called by the facade only when a provider was actually reached, so a
+        cache hit contributes nothing and the ``tokens`` distribution stays
+        a measure of billed traffic.
+        """
         self._prompt_tokens += usage.prompt_tokens
         self._completion_tokens += usage.completion_tokens
         self._total_tokens += usage.total_tokens
         # The facade calls this only on a provider-reached call, so the flag
         # means "a real response was decoded" -- which is what lets the `tokens`
         # distribution skip activations whose usage nobody decoded rather than
-        # padding it with zeros.
+        # padding it with zeros. The input/output split rides the same rule: it
+        # is what a price sheet multiplies, and it is billed accounting, not the
+        # budget meter's consumption accounting.
         self._tally.total_tokens += usage.total_tokens
+        self._tally.prompt_tokens += usage.prompt_tokens
+        self._tally.completion_tokens += usage.completion_tokens
         self._tally.usage_observed = True
 
     # -- drain ------------------------------------------------------------
@@ -364,6 +411,7 @@ class AgentContext:
             memory_blob=memory_blob,
             cache_blob=cache_blob,
             tally=self._tally,
+            upserts=self.memory.longterm_staged(),
         )
 
 
@@ -386,6 +434,7 @@ class ActivationContext:
         memory_blob: MemoryBlob | None,
         cache_blob: LlmCacheBlob | None,
         event: bytes = b"",
+        events: list[bytes] | None = None,
         resume_result: ToolResult | None = None,
         resume_approval: AgentEnvelope.Approval | None = None,
         snapshot: bytes = b"",
@@ -397,23 +446,68 @@ class ActivationContext:
         monotonic_ns: MonotonicNs = time.monotonic_ns,
         tool_registry: ToolRegistry | None = None,
         tool_runner: ToolRunner | None = None,
+        longterm_store: MemoryStore | None = None,
+        max_tokens_per_activation: int | None = None,
     ) -> None:
         self.entity_key = entity_key
         self.seq = seq
         self.now_ms = now_ms
-        self.event = event
+        # `events` is the adaptive-batching entry: a flush hands the whole
+        # buffer over at once and the agent sees a `list[bytes]`, while the
+        # per-event path (and every resume, under either policy) keeps the
+        # historical `bytes`. The shape is a function of the configured policy,
+        # not of runtime batch size -- a flush of one is still a list -- so an
+        # ADAPTIVE agent is written against exactly one shape (design D4).
+        if events is not None and not events:
+            raise ValueError(
+                "ActivationContext(events=[]) is not a valid activation: a flush "
+                "only ever runs over a non-empty buffer, and an empty batch has "
+                "no activation clock to derive"
+            )
+        self._is_batch = events is not None
+        self.event: bytes | list[bytes] = list(events) if events is not None else event
         self.snapshot = snapshot
         self.resume_result = resume_result
         self.resume_approval = resume_approval
 
         self._provider = provider
-        self._memory = Memory(memory_blob, now_ms=now_ms, compactor=compactor)
+        # The long-term tier is opt-in: with no store configured the facade
+        # holds no handle and `ctx.memory.longterm` raises actionably, so an
+        # unconfigured pipeline behaves exactly as before (design D5/D6).
+        self._longterm_store = longterm_store
+        self._longterm = (
+            LongtermMemory(longterm_store, entity_key=entity_key, seq=seq, now_ms=now_ms)
+            if longterm_store is not None
+            else None
+        )
+        self._memory = Memory(
+            memory_blob, now_ms=now_ms, compactor=compactor, longterm=self._longterm
+        )
         self._replay_cache = ReplayCache(cache_blob, now_ms=now_ms)
         self._intent_ttl_ms = intent_ttl_ms
         self._approval_channel = approval_channel
         # Optional: without it the token counts of a call are genuinely
         # unknown, and the trace omits them rather than reporting zeros (D4).
         self._decode = decode
+        # ...which is exactly why a budget without one is refused rather than
+        # metered: unknown-is-free silently bounds nothing (discovered on an
+        # invoice) and unknown-is-fatal trips on every undecoded call. Failing
+        # here is the third option. `AgentConfig` rejects the pair first, but
+        # this class is buildable without one, so it re-checks.
+        if max_tokens_per_activation is not None and decode is None:
+            raise ValueError(
+                "max_tokens_per_activation requires a provider response decode: "
+                "without one a call's token counts are unknown, and an "
+                "unenforceable budget must not silently meter nothing"
+            )
+        # Fresh per attempt and never persisted: a resume starts a new meter at
+        # zero, exactly as `activation_timeout_s` and `iterations` already do
+        # (design D6).
+        self._budget = (
+            TokenBudget(max_tokens_per_activation)
+            if max_tokens_per_activation is not None
+            else None
+        )
 
         # A resume shares the suspended activation's `seq`, so it recomputes the
         # same trace ID with nothing carried on the wire (D2); its own span is
@@ -466,12 +560,73 @@ class ActivationContext:
         """True when this activation resumes a suspended one (result/approval in)."""
         return self.resume_result is not None or self.resume_approval is not None
 
+    @property
+    def is_batch(self) -> bool:
+        """True exactly on an ``ADAPTIVE`` flush activation.
+
+        The explicit form of "is ``ctx.event`` a list?", so an agent or adapter
+        detects batch mode without an ``isinstance`` check on a union type. A
+        resume is never a batch activation, even under ``ADAPTIVE``: it answers
+        a suspension, and the events that opened it live in the snapshot, not
+        in the runtime (design D5).
+        """
+        return self._is_batch
+
+    @property
+    def events(self) -> tuple[bytes, ...]:
+        """This activation's events, in arrival order — one uniform shape.
+
+        The batch under ``ADAPTIVE``, a one-element tuple under ``NONE``, and
+        empty on a resume under either policy. An agent written against this
+        accessor runs unchanged when a pipeline switches policy; ``ctx.event``
+        remains the policy-shaped view for agents that want it.
+        """
+        if self._is_batch:
+            # Narrowed by construction: `_is_batch` is set exactly when the
+            # constructor stored a list.
+            assert isinstance(self.event, list)
+            return tuple(self.event)
+        if self.is_resume:
+            return ()
+        assert isinstance(self.event, bytes)
+        return (self.event,)
+
+    @property
+    def single_event(self) -> bytes:
+        """The one event payload of a per-event activation, as ``bytes``.
+
+        The narrowing accessor for consumers that are written against exactly
+        one event — the framework adapters, whose authoring surfaces take a
+        single message, and the examples. Under `BatchPolicy.ADAPTIVE` it
+        raises rather than picking an element: which event of a batch "the"
+        event is, is the consumer's decision to make (via `events`), not this
+        surface's to guess, and an actionable error here beats a ``TypeError``
+        raised from inside somebody else's framework.
+        """
+        if self._is_batch:
+            raise TypeError(
+                "ctx.single_event is undefined for a batch activation "
+                f"({len(self.events)} events under BatchPolicy.ADAPTIVE); read "
+                "ctx.events for the whole batch, or ctx.is_batch to branch"
+            )
+        assert isinstance(self.event, bytes)
+        return self.event
+
     async def call_model(self, request: LlmRequest) -> LlmResponse:
         """Cache-first model call: a live cache hit returns with zero provider
         calls (correctness invariant 3), so bundle retries never re-hit the
         provider. A miss calls the provider and stages the response in the
         replay cache. Each call advances ``step_index``.
+
+        This surface bypasses the model facade, so it enforces the token budget
+        itself: an entry check before the cache lookup, and a charge of the
+        decoded total on both branches. The refused call does not advance the
+        cursor -- it is not a step, so the intent IDs an agent mints after
+        swallowing a trip stay where the deterministic walk put them.
         """
+        if self._budget is not None:
+            self._budget.check()
+
         step = self._advance_step()
         cache_key = compute_cache_key(
             request.model_id,
@@ -489,13 +644,14 @@ class ActivationContext:
             # clock is not even read here). Its *trace*, though, decodes the
             # stored response, which is what makes a cache hit's token counts
             # true rather than absent (D4) — still marked unbilled, because no
-            # provider call happened this time.
-            self._stage_llm_trace(
-                step,
-                cache_hit=True,
-                model_id=request.model_id,
-                response=cached.response,
-            )
+            # provider call happened this time. The decode happens once, here,
+            # and the usage is passed down rather than re-derived.
+            usage = self._decoded_usage(cached.response)
+            self._stage_llm_trace(step, cache_hit=True, model_id=request.model_id, usage=usage)
+            # ...and it is charged like any other consumed response. The budget
+            # meters consumption, not spend: provider-reached-ness is exactly
+            # what a bundle retry does not preserve (design D2).
+            self._charge(usage)
             return LlmResponse(cached.response)
 
         started_ns = self._monotonic_ns()
@@ -506,9 +662,9 @@ class ActivationContext:
         # same site, so the sample count always equals `llm_calls`.
         self._tally.llm_calls += 1
         self._tally.llm_ms.append(elapsed_ns // _NS_PER_MS)
-        self._stage_llm_trace(
-            step, cache_hit=False, model_id=request.model_id, response=response.response
-        )
+        usage = self._decoded_usage(response.response)
+        self._stage_llm_trace(step, cache_hit=False, model_id=request.model_id, usage=usage)
+        self._charge(usage)
         return response
 
     async def run_tool(self, tool_name: str, arguments: Mapping[str, object]) -> object:
@@ -643,20 +799,47 @@ class ActivationContext:
         can never drift from the call count.
         """
         self._tally.total_tokens += usage.total_tokens
+        # The input/output split, under the same billed-only rule: it is what a
+        # provider price sheet multiplies, and it is deliberately NOT the token
+        # budget's accounting -- that meter charges cache hits for replay
+        # determinism, so the two are allowed to disagree on a replayed walk.
+        self._tally.prompt_tokens += usage.prompt_tokens
+        self._tally.completion_tokens += usage.completion_tokens
         self._tally.usage_observed = True
 
     # -- loop-driver read-back ------------------------------------------------
 
     @property
     def staged_intents(self) -> list[ToolIntent]:
+        """Intents staged this activation, emitted on commit."""
         return self._intents
 
     @property
     def staged_traces(self) -> list[TraceEvent]:
+        """Trace events staged this activation, emitted on commit."""
         return self._traces
 
     @property
+    def staged_upserts(self) -> tuple[MemoryRecord, ...]:
+        """Long-term upserts staged this activation, for the commit-tail flush.
+
+        Empty when no store is configured. Like every other staged effect,
+        these are applied only after the agent returns successfully.
+        """
+        return self._memory.longterm_staged()
+
+    @property
+    def longterm_store(self) -> MemoryStore | None:
+        """The worker-shared store the driver flushes staged upserts through."""
+        return self._longterm_store
+
+    @property
     def step_index(self) -> int:
+        """The step cursor: how far into the activation the driver has advanced.
+
+        Part of the deterministic intent-ID input (invariant 2) and of the
+        replay-cache key (invariant 3).
+        """
         return self._step_index
 
     @property
@@ -678,9 +861,11 @@ class ActivationContext:
         return self._tally
 
     def memory_blob(self) -> MemoryBlob:
+        """Working memory serialized for the keyed state write."""
         return self._memory.to_blob()
 
     def cache_blob(self) -> LlmCacheBlob:
+        """The replay cache serialized for the keyed state write."""
         return self._replay_cache.to_blob()
 
     def build_continuation(
@@ -688,7 +873,7 @@ class ActivationContext:
     ) -> Continuation:
         """Assemble the ``Continuation`` persisted when the activation suspends."""
         return Continuation(
-            state_schema_version=1,
+            state_schema_version=migration.CURRENT_STATE_SCHEMA_VERSION,
             seq=self.seq,
             step_index=self._step_index,
             pending_intent_ids=[intent.intent_id for intent in self._intents],
@@ -705,16 +890,30 @@ class ActivationContext:
         self._step_index += 1
         return step
 
+    def _charge(self, usage: TokenUsage | None) -> None:
+        """Charge one consumed response against the budget, if there is one.
+
+        ``usage`` is ``None`` only when no ``decode`` is configured, which the
+        constructor already refuses to pair with a budget — so a budgeted
+        activation always has a real number to charge.
+        """
+        if self._budget is None:
+            return
+        assert usage is not None, "a budget without a decoder is refused at construction"
+        self._budget.charge(usage.total_tokens)
+
     def _stage_llm_trace(
-        self, step: int, *, cache_hit: bool, model_id: str, response: bytes
+        self, step: int, *, cache_hit: bool, model_id: str, usage: TokenUsage | None
     ) -> None:
         attributes = {
             OPERATION_NAME: OPERATION_CHAT,
             REQUEST_MODEL: model_id,
             CACHE_HIT: "true" if cache_hit else "false",
             # A hit re-serves tokens already paid for; only a provider call is
-            # billed. Both report their real counts (D4).
-            **usage_attributes(self._decoded_usage(response), billed=not cache_hit),
+            # billed. Both report their real counts (D4). The usage is decoded
+            # once by the caller and handed down, so the hot path never decodes
+            # a response twice.
+            **usage_attributes(usage, billed=not cache_hit),
         }
         self.stage_trace_event(
             TraceEvent(

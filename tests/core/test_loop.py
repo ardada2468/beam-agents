@@ -15,6 +15,7 @@ import pytest
 import beam_agents.core.loop as loop_module
 from beam_agents._protos import AgentEnvelope, LlmCacheBlob, MemoryBlob, ToolResult, TraceEvent
 from beam_agents.core.agent import Complete, Suspend
+from beam_agents.core.batching import TRACE_BATCH_SIZE, TRACE_BATCH_TRIGGER, TRIGGER_SIZE
 from beam_agents.core.context import ActivationContext
 from beam_agents.core.loop import (
     DEFAULT_HITL_TIMEOUT_MS,
@@ -23,6 +24,7 @@ from beam_agents.core.loop import (
     run_activation,
 )
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
+from beam_agents.model import BudgetExceeded
 from beam_agents.observability import (
     ROLE_ACTIVATION,
     ActivationTrace,
@@ -33,6 +35,7 @@ from beam_agents.observability.metrics import ActivationTally
 from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import (
     append_agent,
+    batch_join_agent,
     make_pong_provider,
     model_agent,
     raising_agent,
@@ -422,6 +425,119 @@ async def test_a_cache_hit_does_not_count_toward_the_failure_llm_calls() -> None
     )
 
 
+async def test_a_budget_trip_propagates_as_an_activation_failure() -> None:
+    # Scenario: The budget kill produces both enriched records (the loop half).
+    # `BudgetExceeded` is an ordinary agent-path raise, so the existing wrap
+    # delivers it as `ActivationFailed` with its position -- no new machinery,
+    # and the cause is preserved for the DoFn's reason dispatch.
+    async def agent(ctx: ActivationContext) -> Complete:
+        await ctx.call_model(request())
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=60_000)
+        await ctx.call_model(request("second"))
+        return Complete(output=b"unreachable")
+
+    with pytest.raises(ActivationFailed) as excinfo:
+        await run_activation(
+            agent,
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=make_pong_provider(),
+            memory_blob=None,
+            cache_blob=None,
+            decode=decode_len_based,
+            max_tokens_per_activation=10,
+        )
+
+    failure = excinfo.value
+    assert isinstance(failure.__cause__, BudgetExceeded)
+    # b"pong" decodes to 2 * 4 = 8 tokens; the second call crosses 10 at 16.
+    assert failure.__cause__.limit == 10
+    assert failure.__cause__.consumed == 16
+    assert failure.context == FailureContext(
+        step_index=3, last_event="LLM_CALL", staged_intents=1, llm_calls=2
+    )
+
+
+async def test_an_activation_within_its_budget_completes_normally() -> None:
+    # The knob only fails what crosses it: an agent that stays inside its bound
+    # commits exactly what it would with no budget configured.
+    result = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        decode=decode_len_based,
+        max_tokens_per_activation=1_000,
+    )
+
+    assert result.status == "completed"
+    assert result.outputs == [b"pong"]
+
+
+async def test_an_unbudgeted_run_activation_is_unchanged() -> None:
+    # Scenario: Unset means unlimited. The parameter defaults to `None`, so
+    # every historical call site still builds and behaves identically.
+    unbudgeted = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        decode=decode_len_based,
+    )
+    budgeted = await run_activation(
+        model_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        decode=decode_len_based,
+        max_tokens_per_activation=1_000,
+    )
+
+    assert unbudgeted.memory_blob.SerializeToString(
+        deterministic=True
+    ) == budgeted.memory_blob.SerializeToString(deterministic=True)
+    assert unbudgeted.cache_blob.SerializeToString(
+        deterministic=True
+    ) == budgeted.cache_blob.SerializeToString(deterministic=True)
+
+
+async def test_a_budgeted_suspension_persists_an_unchanged_continuation() -> None:
+    # Scenario: The continuation is unchanged by budgeting. The meter is
+    # worker-local and per-attempt: no `Continuation` field, no state-schema
+    # implication, no golden blob moved.
+    async def agent(ctx: ActivationContext) -> Suspend:
+        await ctx.call_model(request())
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=60_000)
+        return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=1_000)
+
+    async def run(limit: int | None) -> bytes:
+        result = await run_activation(
+            agent,
+            entity_key=b"k",
+            seq=0,
+            now_ms=1000,
+            provider=make_pong_provider(),
+            memory_blob=None,
+            cache_blob=None,
+            decode=decode_len_based,
+            max_tokens_per_activation=limit,
+        )
+        assert result.continuation is not None
+        return result.continuation.SerializeToString(deterministic=True)
+
+    assert await run(None) == await run(10_000)
+
+
 async def test_cancellation_is_never_wrapped() -> None:
     # Scenario: Cancellation is never wrapped. `CancelledError` is how the
     # bridge's timeout cancellation completes; wrapping it would corrupt the
@@ -452,6 +568,10 @@ async def test_a_failure_before_the_start_event_reports_an_empty_last_event(
             self.step_index = 0
             self.staged_intents: list[object] = []
             self.staged_traces: list[TraceEvent] = []
+            # No long-term store is configured, so the commit-tail flush is a
+            # no-op: nothing staged, nothing to flush.
+            self.staged_upserts: tuple[object, ...] = ()
+            self.longterm_store: object | None = None
 
         @property
         def trace(self) -> ActivationTrace:
@@ -520,9 +640,16 @@ async def test_loop_forwards_every_activation_context_input(
     class FakeContext:
         def __init__(self) -> None:
             self.step_index = 0
+            # Not a batch entry: this scenario forwards the per-event inputs,
+            # so the driver must stamp no batch attributes on the trace.
+            self.is_batch = False
             self.trace = ActivationTrace(entity_key=b"key", seq=4, now_ms=123)
             self.staged_intents: list[object] = []
             self.staged_traces: list[TraceEvent] = []
+            # No long-term store is configured, so the commit-tail flush is a
+            # no-op: nothing staged, nothing to flush.
+            self.staged_upserts: tuple[object, ...] = ()
+            self.longterm_store: object | None = None
 
         def stage_trace(self, event: TraceEvent) -> None:
             self.staged_traces.append(event)
@@ -577,6 +704,7 @@ async def test_loop_forwards_every_activation_context_input(
         "memory_blob": memory_blob,
         "cache_blob": cache_blob,
         "event": b"event",
+        "events": None,
         "resume_result": resume_result,
         "resume_approval": resume_approval,
         "snapshot": b"snapshot",
@@ -588,6 +716,12 @@ async def test_loop_forwards_every_activation_context_input(
         "monotonic_ns": monotonic_ns,
         "tool_registry": tool_registry,
         "tool_runner": tool_runner,
+        # Forwarded like every other injected dependency; `None` here, so the
+        # context builds no long-term handle and the commit tail flushes nothing.
+        "longterm_store": None,
+        # `None` is unlimited: an unconfigured pipeline builds no meter and
+        # behaves byte-identically to the pre-budget runtime.
+        "max_tokens_per_activation": None,
     }
     assert result.memory_blob is memory_blob
     assert result.cache_blob is cache_blob
@@ -820,3 +954,88 @@ async def test_non_outcome_error_includes_the_returned_value() -> None:
     cause = excinfo.value.__cause__
     assert isinstance(cause, TypeError)
     assert str(cause) == "agent returned a non-Outcome value: 'invalid'"
+
+
+# --- Requirement: Batch activations are batch-visible with ctx.event as a list
+
+
+async def test_a_batch_entry_reaches_the_agent_as_a_list_in_arrival_order() -> None:
+    # Scenario: The agent receives the batch as a list in arrival order. The
+    # driver is the seam the DoFn's flush path enters through, so the batch has
+    # to survive it unchanged and in order.
+    result = await run_activation(
+        batch_join_agent,
+        entity_key=b"k",
+        seq=2,
+        now_ms=3000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        events=[b"a", b"b", b"c"],
+    )
+
+    assert result.status == "completed"
+    assert result.outputs == [b"a|b|c#2"]
+
+
+async def test_a_batch_activation_stamps_its_size_and_trigger_on_the_trace() -> None:
+    # Scenario: One activation per flush ... the flush activation's trace SHALL
+    # carry `beam_agents.batch.size` and `beam_agents.batch.trigger`, so a trace
+    # consumer can tell a batch decision from a per-event one.
+    result = await run_activation(
+        batch_join_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=3000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        events=[b"a", b"b"],
+        batch_trigger=TRIGGER_SIZE,
+    )
+
+    start = result.traces[0]
+    assert start.event_type == TraceEvent.ACTIVATION_START
+    assert start.attributes[TRACE_BATCH_SIZE] == "2"
+    assert start.attributes[TRACE_BATCH_TRIGGER] == TRIGGER_SIZE
+
+
+async def test_a_batch_activation_with_no_named_trigger_records_an_empty_one() -> None:
+    # The trigger attribute is whatever the caller named, and nothing else. The
+    # DoFn always names one, so the parameter's default is what a *new* flush
+    # caller that forgets would produce -- and it has to be empty, meaning
+    # "unnamed", rather than a placeholder a trace query would count as a real
+    # trigger alongside `size` and `timer`. Same rule the rest of the runtime
+    # follows: unknown is absent or empty, never invented.
+    result = await run_activation(
+        batch_join_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=3000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        events=[b"a"],
+    )
+
+    start = result.traces[0]
+    assert start.attributes[TRACE_BATCH_SIZE] == "1"
+    assert start.attributes[TRACE_BATCH_TRIGGER] == ""
+
+
+async def test_a_per_event_activation_carries_no_batch_attributes() -> None:
+    # Under `NONE` nothing about batching appears anywhere: no attribute, no
+    # empty string, nothing for a trace consumer to have to ignore.
+    result = await run_activation(
+        seq_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+    )
+
+    start = result.traces[0]
+    assert TRACE_BATCH_SIZE not in start.attributes
+    assert TRACE_BATCH_TRIGGER not in start.attributes

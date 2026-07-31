@@ -17,8 +17,8 @@ from beam_agents.effector.dedup import (
     Done,
     InFlight,
     InMemoryDedupStore,
-    decode_lease_expiry,
-    encode_lease_expiry,
+    _decode_lease_expiry,
+    _encode_lease_expiry,
 )
 
 from ._dedup_conformance import LEASE_MS, DedupStoreConformance, a_result
@@ -115,16 +115,16 @@ def test_lease_encoding_preserves_numeric_order_under_byte_comparison(a: int, b:
     # Bigtable's ValueRangeFilter compares values lexicographically, so the
     # "lease not yet expired" predicate is only correct if byte order agrees
     # with numeric order over the whole range.
-    assert (encode_lease_expiry(a) < encode_lease_expiry(b)) == (a < b)
-    assert decode_lease_expiry(encode_lease_expiry(a)) == a
+    assert (_encode_lease_expiry(a) < _encode_lease_expiry(b)) == (a < b)
+    assert _decode_lease_expiry(_encode_lease_expiry(a)) == a
 
 
 def test_lease_encoding_is_fixed_width() -> None:
     # Fixed width is what makes lexicographic comparison total: variable-width
     # encodings sort "10" before "9".
-    assert len(encode_lease_expiry(0)) == len(encode_lease_expiry(2**63))
+    assert len(_encode_lease_expiry(0)) == len(_encode_lease_expiry(2**63))
 
 
 def test_a_negative_lease_expiry_is_rejected() -> None:
     with pytest.raises(ValueError, match="non-negative"):
-        encode_lease_expiry(-1)
+        _encode_lease_expiry(-1)

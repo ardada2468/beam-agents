@@ -1,6 +1,11 @@
 [project]
 name = "beam-agents"
-version = "0.0.0"
+# Single-sourced, static, bumped only by a release PR (docs/releasing.md). The
+# `vX.Y.Z` tag, this string, and uv.lock's own `beam-agents` entry must agree —
+# scripts/check_release.py fails the release workflow before anything builds if
+# they don't. Never derived from git state: uv.lock records the project version,
+# so a VCS-derived version would break `uv sync --locked` determinism.
+version = "1.0.0"
 description = "A runtime for protobuf-native, per-key-deterministic streaming agents on Apache Beam."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -9,7 +14,24 @@ dependencies = [
   "apache-beam[gcp]>=2.60",
   "httpx[http2]",
   "pydantic>=2",
-  "protobuf",
+  # `>=6` is load-bearing, not tidiness. The committed `_pb2.py` bindings are
+  # 6.x gencode, and protobuf requires gencode and runtime to share a MAJOR
+  # version. Unbounded, this requirement is satisfied by whatever protobuf a
+  # runtime environment already has — and `apache/beam_python3.11_sdk:2.72.0`,
+  # the base image Dataflow workers run, ships runtime 5.29.5. pip then leaves
+  # 5.29.5 in place and `import beam_agents` dies at
+  # `beam_agents/_protos/__init__.py` with `VersionError: Detected mismatched
+  # Protobuf Gencode/Runtime major versions ... gencode 6.33.5 runtime 5.29.5`,
+  # so the package is unimportable on a stock Dataflow worker.
+  #
+  # docker/sdk-harness.Dockerfile has pinned `protobuf==6.33.6` for exactly this
+  # reason since it was written — which is why the Flink legs never saw it. That
+  # constraint belongs in the package's own metadata, so every consumer gets it
+  # rather than only the environments that happen to bake it in.
+  #
+  # `<7` matches Beam's own `protobuf<7.0.0.dev0` bound; the two together leave
+  # the 6.x line, which is where the gencode is.
+  "protobuf>=6,<7",
 ]
 
 # The reference effector (`beam_agents.effector`) is a separate service, not part
@@ -31,6 +53,24 @@ langgraph = [
   "langgraph>=1.0,<2",
   "langchain-core>=1.0,<2",
 ]
+# The Pydantic AI adapter (`beam_agents.adapters.pydantic_ai`). Core never
+# imports Pydantic AI: `import beam_agents` must succeed without this extra,
+# and the adapter package is the only module allowed to import pydantic_ai at
+# top level. The slim distribution: the adapter needs the framework core
+# (deferred tools, toolsets, message serialization), not the batteries-included
+# meta-package. Floor = the tested release; `pydantic>=2` is already a core
+# dependency, so the extra adds no new pydantic constraint.
+pydantic-ai = [
+  "pydantic-ai-slim>=2.21,<3",
+]
+# The Google ADK adapter (`beam_agents.adapters.adk`). Core never imports ADK:
+# `import beam_agents` must succeed without this extra, and the adapter package
+# is the only module allowed to import google.adk at top level. Floor set at the
+# release this adapter was implemented and verified against (2.6.0); the major
+# ceiling is the API-drift guard called out in the change's risks.
+adk = [
+  "google-adk>=2.6,<3",
+]
 # The OTLP trace exporter (`otlp://` traces sink) builds ExportTraceServiceRequest
 # messages from opentelemetry-proto's generated classes and POSTs them over the
 # core httpx dependency. Pure generated protos — no OTel SDK, no grpc — but still
@@ -40,12 +80,37 @@ langgraph = [
 otlp = [
   "opentelemetry-proto>=1.20",
 ]
+# The vLLM GPU-worker sidecar (`beam_agents.model.vllm.VllmSidecarProvider`).
+# Endpoint mode and `import beam_agents.model` never need it: `vllm` is imported
+# lazily inside the sidecar's real engine constructor only, and constructing the
+# sidecar without this extra raises an actionable error naming it. The tree is
+# heavy (torch/CUDA) and GPU-oriented, so no CI lane installs it — the offline
+# tier drives the engine seam with a fake engine, and only the hardware-gated
+# nightly smoke test (tests/smoke/test_vllm_sidecar.py) needs the real thing.
+# Version floor: the AsyncLLMEngine surface the seam adapter drives.
+vllm = [
+  "vllm>=0.6",
+]
+# The long-term MemoryStore backends (`beam_agents.memory.stores`). The runtime
+# never imports these: `import beam_agents.memory.stores` — and the ABC, factory,
+# and in-memory store — must work with none of them installed, which the
+# import-boundary test proves. Each backend imports its client inside its own
+# constructor, the same pattern as the effector's dedup stores.
+memory-stores = [
+  "google-cloud-bigtable",
+  "redis",
+  "google-cloud-firestore",
+  "sqlalchemy[asyncio]",
+]
 
-# The effector is a service, so it gets a console entry point. It is the only
-# executable this package ships; the runtime itself is a library embedded in a
-# Beam pipeline.
+# The two executables this package ships; the runtime itself is a library
+# embedded in a Beam pipeline. The effector is a service that runs outside Beam;
+# the replay CLI is an operator tool that reconstructs one activation from an
+# exported StateSnapshot plus its trace and re-runs it locally. Neither is part
+# of the public API surface (`beam_agents/__init__.py` re-exports neither).
 [project.scripts]
 beam-agents-effector = "beam_agents.effector.__main__:main"
+beam-agents-replay = "beam_agents.replay.__main__:main"
 
 [dependency-groups]
 dev = [
@@ -56,6 +121,7 @@ dev = [
   { include-group = "bench" },
   { include-group = "docs" },
   { include-group = "precommit" },
+  { include-group = "release" },
 ]
 test = [
   "pytest",
@@ -70,12 +136,28 @@ test = [
   # blocking the import, not by the package's absence from the environment.
   "langgraph>=1.0,<2",
   "langchain-core>=1.0,<2",
+  # The Pydantic AI adapter's unit tests need the framework itself. Mirrored
+  # from the `pydantic-ai` extra (same pattern as langgraph above): the offline
+  # import boundary is proven by tests/adapters/pydantic_ai/test_import_isolation
+  # blocking the import, not by the package's absence from the environment.
+  "pydantic-ai-slim>=2.21,<3",
+  # The ADK adapter's unit tests and conformance cells need the framework
+  # itself. Mirrored from the `adk` extra, exactly as `langgraph` is above; the
+  # offline import boundary is proven by tests/adapters/adk/test_import_isolation
+  # blocking the import, not by the package's absence from the environment.
+  "google-adk>=2.6,<3",
   # The OTLP exporter's mapping/DoFn tests are plain offline unit tests (they
   # exercise generated proto classes and httpx.MockTransport, no network), so
   # they run — and are coverage-counted — in the required ci unit lane. This
   # mirrors the `otlp` extra rather than depending on it; the import-boundary
   # test proves the runtime still imports and validates without it installed.
   "opentelemetry-proto>=1.20",
+  # The SQLAlchemy MemoryStore's offline conformance leg runs against
+  # `sqlite+aiosqlite` — no docker, no server. Mirrored from the
+  # `memory-stores` extra (same pattern as `langgraph`/`otlp` above); the
+  # import-boundary test still proves the subpackage imports without it.
+  "sqlalchemy[asyncio]",
+  "aiosqlite",
 ]
 lint = [
   "ruff",
@@ -96,16 +178,36 @@ integration = [
   "google-cloud-pubsub",
   "redis",
   "google-cloud-bigtable",
+  # The long-term MemoryStore's live-backend legs (Redis, the Bigtable and
+  # Firestore emulators) need the same clients the `memory-stores` extra ships.
+  # Mirrored here rather than depending on the extra, so the `ci` unit lane —
+  # which syncs only lint/typecheck/test — still proves the offline boundary.
+  "google-cloud-firestore",
 ]
 bench = [
   "pyperf",
 ]
-docs = []
+# The docs site toolchain (mkdocs-material bundles mkdocs and
+# pymdown-extensions, whose `snippets` extension renders the example modules
+# verbatim). Never a runtime dependency, never imported by src/, and absent
+# from the ci unit lane's lint/typecheck/test sync — the docs build is pure
+# text processing and must not need apache-beam.
+docs = [
+  "mkdocs-material>=9,<10",
+]
 # pre-commit itself, plus grpcio-tools for the protobuf-drift hook (gen_proto.sh
 # invokes grpc_tools.protoc).
 precommit = [
   "pre-commit",
   "grpcio-tools",
+]
+# Changelog assembly only (`make changelog`). towncrier is a CLI, never
+# imported by src/ or by the test suite: the closed-registry gate that fronts
+# assembly lives in scripts/check_release.py precisely so the unit lane can
+# exercise it without this group installed. No CI lane installs it except the
+# release workflow.
+release = [
+  "towncrier>=23.11",
 ]
 
 [tool.uv]
@@ -121,18 +223,51 @@ packages = ["src/beam_agents"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests"]
+src = ["src", "tests", "examples", "benchmarks"]
 # Generated protobuf bindings are committed but never hand-edited or linted.
 extend-exclude = ["src/beam_agents/_protos/*_pb2.py", "src/beam_agents/_protos/*_pb2.pyi"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "PL", "RUF"]
+# `D1` is the pydocstyle *completeness* subset (D100-D107) and nothing else: the
+# 1.0 API freeze requires every public name to be documented, per-name rather
+# than as a percentage, so one new undocumented public name fails the build. The
+# D2xx/D4xx style rules are deliberately NOT selected — docstring formatting is
+# orthogonal to the compatibility contract and would bury the completeness
+# signal in whitespace churn.
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "PL", "RUF", "D1"]
 ignore = [
   "PLR0913", # too many arguments — runtime call signatures are often wide
+  # Dunder semantics are defined by the language protocol, not by the
+  # implementation: `__eq__` means what `__eq__` means everywhere.
+  "D105", # undocumented magic method
+  # Constructor contracts belong in the class docstring, which every class in
+  # `src/` already has (D101 is zero). A second docstring on `__init__` is
+  # duplication that drifts away from the first one.
+  "D107", # undocumented `__init__`
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["PLR2004"]
+# `D1` is the 1.0 public-API completeness gate; tests, benchmarks and repo
+# tooling are none of those. Test names *are* the documentation here (the
+# scenario-named-test convention), and benchmark/script entry points are
+# internal tooling with no compatibility promise. Modules and classes in these
+# trees still carry docstrings by convention — this exempts the per-name gate,
+# not the practice.
+"tests/*" = ["PLR2004", "D1"]
+"benchmarks/*" = ["D1"]
+"scripts/*" = ["D1"]
+# The site's example programs are published by file reference — the rendered
+# page embeds the bytes on disk — so their prose lives in the surrounding page
+# and in the `# region:` commentary the site shows, not in docstrings on the
+# `main()`/`build_pipeline()` scaffolding. They are documentation, not public
+# API: nothing imports them. (`examples/` proper is NOT exempt; it ships as the
+# runnable reference and is held to the src bar.)
+"website/examples/*" = ["D1"]
+# The benchmark modules import pyperf inside `main()`, on purpose: pyperf is
+# the `bench` dependency group, which the required `ci` lane does not sync, and
+# the unit-tier smoke tests must still import every module and run its timed
+# functions. PLC0415-is-the-point, the same rationale as core/transform.py.
+"benchmarks/bench_*.py" = ["PLC0415"]
 # The package `__getattr__` resolves adapter classes lazily, on purpose: the
 # adapters' framework dependencies are optional extras and `import beam_agents`
 # must never import them. PLC0415 (imports not at top-level) is exactly what
@@ -142,6 +277,13 @@ ignore = [
 # argument defaults (`state=beam.DoFn.StateParam(SPEC)`); B008 (no calls in
 # defaults) is a false positive for this idiom.
 "src/beam_agents/core/dofn.py" = ["B008"]
+# Memory.to_blob / ReplayCache.to_blob read the state_schema_version stamp
+# from core/migration.py at call time, on purpose: a top-level import would
+# recreate the memory/model -> core -> context -> memory/model import cycle,
+# and the call-time read is what lets one constant edit move every writer.
+# Same PLC0415-is-the-point rationale as core/transform.py below.
+"src/beam_agents/memory/facade.py" = ["PLC0415"]
+"src/beam_agents/model/replay_cache.py" = ["PLC0415"]
 # DefaultSinkResolver.resolve() imports each IO client (Kafka/Pub/Sub/BigQuery)
 # lazily, on purpose: AgentConfig.__post_init__ only calls validate(), which
 # must stay import-free so sink-URI validation runs offline. PLC0415 (imports
@@ -164,15 +306,39 @@ ignore = [
 "src/beam_agents/effector/sources.py" = ["PLC0415"]
 "src/beam_agents/effector/sinks.py" = ["PLC0415"]
 "src/beam_agents/effector/dedup.py" = ["PLC0415"]
+# The long-term MemoryStore backends import their client libraries (bigtable,
+# redis, firestore, sqlalchemy) inside constructors and call sites, on purpose:
+# those are the optional `memory-stores` extra and
+# `import beam_agents.memory.stores` must succeed with none of them installed.
+# `base.py` lazily imports the backend modules from the factory for the same
+# reason. Same PLC0415-is-the-point rationale as above.
+"src/beam_agents/memory/stores/base.py" = ["PLC0415"]
+"src/beam_agents/memory/stores/bigtable.py" = ["PLC0415"]
+"src/beam_agents/memory/stores/redis.py" = ["PLC0415"]
+"src/beam_agents/memory/stores/firestore.py" = ["PLC0415"]
+"src/beam_agents/memory/stores/sql.py" = ["PLC0415"]
 # The e2e gate's harness: B008 is the same Beam RestrictionParam/
 # WatermarkEstimatorParam-as-default idiom as core/dofn.py, and PLC0415 lazy
 # aiokafka imports keep these modules importable in the offline lane (host
 # side) and outside the pipeline (container side) without the client installed.
 "tests/semantics/_e2e/*" = ["B008", "PLC0415"]
+# The `--update` gate's harness: the GCP clients (google.auth, google.cloud
+# .pubsub) are imported inside the constructors/methods that need them, on
+# purpose — these modules are *collected* in the offline unit lane (deselection
+# happens after import) and must import cleanly with no credentials and no
+# client construction. Same PLC0415-is-the-point rationale as the e2e harness
+# above.
+"tests/dataflow/_update/*" = ["PLC0415"]
+# The gate module itself: one scenario told in phases (launch, drive, update,
+# assert, tear down), the same shape and same rationale as the e2e gate above.
+"tests/dataflow/test_update_compat.py" = ["PLR0915"]
 # The docs/errors.md failure-streak example, copied verbatim: the state handle
 # is the same Beam-requires-it-as-a-default idiom as core/dofn.py, and the doc
 # must show the working form rather than a lint-shaped variant of it.
 "tests/examples/test_failure_streak_alarm.py" = ["B008"]
+# The docs/continuous_eval.md example, copied verbatim: same state/timer
+# handle-as-default idiom as above.
+"tests/examples/test_continuous_eval.py" = ["B008"]
 # The gate module itself: same lazy-aiokafka constraint (it is *collected* in
 # the offline lane, where aiokafka is absent — deselection happens after
 # import), and the single long test function is one scenario told in phases,
@@ -188,6 +354,17 @@ ignore = [
 # harness imports aiokafka lazily like the e2e harness, and the leg
 # orchestration is one scenario told in phases.
 "tests/conformance/*" = ["PLC0415", "PLR0915"]
+# The Slack approval example's real gateway imports slack-sdk inside its
+# constructor, on purpose: slack-sdk is a dev-surface dependency and the
+# example must import (and its offline tests must run) without it installed.
+# Same PLC0415-is-the-point rationale as the effector's adapters above.
+"examples/slack_approval/slack.py" = ["PLC0415"]
+
+[tool.ruff.lint.isort]
+# `examples/` and `benchmarks/` are repo-root code outside the wheel and
+# outside the `src` roots above; without this ruff would sort their imports
+# with the third-party block.
+known-first-party = ["examples", "benchmarks"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -196,7 +373,9 @@ indent-style = "space"
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["src", "tests"]
+# `examples` and `benchmarks` are held to the same strict bar as `src` (see the
+# slack-approval change, tasks 8.1) even though they ship outside the wheel.
+files = ["src", "tests", "examples", "benchmarks"]
 # The documentation-site fidelity checks live in `scripts/` (they import
 # `beam_agents`, so they cannot live under `website/`). `tests/docs/` imports
 # them, so mypy has to be able to resolve them.
@@ -212,12 +391,53 @@ ignore_missing_imports = true
 module = "google.*"
 ignore_missing_imports = true
 
+# pyperf ships no py.typed marker; the benchmark harness and the bench gate
+# import it as the authority on benchmark loading/percentiles.
+[[tool.mypy.overrides]]
+module = "pyperf.*"
+ignore_missing_imports = true
+
+# The benchmark harness drives the same two untyped surfaces the DoFn-driving
+# test modules do: Beam's stateful-DoFn/pipeline API (process(**handles),
+# Create/Map/RunInference, unparameterized generics) and pyperf's Runner
+# reading as Any. Everything else in benchmarks/ stays strictly typed.
+[[tool.mypy.overrides]]
+module = "benchmarks.*"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
 # The effector's transport/dedup clients are optional dependencies (the
 # `effector` extra) and are deliberately absent from the `ci` lane's environment,
 # where mypy runs. Their lazy imports must not read as missing-module errors.
 [[tool.mypy.overrides]]
 module = ["aiokafka.*", "redis.*"]
 ignore_missing_imports = true
+
+# slack-sdk is a dev-surface dependency of the Slack approval example only,
+# absent from the `ci` lane's environment; `SocketModeGateway` imports it
+# lazily, same pattern (and same relaxation) as the effector's clients above.
+[[tool.mypy.overrides]]
+module = "slack_sdk.*"
+ignore_missing_imports = true
+
+# PyYAML ships no inline types. `types-PyYAML` IS in the locked typecheck
+# environment (the site's frontmatter parser in `scripts/` needs it), and mypy
+# prefers those stubs where they resolve; this stays for the environments that
+# sync without the typecheck group, where the yaml-provider suites use PyYAML
+# only to parse the documents they assert on.
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
+follow_untyped_imports = true
+
+# The Firestore store's client is the optional `memory-stores` extra and is
+# absent from the `ci` lane where mypy runs, so `google.cloud.firestore` reads
+# as a missing attribute of the `google.cloud` namespace package, and its
+# `async_transactional` decorator (untyped gencode) makes the guarded upsert
+# read as untyped. Both are properties of an absent, unstubbed client, not of
+# this module; the rest of strict mode still applies.
+[[tool.mypy.overrides]]
+module = "beam_agents.memory.stores.firestore"
+disable_error_code = ["attr-defined", "untyped-decorator"]
 
 # Generated protobuf stubs use bare `Mapping` in a few __init__ signatures,
 # which trips strict `type-arg`. The gencode is never hand-edited, so we relax
@@ -265,6 +485,31 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 module = "tests.examples.test_failure_streak_alarm"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
+# The runnable docs examples and their tests drive Beam's untyped pipeline API
+# (Create/TestStream/WithKeys/Map/Filter/WindowInto/CombinePerKey,
+# TestPipeline/assert_that) — the same per-module relaxation every
+# pipeline-driving test module carries. Everything non-Beam in these modules
+# stays strictly typed; tests.examples.test_docs_snippets and
+# test_failure_streak_alarm keep their own (stricter/other) settings. The
+# Slack example is listed by its pipeline-wiring module only (agent.py) so its
+# service modules — surface/blocks/config/slack — stay fully strict.
+[[tool.mypy.overrides]]
+module = [
+    "examples.hello_world",
+    "examples.fraud_triage",
+    "examples.fraud_triage_dataflow.launch",
+    "examples.iot_reaction",
+    "examples.slack_approval.agent",
+    "tests.examples.test_hello_world",
+    "tests.examples.test_fraud_triage",
+    "tests.examples.test_flex_template_launcher",
+    "tests.examples.test_iot_reaction",
+    "tests.examples.test_continuous_eval",
+    "tests.examples.test_slack_approval",
+    "tests.examples.test_slack_approval_kafka",
+]
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
 # Beam types `Coder.from_type_hint` as `-> CoderT` (a cls-bound TypeVar), so our
 # concrete override return trips the LSP `override` check — the same concrete
 # pattern Beam's own subclasses (e.g. MapCoder) use. Suppress that one check for
@@ -284,6 +529,16 @@ disable_error_code = ["no-untyped-call"]
 # fallback counter.
 [[tool.mypy.overrides]]
 module = "beam_agents.adapters.langgraph.transport"
+disable_error_code = ["no-untyped-call"]
+
+# Same Beam-untyped-metrics relaxation for the shared adapter transport core
+# and the Pydantic AI / ADK adapters' transport modules.
+[[tool.mypy.overrides]]
+module = [
+    "beam_agents.adapters._transport",
+    "beam_agents.adapters.pydantic_ai.transport",
+    "beam_agents.adapters.adk.transport",
+]
 disable_error_code = ["no-untyped-call"]
 
 # The LangGraph adapter tests drive LangGraph's four-parameter generics
@@ -308,6 +563,14 @@ disable_error_code = ["type-arg", "no-untyped-call", "no-any-return"]
 module = "beam_agents.observability.metrics"
 disable_error_code = ["no-untyped-call"]
 
+# Beam's `apache_beam.utils.shared.Shared` ships without annotations, so
+# constructing the sidecar's per-process engine handle reads as an untyped call
+# under strict mode — the same Beam-untyped-API relaxation the other
+# Beam-driving modules get, for the vLLM provider module and its tests.
+[[tool.mypy.overrides]]
+module = ["beam_agents.model.vllm", "tests.model.test_vllm"]
+disable_error_code = ["no-untyped-call"]
+
 # The stateful DoFn and its transform are the densest Beam surface in the repo:
 # every state/timer/output call routes through Beam's untyped API, and Beam's
 # generics (PTransform, TaggedOutput) ship without parameters. Relax those Beam-
@@ -318,6 +581,35 @@ disable_error_code = ["no-untyped-call", "type-arg"]
 
 [[tool.mypy.overrides]]
 module = "beam_agents.core.transform"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation for the hot-key sharding transform and its
+# pipeline-driving tests: `ShardKeys` is a PTransform over Beam's
+# unparameterized PCollection generic, and the tests drive
+# TestPipeline/Create/Map/assert_that. The two pure functions
+# (`shard_key`/`unshard_key`) stay fully strict — they touch no Beam API.
+[[tool.mypy.overrides]]
+module = [
+    "beam_agents.keys",
+    "tests.keys.test_shard_keys_transform",
+    "tests.examples.test_shard_fanout",
+]
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# The YAML provider wraps that same transform and drives the same Beam surface:
+# a DoFn with tagged outputs, ParDo/with_outputs/WithKeys/Map/Flatten, and
+# `beam.Row` — all untyped, over Beam's unparameterized PTransform/PCollection/
+# TaggedOutput generics. Same relaxation as core/transform.py; everything
+# non-Beam in the module (reference resolution, config mapping) stays strict.
+[[tool.mypy.overrides]]
+module = "beam_agents.yaml.transform"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# Same Beam-untyped-API relaxation for the yaml-provider suites, which drive
+# TestPipeline/Create/Flatten/assert_that and the transform's PCollection-typed
+# seams directly, plus the offline document driver's Create/Row construction.
+[[tool.mypy.overrides]]
+module = "tests.yaml.*"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # Same Beam-untyped-API relaxation for the OTLP export DoFn/transform (ParDo,
@@ -365,6 +657,12 @@ disable_error_code = ["no-untyped-call"]
 module = "tests.semantics.test_retry_determinism"
 disable_error_code = ["no-untyped-call"]
 
+# Same Beam-untyped-API relaxation for the long-term flush's chaos gate, which
+# drives the same TestPipeline/TestStream/assert_that surface.
+[[tool.mypy.overrides]]
+module = "tests.semantics.test_longterm_retry_determinism"
+disable_error_code = ["no-untyped-call"]
+
 # The e2e gate and its harness drive Beam's untyped pipeline-construction API
 # (ParDo/Map/Create/with_output_types) and generic PCollections — the same
 # relaxation the other Beam-driving test modules get. Everything non-Beam in
@@ -377,8 +675,25 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 module = "tests.semantics.test_effectively_once_e2e"
 disable_error_code = ["no-untyped-call", "type-arg"]
 
+# The Dataflow `--update` gate and its harness. `_update/pipeline.py` is a real
+# Beam pipeline (ReadFromPubSub/Map/WithKeys/WriteToPubSub, unparameterized
+# PCollections) — the same Beam-untyped-API relaxation every pipeline-driving
+# module in this repo carries — and the harness reads Dataflow's REST payloads
+# and the Pub/Sub client, both of which arrive as `Any`. Everything non-Beam,
+# non-client in these modules stays strictly typed.
+[[tool.mypy.overrides]]
+module = ["tests.dataflow._update.*", "tests.dataflow.test_update_compat"]
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
 [[tool.mypy.overrides]]
 module = "tests.semantics.test_hitl_fail_closed"
+disable_error_code = ["no-untyped-call"]
+
+# Same Beam-untyped-API relaxation for the replay reproduction gate, which
+# drives TestPipeline/TestStream to produce the activation it then replays
+# offline. Everything non-Beam in the module stays strictly typed.
+[[tool.mypy.overrides]]
+module = "tests.semantics.test_replay_reproduction"
 disable_error_code = ["no-untyped-call"]
 
 # Same Beam-untyped-API relaxation: this module drives `on_hitl` with fake
@@ -405,6 +720,7 @@ markers = [
   "dataflow: nightly-only tests against real Dataflow",
   "smoke: nightly-only real-provider smoke tests against live endpoints",
   "slow: tests that take longer than 5 seconds",
+  "spark: the weekly (never per-PR) Spark job-server leg; requires docker/compose.spark.yaml",
   "conformance_cell(adapter, scenario, leg): one adapter-conformance matrix cell (counted by the meta-test)",
 ]
 
@@ -421,6 +737,61 @@ omit = ["*/_protos/*_pb2.py"]
 # a hard backstop so coverage can't silently collapse if the ratchet step is
 # ever skipped.
 fail_under = 90
+
+# Changelog assembly. One fragment per OpenSpec change under changelog.d/,
+# named `<openspec-change-name>.<type>.md` — the changelog entry is reviewed in
+# the same diff as the code it describes. `make changelog` runs the
+# closed-registry gate (scripts/check_release.py --fragments-only) and then
+# `towncrier build`, which prepends the assembled section to CHANGELOG.md and
+# deletes the fragments it consumed.
+#
+# The type registry below is CLOSED and is the versioning policy's input
+# (docs/releasing.md): breaking/added/changed are MINOR-requiring, fixed/docs
+# are PATCH-compatible, and `internal` exists so a change with no user-visible
+# effect can satisfy the fragment-required hook. `internal` is deliberately NOT
+# registered as a towncrier type — towncrier skips fragments whose type it does
+# not know, which is exactly "renders nowhere" — while
+# scripts/check_release.py still accepts it, which is what makes it
+# distinguishable from a typo'd type. towncrier also never *deletes* what it
+# skips, so `make changelog` finishes with
+# `check_release.py --consume-internal` to keep the exactly-one-release
+# property true for internal fragments too.
+[tool.towncrier]
+package = "beam_agents"
+package_dir = "src"
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+# Keep-a-Changelog-style heading; the seeded 0.1.0 section uses the same shape.
+title_format = "## {version} - {project_date}"
+# Everything above this marker (the intro and the curated 0.1.0 section's
+# preamble) is preserved; assembled sections are inserted directly below it.
+start_string = "<!-- towncrier release notes start -->\n"
+issue_format = "{issue}"
+
+[[tool.towncrier.type]]
+directory = "breaking"
+name = "Breaking changes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "docs"
+name = "Documentation"
+showcontent = true
 
 [tool.mutmut]
 # Mutation scope is core/ ONLY. The killing test suite is tests/core, so a mutant
@@ -461,6 +832,16 @@ fail_under = 90
 #      for the same DirectRunner reason (test_transform.py also drives
 #      TestPipeline/TestStream; its non-pipeline AgentConfig/SinkResolver unit
 #      tests still cover transform.py's validation logic, just not under mutmut).
+#   3. It drops `tests/core/test_state_compat_doc.py`, the tripwire over
+#      `docs/state-compat.md`. mutmut runs pytest with the CWD inside its copied
+#      `mutants/` tree, and the copy is `src/` plus `also_copy` (`tests/`,
+#      `pyproject.toml`) — `docs/` is never copied, so the test's
+#      `parents[2] / "docs" / "state-compat.md"` resolves to a path that cannot
+#      exist and the whole session aborts during baseline stats collection. The
+#      same reason `tests/test_import.py` and `tests/core/test_mutation_gate.py`
+#      are excluded: it asserts over an artifact intentionally outside mutmut's
+#      copied tree, reads only markdown, and so cannot kill a core mutant. It
+#      runs unchanged in the normal suite, where it carries the doc contract.
 only_mutate = ["src/beam_agents/core/*"]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
 do_not_mutate = ["*/_protos/*"]
@@ -469,6 +850,7 @@ pytest_add_cli_args_test_selection = [
   "--ignore=tests/core/test_dofn_pipeline.py",
   "--ignore=tests/core/test_dofn_streaming.py",
   "--ignore=tests/core/test_mutation_gate.py",
+  "--ignore=tests/core/test_state_compat_doc.py",
   "--ignore=tests/core/test_transform.py",
   "-k",
   "not shuffle_boundary and not group_by_key_key",

@@ -24,6 +24,12 @@ from beam_agents.tools.errors import (
 )
 from beam_agents.tools.intent_info import IntentInfo
 
+__all__ = [
+    "Tool",
+    "ToolRegistry",
+    "tool",
+]
+
 # The reserved, runtime-injected parameter name. See the change design
 # (``openspec/changes/add-intent-info-for-tools/design.md``): recognition is
 # name + kind + annotation, near-misses fail fast at decoration time.
@@ -149,6 +155,11 @@ class Tool:
         }
 
     def __call__(self, *args: object, **kwargs: object) -> object:
+        """Call the wrapped function, refusing if the tool is ``side_effect``.
+
+        Raises :class:`SideEffectToolError` for a side-effecting tool: the
+        only path to an external effect is ``ctx.act(...)`` (invariant 5).
+        """
         if self.side_effect:
             raise SideEffectToolError(self.name)
         return self._func(*args, **kwargs)
@@ -211,11 +222,17 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
 
     def register(self, t: Tool) -> None:
+        """Register ``t`` under its name.
+
+        Raises :class:`ToolError` on a duplicate name: a silently shadowed
+        tool would change which code an intent executes.
+        """
         if t.name in self._tools:
             raise ToolError(f"tool {t.name!r} is already registered")
         self._tools[t.name] = t
 
     def get(self, name: str) -> Tool:
+        """The registered tool named ``name``, or :class:`ToolNotFoundError`."""
         try:
             return self._tools[name]
         except KeyError:
@@ -223,4 +240,8 @@ class ToolRegistry:
 
     @property
     def tools_schema(self) -> list[dict[str, object]]:
+        """Every registered tool's JSON schema, in registration order.
+
+        This is what is sent to the provider as the tool definitions.
+        """
         return [t.schema for t in self._tools.values()]

@@ -13,10 +13,10 @@ import os
 import pytest
 
 from beam_agents.model.anthropic import AnthropicProvider
-from beam_agents.model.anthropic import decode as anthropic_decode
+from beam_agents.model.anthropic import _decode as anthropic_decode
 from beam_agents.model.client import LlmRequest
 from beam_agents.model.openai_compat import OpenAICompatProvider
-from beam_agents.model.openai_compat import decode as openai_decode
+from beam_agents.model.openai_compat import _decode as openai_decode
 
 pytestmark = pytest.mark.smoke
 

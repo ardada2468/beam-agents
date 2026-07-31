@@ -148,6 +148,7 @@ class Harness:
     approvals: InMemoryMessageSink
     dedup: DedupStore
     calls: list[tuple[str, object]]
+    dead_letters: InMemoryMessageSink | None = None
 
     @property
     def statuses(self) -> list[ToolResult.Status]:
@@ -195,4 +196,5 @@ def build_harness(
         approvals=approvals,
         dedup=store,
         calls=[],
+        dead_letters=service_kwargs.get("dead_letter_sink"),  # type: ignore[arg-type]
     )

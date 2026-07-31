@@ -20,6 +20,12 @@ from typing import Any
 
 from beam_agents._protos import TraceEvent
 
+__all__ = [
+    "TRACE_TABLE_SCHEMA",
+    "serialize_trace_event",
+    "trace_event_to_row",
+]
+
 _EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
 
 # The trace table's layout, published beside the row encoder so the pair can be

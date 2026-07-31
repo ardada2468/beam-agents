@@ -16,7 +16,7 @@ Importing this package has no side effects.
 """
 
 from beam_agents.model.anthropic import AnthropicProvider
-from beam_agents.model.anthropic import decode as anthropic_decode
+from beam_agents.model.anthropic import _decode as anthropic_decode
 from beam_agents.model.client import (
     LLMClient,
     LlmRequest,
@@ -28,6 +28,7 @@ from beam_agents.model.client import (
     ServerError,
 )
 from beam_agents.model.facade import (
+    BudgetExceeded,
     CircuitBreaker,
     CircuitOpenError,
     CircuitState,
@@ -37,6 +38,7 @@ from beam_agents.model.facade import (
     OutputSchemaError,
     RetryPolicy,
     StagingSink,
+    TokenBudget,
     TokenUsage,
 )
 from beam_agents.model.fake import (
@@ -50,7 +52,7 @@ from beam_agents.model.fake import (
     respond_with,
 )
 from beam_agents.model.openai_compat import OpenAICompatProvider
-from beam_agents.model.openai_compat import decode as openai_compat_decode
+from beam_agents.model.openai_compat import _decode as openai_compat_decode
 from beam_agents.model.replay_cache import (
     BLOB_CAP_BYTES,
     MAX_ENTRIES,
@@ -59,12 +61,18 @@ from beam_agents.model.replay_cache import (
     ReplayEntry,
     compute_cache_key,
 )
+from beam_agents.model.vllm import (
+    VllmEndpointProvider,
+    VllmSidecarProvider,
+    vllm_sidecar_factory,
+)
 
 __all__ = [
     "BLOB_CAP_BYTES",
     "MAX_ENTRIES",
     "TTL_MS",
     "AnthropicProvider",
+    "BudgetExceeded",
     "CircuitBreaker",
     "CircuitOpenError",
     "CircuitState",
@@ -86,8 +94,11 @@ __all__ = [
     "RetryPolicy",
     "ServerError",
     "StagingSink",
+    "TokenBudget",
     "TokenUsage",
     "UnmatchedRequestError",
+    "VllmEndpointProvider",
+    "VllmSidecarProvider",
     "anthropic_decode",
     "compute_cache_key",
     "fail_then_succeed",
@@ -97,4 +108,5 @@ __all__ = [
     "openai_compat_decode",
     "raise_error",
     "respond_with",
+    "vllm_sidecar_factory",
 ]

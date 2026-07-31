@@ -27,10 +27,13 @@ from beam_agents._protos import AgentEnvelope
 from beam_agents.core.transform import AgentConfig, RunAgent
 from beam_agents.model.fake import FakeLLM
 from beam_agents.tools import ToolRegistry
+from tests.conformance._adapters.adk import adk_rules
 from tests.conformance._adapters.langgraph import langgraph_rules
+from tests.conformance._adapters.pydantic_ai import pydantic_ai_rules
 from tests.conformance._adapters.reference import reference_rules
 from tests.conformance._spec import (
     BIG_TTL_MS,
+    FLINK,
     FLINK_SCENARIOS,
     SCENARIOS_BY_NAME,
     tool_for,
@@ -48,8 +51,15 @@ if TYPE_CHECKING:
 CHECKPOINT_INTERVAL_MS = 5_000
 
 # Rule builders by adapter name: kept as a plain mapping (not registry entries)
-# so this module never imports pytest-side machinery into the container.
-_RULE_BUILDERS = {"reference": reference_rules, "langgraph": langgraph_rules}
+# so this module never imports pytest-side machinery into the container. Public
+# because the spark leg's pipeline module reuses this exact mapping — one place
+# an adapter registers its scripted rules, for every portable-runner leg.
+RULE_BUILDERS = {
+    "reference": reference_rules,
+    "langgraph": langgraph_rules,
+    "pydantic_ai": pydantic_ai_rules,
+    "adk": adk_rules,
+}
 
 
 def scenario_key(scenario_name: str, run_id: str) -> bytes:
@@ -68,7 +78,7 @@ def merged_provider(adapter_name: str) -> FakeLLM:
     cross-match."""
     rules = []
     for spec in FLINK_SCENARIOS:
-        rules.extend(_RULE_BUILDERS[adapter_name](spec.flink_variant()))
+        rules.extend(RULE_BUILDERS[adapter_name](spec.variant_for(FLINK)))
     return FakeLLM(rules)
 
 
@@ -122,7 +132,7 @@ class FlinkDispatchAgent:
             # bind at import time.
             from tests.conformance._registry import ADAPTERS_BY_NAME
 
-            spec = SCENARIOS_BY_NAME[scenario].flink_variant()
+            spec = SCENARIOS_BY_NAME[scenario].variant_for(FLINK)
             agent = ADAPTERS_BY_NAME[self._adapter_name].build_agent(spec)
             self._agents[scenario] = agent
         return await agent(ctx)

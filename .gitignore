@@ -10,6 +10,9 @@ dist/
 .venv/
 venv/
 
+# mkdocs build output (`make docs`); deployed by the docs workflow, never committed
+site/
+
 # Tooling caches
 .mypy_cache/
 .ruff_cache/
@@ -30,6 +33,18 @@ htmlcov/
 # mutmut
 .mutmut-cache
 mutants/
+
+# pyperf benchmark results and the generated gate report (make bench /
+# make bench-gate); the committed history is benchmark-baseline.toml.
+bench-results/
+bench-report.md
+
+# Diagnostic capture from `make compose-logs LOGS_DIR=...` (per-service logs,
+# TaskManager thread dumps, Flink REST snapshots). Generated on demand when a
+# docker phase goes red — the local equivalent of what CI uploads as an
+# artifact, so it is reproducible rather than committed. The default LOGS_DIR
+# is named here; a custom one is the caller's to manage.
+compose-diagnostics/
 
 # Documentation site (Node). `website/pnpm-lock.yaml` and
 # `website/generated/` stay tracked: the lockfile pins the toolchain and the

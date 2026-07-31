@@ -27,14 +27,20 @@ keeps its separate namespace.
 | `llm_calls` | Once per model call that reached the provider. A replay-cache hit is not a call. |
 | `tool_calls` | Once per read-only tool executed inline via `ctx.run_tool(...)`, on either activation surface. The tools come from `AgentConfig.tool_registry`. |
 | `intents_emitted` | Once per `ToolIntent` put on `.intents`, including one minted by a HITL escalation. |
-| `agent_errors` | Once per `.errors` record that is not an orphaned result (`activation_timeout`, `activation_error`, `hitl_timeout`, `ttl_wiped_suspension`). |
+| `agent_errors` | Once per `.errors` record that is not an orphaned result (`activation_timeout`, `activation_error`, `budget_exceeded`, `hitl_timeout`, `ttl_wiped_suspension`, `ttl_wiped_batch`, `batch_buffer_overflow`). |
 | `suspensions` | Once per committed activation whose outcome was `Suspend`. |
 | `orphaned_results` | Once per `.errors` record with reason `orphaned_result`. |
+| `longterm_upserts` | Once per long-term memory row flushed through the `MemoryStore` in a committed activation's commit tail (`docs/memory.md`). A failed activation flushes nothing and a failed flush fails the activation, so this only counts durable writes on the committed path. |
+| `events_buffered` | Once per event appended to a key's adaptive-batching buffer (`docs/batching.md`). Zero under the default `BatchPolicy.NONE`. |
+| `batch_flushes_size` | Once per **committed** flush that the `max_batch_size` threshold triggered. |
+| `batch_flushes_timer` | Once per **committed** flush that the `max_wait_ms` `FLUSH_TIMER` triggered. |
 
-Two identities hold by construction, and are worth alerting on if they break:
+Three identities hold by construction, and are worth alerting on if they break:
 
 - `intents_emitted` equals the element count on `.intents`.
 - `agent_errors + orphaned_results` equals the element count on `.errors`.
+- `batch_flushes_size + batch_flushes_timer` equals the `batch_size` sample
+  count, and each committed flush counts as exactly one `activation`.
 
 ## Distributions
 
@@ -49,8 +55,31 @@ or the benchmark suite.)
 | `overhead_ms` | Committed activation: its wall time minus its model-call and inline-tool time, clamped at zero. **This is the release-gate figure** (the budget excludes LLM/tool time). Sample count equals `activations`; a failed activation's tally does not escape, so failures contribute `activation_ms` only. |
 | `llm_ms` | Provider-reached model call. Sample count equals `llm_calls`. |
 | `tokens` | Committed activation whose provider usage was actually decoded. Activations that decoded no usage contribute no sample, so the count means "activations with known usage". |
+| `prompt_tokens` | The same activations, summed input tokens. Same sampling rule as `tokens`, so the three counts move together. |
+| `completion_tokens` | The same activations, summed output tokens. Input and output are priced differently by every provider, so the split — not the total — is what a price sheet multiplies. |
 | `memory_bytes` | Committed activation: the working-memory size that was committed. |
 | `iterations` | Committed activation: the agent steps it consumed. A resume reports only its own steps. |
+| `batch_size` | Committed batch flush: how many events it activated over. The mean is the batching ratio — how many events one activation (and one set of model calls) covered. No samples under `BatchPolicy.NONE`. |
+
+### The cost distributions vs. the token budget
+
+`tokens`/`prompt_tokens`/`completion_tokens` are **billed**: they are fed only by
+provider-reached calls, exactly as the model facade has always accumulated
+usage, so a replayed activation whose calls all came out of the replay cache
+records nothing at all.
+
+`AgentConfig.max_tokens_per_activation` ([`docs/errors.md`](errors.md)) meters
+something different on purpose. It charges every response the agent *consumes*,
+replay-cache hits included, because it is a **decision** rather than a
+measurement: the budget check is a branch taken upstream of every intent the
+activation mints, and provider-reached-ness is exactly the property a bundle
+retry does not preserve. Charging billed tokens would make a retried walk take a
+different branch than the original and break the byte-identical-intents
+guarantee.
+
+So the two are allowed to disagree, and on a replayed walk they do: the budget
+charges N, these distributions record nothing. That disagreement is the replay
+cache working, not a bug in either.
 
 ### `activation_ms` vs. `overhead_ms`
 
@@ -60,8 +89,10 @@ release-gating budget (p50 < 15 ms, p99 < 60 ms per activation) excludes LLM and
 tool time; `overhead_ms` publishes exactly that subtraction, so it is the
 distribution to alert on for the budget. It is clamped at zero: an agent that
 awaits calls concurrently can make summed call time exceed wall time. Beam
-distributions carry no percentiles (see above), so the p99 check itself still
-belongs to the benchmark suite; `overhead_ms`'s sum/count/max give the
+distributions carry no percentiles (see above), so the p99 check itself is
+rendered by the benchmark suite ([`docs/benchmarks.md`](benchmarks.md) — its
+`overhead_*ms` tiers record the *same* subtraction per activation and its gate
+enforces the p50/p99 budget); `overhead_ms`'s sum/count/max give the
 dashboard-level early warning.
 
 ## What these numbers are, and are not

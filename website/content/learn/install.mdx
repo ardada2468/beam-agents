@@ -1,18 +1,21 @@
 ---
 title: Install
-summary: How to get beam-agents today — from source, at a git ref, because no release has been published.
+summary: How to get beam-agents today — from source, at a git ref, because no release has been published to PyPI.
 status: partial
 order: 2
 verifies:
   - symbol: beam_agents.RunAgent
   - module: pyproject.toml
   - test: tests/test_import.py
+  - test: tests/test_public_surface.py
 ---
 
-<Callout kind="warning" title="No release exists yet">
-`pyproject.toml` declares version `0.0.0`, and there is no `beam-agents`
-package on PyPI — `https://pypi.org/pypi/beam-agents/json` returns 404.
-Installing from a package registry is not possible today. Install from source.
+<Callout kind="warning" title="Nothing is published yet">
+`pyproject.toml` declares version `1.0.0` and `CHANGELOG.md` carries its notes,
+but the release is cut by pushing a `v*` tag and no tag has been pushed: there
+is no `beam-agents` package on PyPI — `https://pypi.org/pypi/beam-agents/json`
+returns 404. Installing from a package registry is not possible today. Install
+from source.
 </Callout>
 
 ## Requirements
@@ -74,35 +77,34 @@ uv sync --extra langgraph
 
 ## Depending on it from another project
 
-There is no version to depend on, so depend on a commit:
+There is no published version to depend on, so depend on a commit:
 
 ```sh
 uv add "git+https://github.com/ardada2468/beam-agents@<commit-sha>"
 ```
 
-Pin the sha, not a branch. `main` moves, the declared version stays `0.0.0`
-whether or not anything changed underneath it, and nothing in this repository
-publishes a changelog you could diff instead. A branch dependency here is a
-dependency that can change meaning without changing its name.
+Pin the sha, not a branch. `main` moves, and the declared version does not
+change with it — `1.0.0` is set once by a release PR, so between releases it
+says nothing about what is underneath. A branch dependency here is a dependency
+that can change meaning without changing its name.
 
-Treat anything you build this way as built against an unreleased project: the
-public surface is `beam_agents.__all__`, and it carries no stability promise
-yet.
+The public surface is `beam_agents.__all__`, frozen name-by-name in
+`public-surface.toml` and checked by `tests/test_public_surface.py`. What that
+promise covers, and what may still change, is in
+[`docs/releasing.md`](https://github.com/ardada2468/beam-agents/blob/main/docs/releasing.md).
 
 ## Not yet implemented
 
 This page is marked **partial** because the install story is genuinely
 incomplete, not because the documentation is:
 
-- **No published package.** There is no `pip install beam-agents`, no version
-  to pin, and no changelog. Anything you build against this today is built
-  against a git ref.
-- **No versioned API.** The declared version is `0.0.0` and the project makes
-  no stability promise. The names in `beam_agents.__all__` are the intended
+- **No published package.** There is no `pip install beam-agents` yet: the
+  release workflow publishes on a `v*` tag and none has been pushed. Anything
+  you build against this today is built against a git ref.
+- **Private imports in practice.** The names in `beam_agents.__all__` are the
   public surface, but writing an agent currently also requires importing from
   modules the project documents as private — see
   [the API reference](/api) for the exact list and why each is needed.
-- **No release process.** Nothing in the repository publishes an artifact.
 
 ## When released
 

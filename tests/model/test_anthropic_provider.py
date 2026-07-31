@@ -1,7 +1,7 @@
 """Tests for the Anthropic `LLMClient` (`beam_agents.model.anthropic`).
 
 Offline only: HTTP is faked via `httpx.MockTransport`, per the
-`model-providers` requirement that taxonomy/decode behavior is verifiable
+`model-providers` requirement that taxonomy/_decode behavior is verifiable
 without a live endpoint.
 """
 
@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from beam_agents.model.anthropic import AnthropicProvider
-from beam_agents.model.anthropic import decode as anthropic_decode
+from beam_agents.model.anthropic import _decode as anthropic_decode
 from beam_agents.model.client import LlmRequest, ProviderRequestError
 
 _MESSAGES = [{"role": "user", "content": "hi"}]
@@ -96,7 +96,7 @@ def test_credentials_are_not_on_llm_request() -> None:
 
 
 def test_decode_extracts_usage_and_text() -> None:
-    # Scenario: Anthropic decode extracts usage and text.
+    # Scenario: Anthropic _decode extracts usage and text.
     decoded = anthropic_decode(json.dumps(_SUCCESS_BODY).encode())
 
     assert decoded.usage.prompt_tokens == 12

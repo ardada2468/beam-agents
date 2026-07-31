@@ -1,0 +1,63 @@
+# Docs site over the existing docs/ tree (default docs_dir). Build with
+# `make docs` (mkdocs build --strict) from the repo root: pymdownx.snippets
+# resolves example inclusions against the repo root, so the example pages
+# render examples/*.py verbatim — the same bytes tests/examples/ executes.
+site_name: beam-agents
+site_description: >-
+  A runtime for protobuf-native, per-key-deterministic streaming agents on
+  Apache Beam.
+site_url: https://ardada2468.github.io/beam-agents/
+repo_url: https://github.com/ardada2468/beam-agents
+repo_name: ardada2468/beam-agents
+edit_uri: blob/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.footer
+
+markdown_extensions:
+  # Re-declare the mkdocs defaults this list replaces.
+  - toc:
+      permalink: true
+  - tables
+  - admonition
+  - attr_list
+  - pymdownx.highlight
+  - pymdownx.superfences
+  # Example pages include examples/*.py by path; a moved file fails the build.
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+
+nav:
+  - Home: index.md
+  - Examples:
+      - Hello, world: examples/hello-world.md
+      - Fraud triage: examples/fraud-triage.md
+      - Fraud triage on Dataflow: examples/fraud-triage-dataflow.md
+      - IoT reaction: examples/iot-reaction.md
+  - API reference: api.md
+  - Operating the runtime:
+      - Beam YAML provider: yaml.md
+      - CI workflow map: ci.md
+      - Running the effector: effector.md
+      - Security: security.md
+      - Errors and dead letters: errors.md
+      - Adaptive batching: batching.md
+      - Runtime metrics: metrics.md
+      - Trace delivery: traces.md
+      - State export and replay: replay.md
+      - Releasing: releasing.md

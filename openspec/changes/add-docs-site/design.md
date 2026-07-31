@@ -1,0 +1,82 @@
+## Context
+
+See `proposal.md` — Why. Constraints that shape the approach:
+
+- What exists: five operator pages under `docs/` (`ci`, `effector`, `errors`, `metrics`, `traces`), README snippets, and one doc-contract test — the failure-streak DoFn copied verbatim from `docs/errors.md` into `tests/examples/test_failure_streak_alarm.py`, whose docstring names the pattern: changing the doc without the test (or vice versa) is a defect. There is no site tooling, no `examples/` directory, and the `docs` dependency group is empty ([pyproject.toml:101](../../../pyproject.toml:101)).
+- The unit tier's rules bind the examples hard: offline, no docker, no credentials, timer/watermark behavior scripted with `TestStream` advances — never `sleep()` (project.md, Testing tiers). `FakeLLM` is the default model in all tests; its scripted matcher/behavior rules ([fake.py:128](../../../src/beam_agents/model/fake.py:128)) are what let an example run the real runtime with zero network.
+- DirectRunner pickles pipeline functions by reference, so everything an example pipeline closes over must be module-level — the convention `tests/semantics/_helpers.py` states in its docstring ([_helpers.py:3](../../../tests/semantics/_helpers.py:3)) and the examples must follow for the same reason.
+- The public install story is source-based today (`uv sync`, `uv pip install 'beam-agents[langgraph]'` — [README.md:65](../../../README.md:65)); the package is unreleased (`version = "0.0.0"`). Site copy must not invent a PyPI install that does not exist.
+- The runtime-not-framework principle governs the *content*: example pages teach the runtime surface (`RunAgent`, outcomes, intents, HITL routing, memory) and must not grow prompt templates, orchestration helpers, or an "agent SDK" veneer.
+- `mkdocs build --strict` promotes link warnings to errors, including links pointing outside the docs tree; `docs/ci.md` has exactly two such links today ([ci.md:4](../../../docs/ci.md:4), [ci.md:14](../../../docs/ci.md:14)).
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- A navigable site over the existing pages plus a landing page, buildable offline in one command, with broken links failing CI.
+- Three examples that are *real* pipelines on the real runtime — every line runnable, every documented output asserted by a test, no pseudo-code anywhere on the site.
+- Zero possibility of doc/code drift for example sources: the docs render the same bytes the tests execute.
+- The examples double as the first user-eye-view review of the public surface: they import only what a user could.
+
+**Non-Goals:**
+
+- No generated API reference (mkdocstrings/autodoc) in this change — the deliberate public surface is five names plus adapters ([`__init__.py`](../../../src/beam_agents/__init__.py)), hand-written pages cover it, and autodoc would force the docs build environment to import `apache_beam`. Revisit when the surface grows.
+- No versioned docs (`mike`) until there is a versioned release to point them at; the site tracks `main`.
+- No migration of the existing failure-streak example in `docs/errors.md` to snippet inclusion — it stays on its verbatim-copy contract; churning a working page is not this change's job.
+- No new runtime capability, marker, or `src/` change of any kind. If an example cannot be written against today's surface, that is a surfaced finding, not something to patch here.
+- No hosted-notebook / Colab story, no Dataflow/Flink legs for the examples — the conformance matrix and e2e gate own multi-runner verification; examples own legibility.
+
+## Decisions
+
+### D1. Toolchain: mkdocs-material in the `docs` group, not Sphinx
+
+The five existing pages are plain Markdown; MkDocs consumes them as-is with zero conversion, while Sphinx would mean either reStructuredText migration or a MyST bridge — machinery with no payoff since the Non-Goals exclude autodoc, which is Sphinx's one decisive advantage. Equally load-bearing: an MkDocs build never imports the package, so the docs environment needs no `apache-beam` (the heaviest dependency in the repo) and the build cannot break when a runtime import does — the site builds from text alone, in seconds, in a `--group docs`-only sync. `mkdocs-material` is chosen over bare MkDocs for search, navigation, admonitions, and code-block copy/annotation with a single dependency (it bundles `pymdown-extensions`, which D4 needs anyway), pinned `>=9,<10` against major-version churn. The group is already included in `dev` ([pyproject.toml:57](../../../pyproject.toml:57)), so `make bootstrap` picks it up with no workflow change for contributors.
+
+### D2. The site content root is the existing `docs/` tree, unchanged in place
+
+`mkdocs.yml` sits at the repo root with the default `docs_dir`, so `docs/effector.md` *is* the site's effector page — no parallel `site-src/` tree, no symlinks, no build-time copying, and the existing relative links between pages keep working in both GitHub's file viewer and the rendered site. The only additions are `docs/index.md` (landing page: what the runtime is, the runtime-not-framework principle, the dataflow shape, and each guarantee linked to the gate that enforces it) and `docs/examples/`. The cost is that the two links from `docs/ci.md` to repo files outside `docs/` (`../openspec/project.md`, `../Makefile`) become `--strict` errors; they are rewritten as repository-absolute GitHub URLs — a rendering-only edit to prose, no normative content moved. A one-off audit task confirms no other page links outside the tree (grep shows only `ci.md` today).
+
+### D3. Examples are single, self-contained, importable modules — not packages, not notebooks
+
+Each example is one file, `examples/<name>.py`, structured identically: scripted `FakeLLM` factory, module-level agent function returning `Complete | Suspend`, a `build(pipeline)` function wiring `beam.Create`/`TestStream` → `WithKeys(entity_key)` → `RunAgent` and returning the outputs, and a `main()` under `if __name__ == "__main__"` so `uv run python -m examples.<name>` runs it on DirectRunner and prints the outputs. One file per example is what snippet inclusion (D4) renders and what a reader can hold in their head; a package-per-example invites structure the content doesn't need. Module-level definitions are required for DirectRunner pickling (Context, bullet 3). Examples import only `apache_beam`, `beam_agents`, and the public proto bindings (`beam_agents._protos` — the same import the errors-doc example already models) — **never `tests/`**: an example that leaned on test helpers would be unrunnable by the user copying it, which defeats its purpose. `examples/` joins the `mypy --strict` `files` list and ruff `src` list; it is showcase code and gets held to showcase standards, with the same per-module Beam-untyped-API mypy relaxations every pipeline-driving test module already carries (e.g. [pyproject.toml:258](../../../pyproject.toml:258)). Hatchling's wheel packages only `src/beam_agents` ([pyproject.toml:117](../../../pyproject.toml:117)), so examples ship in the repo and on the site, not in the distribution.
+
+### D4. Doc/code sync by inclusion, not by copy — the errors.md pattern, mechanized
+
+`docs/errors.md` and `test_failure_streak_alarm.py` stay in sync by convention: the code is copied verbatim between two marker comments and the docstring declares divergence a defect. That works, but it is policed by review. The example pages instead render the module with `pymdownx.snippets` (`--8<-- "examples/hello_world.py"`, `base_path` at the repo root, `check_paths: true` so a moved file fails the build): the docs page and the file the tests execute are the same bytes, and drift is impossible rather than forbidden. Whole-file inclusion is deliberate — the examples are written to be read top to bottom, and section markers (`--8<-- [start:...]` comments) would put doc plumbing inside code the page presents as exemplary. The trade-off — the page renders everything, including the `main()` scaffold — is acceptable at the target size (each module well under ~150 lines) and keeps the "every line shown is a line that runs" claim literal. A unit-tier test (`tests/examples/test_docs_snippets.py`) additionally asserts each `docs/examples/*.md` page names its example module in a snippet directive and that the path exists, so the offline lane catches a broken inclusion without waiting for the docs build.
+
+### D5. The three example scenarios, grounded in the runtime they demonstrate
+
+- **hello-world** exercises the fast path and nothing else: one `AgentEnvelope` via `beam.Create`, keyed upstream with `beam.WithKeys(...)` exactly as `RunAgent`'s own construction-time error message instructs ([transform.py:464](../../../src/beam_agents/core/transform.py:464)), an agent that awaits [`ctx.call_model`](../../../src/beam_agents/core/context.py:469) once and returns `Complete`, and a `FakeLLM` with a single `match_any()` rule. It is deliberately the pipeline-shaped counterpart of the conformance matrix's single-shot scenario.
+- **fraud-triage** demonstrates the runtime's differentiating flow — suspension, HITL, fail-closed timeouts — on the workload `project.md` names first. Two accounts flow through one streaming `TestPipeline`: the agent triages a transaction via the model (`FakeLLM` matcher on the payload decides "suspicious"), calls `ctx.request_approval(...)`, and returns `Suspend(timeout_ms=...)`. Account A's approval envelope re-enters on the same key (a scripted `TestStream` branch standing in for the approvals topic — the page says so, and points at `docs/effector.md` for the real loop) and resumes to a freeze decision. Account B receives no decision; a scripted processing-time advance fires the HITL timer and the default deny route emits its deterministic fallback output ([hitl.py:130](../../../src/beam_agents/hitl.py:130)) — fail-closed on the page, exactly as in invariant 6. The approval branch computes the pending intent's id with [`intent_id_for`](../../../src/beam_agents/core/agent.py:43), which doubles as the site's concrete demonstration that intent IDs are pure functions of `(entity_key, seq, step_index)`; the page states plainly that in production the effector supplies this id on the approvals topic and the reader never computes it.
+- **iot-reaction** demonstrates keyed working memory on a stream: a `TestStream` of per-device sensor readings, the agent appending each reading to a bounded ring ([facade.py:165](../../../src/beam_agents/memory/facade.py:165)) and reading it back with `ring(...)`, completing quietly for normal readings (no model call — the runtime does not charge tokens for uninteresting events) and calling the model for a reaction decision only when the in-memory window crosses the scripted threshold. Assertions pin both the reaction outputs and the *count* of `FakeLLM` calls, making "no model call on quiet readings" a tested property, not prose.
+
+Each example's test derives its assertions from the docs page's stated outputs — the scenario → test → code chain the project mandates, with the docs page playing the scenario role it already plays for `errors.md`.
+
+### D6. CI and deployment: a fifth workflow, strict build gating PRs, Pages from `main`
+
+The docs build gets its own `docs.yml` rather than a step inside `ci.yml`: the build needs only the `docs` group (no test/lint groups, no Python matrix), runs in seconds, and keeping it separate means a prose PR gets a fast signal and a runtime PR's failure modes stay legible — the same isolate-the-signal reasoning that kept `make test-conformance-flink` out of `make test-semantics`. On pull requests the workflow runs `make docs` (`mkdocs build --strict`); on pushes to `main` it additionally publishes via `actions/upload-pages-artifact` + `actions/deploy-pages` with a permissions-scoped `GITHUB_TOKEN` — no `gh-pages` branch to force-push, no long-lived credential, matching the WIF posture `docs/ci.md` documents for nightly. `docs/ci.md`'s workflow table gains the row (trigger, tier "docs", not merge-required initially — flipping it required is a branch-protection setting, recorded as an Open Question). The example *tests* need none of this: they are ordinary unit-tier tests riding `make test-unit`.
+
+### D7. Example tests live in `tests/examples/`, not next to the examples
+
+The executable contract stays where the repo already keeps it — `tests/examples/` alongside the failure-streak test — so the unit lane's discovery (`testpaths = ["tests"]`), the coverage run, and the semantics-partition check all see them with zero configuration. The tests import the example modules (`from examples.fraud_triage import build, ...`) and drive them under `TestPipeline` with `assert_that`, plus targeted `FakeLLM` call-count assertions where the page makes a claim about calls. No new pytest markers: the closed registry stays closed, and the examples are plain offline unit tests by every criterion the tiers define.
+
+## Risks / Trade-offs
+
+- [Site copy overpromises relative to an unreleased 0.0.0 package] → the landing page states the project's status and installs from source exactly as the README does; no PyPI instructions until a release exists.
+- [The fraud example teaches readers to compute `intent_id_for` themselves, which production code should never need] → the page carries an explicit admonition: the deterministic id is shown to demystify the effectively-once argument; real approvals arrive from the effector carrying the id. The example still runs the real formula, so the demonstration is honest.
+- [`mkdocs-material` major releases move markup/config] → pinned `>=9,<10`; the strict build catches breakage at upgrade time, in the docs workflow, away from runtime CI.
+- [Whole-file snippet inclusion renders scaffold (`main()`, prints) alongside the teaching content] → accepted per D4; the alternative (section markers) pollutes exemplary code with doc plumbing. Revisit only if an example outgrows ~150 lines, which is itself a smell worth resisting.
+- [Example refactors silently re-render the site] → that is the *point* of inclusion — but behavior is still pinned: the tests assert documented outputs, so a refactor that changes what the page demonstrates fails `make test-unit` before it publishes.
+- [Docs workflow becomes a merge bottleneck for prose typos] → the strict build is seconds; and until it is marked required, it is signal without blocking (Open Question 2).
+- [`TestStream` processing-time scripting for the HITL timeout is the subtlest Beam API in the examples and could intimidate the reader] → the fraud page separates the narrative into "the agent" (simple) and "the harness" (scripted clock), and links the HITL fail-closed semantics gate as the authoritative treatment.
+
+## Migration Plan
+
+Purely additive; no wire, state, schema, or runtime behavior implications and no `state_schema_version` movement. Landing order inside the change: examples + tests first (they gate on `make test-unit` immediately), then toolchain + pages (gated by `make docs`), then the workflow. The site can be un-deployed by deleting `docs.yml` with zero effect on any other gate; the examples and their tests remain valuable standalone. Existing links into `docs/*.md` from the README and from code comments keep resolving because the files do not move (D2). `uv.lock` regenerates once for the filled `docs` group; the locked unit-lane sync in `ci.yml` is unaffected because it never requests the group.
+
+## Open Questions
+
+1. **Pages hosting settings** — enabling GitHub Pages (source: Actions) is a repository setting outside version control; the workflow is written for it but first deployment needs the toggle flipped. Custom domain: none proposed.
+2. **Should the `docs` workflow be a required check?** Proposed: not initially; revisit once it has run quietly for a few weeks, then add to branch protection alongside `ci`/`integration`/`quality`.
+3. **Later: generated API reference and versioned docs** — both deliberately out of scope (Non-Goals); the decision point is the first tagged release and/or a public-surface expansion beyond the current five re-exports.
+4. **Should `docs/errors.md`'s failure-streak example migrate to snippet inclusion for uniformity?** Deferred — it would move the canonical source from the doc into a file the doc includes, inverting that test's stated contract; worth doing only as its own small change if the copy pattern ever actually drifts.

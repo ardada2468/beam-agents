@@ -1,0 +1,25 @@
+# Per-benchmark median baselines (ms) for scripts/bench_gate.py, in the same
+# ratchet style as coverage-baseline.toml and mutation-baseline.toml: the gate
+# fails when a median regresses beyond the tolerance band, and prints the
+# lower-the-baseline instruction when one improves beyond it, so gains are
+# locked in deliberately rather than silently.
+#
+# tolerance is the relative band on every median comparison (0.25 = 25%). It
+# is a guess until nightly variance data exists; recalibrate it here, not in
+# the gate. invariance_tolerance_ms is the absolute slack (ms) the 500/2000 ms
+# overhead tiers' medians may sit above the 50 ms tier's before the gate calls
+# the runtime wait-scaled (design D2/D4) — absolute, because a relative band
+# on a low-single-digit-millisecond median would gate on scheduler noise.
+tolerance = 0.25
+invariance_tolerance_ms = 10.0
+
+# Seeding procedure: run the nightly `bench` job (workflow_dispatch) on a
+# GitHub-hosted runner, then copy each `seed medians_ms.<name> = <value>`
+# instruction the red gate prints into this table, noting the runner
+# generation. An entry missing here fails the gate loudly — an unseeded
+# baseline is a gate that is not gating — so the first hosted-runner run after
+# adding a benchmark is red by construction until its median is committed.
+#
+# NOT yet seeded: numbers measured on developer hardware must not be committed
+# (the gate runs on CI hardware; see docs/benchmarks.md for the procedure).
+[medians_ms]

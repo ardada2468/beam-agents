@@ -8,22 +8,25 @@ actionable message rather than on the first message.
 from __future__ import annotations
 
 import asyncio
+import base64
 import sys
 import types
 
 import pytest
 
 from beam_agents.effector.__main__ import (
+    _build_service,
+    _load_registry,
+    _serve,
     build_parser,
-    build_service,
     config_from_args,
-    load_registry,
     main,
-    serve,
+    transport_security_from_args,
 )
 from beam_agents.effector.dedup import Claimed, InMemoryDedupStore
 from beam_agents.effector.runner import EffectorToolRunner
 from beam_agents.effector.service import EffectorService
+from beam_agents.effector.sinks import KafkaMessageSink
 from beam_agents.effector.sources import KafkaIntentSource
 from beam_agents.tools import ToolRegistry, tool
 
@@ -58,18 +61,18 @@ def _args(**overrides: str) -> object:
 
 
 def test_a_registry_is_loaded_from_its_import_path() -> None:
-    assert load_registry("tests.effector.test_main:TOOLS") is TOOLS
+    assert _load_registry("tests.effector.test_main:TOOLS") is TOOLS
 
 
 @pytest.mark.parametrize("path", ["tests.effector.test_main", "TOOLS", ""])
 def test_a_malformed_registry_path_is_rejected(path: str) -> None:
     with pytest.raises(ValueError, match="module:attribute"):
-        load_registry(path)
+        _load_registry(path)
 
 
 def test_an_unknown_registry_attribute_is_rejected() -> None:
     with pytest.raises(ValueError, match="no attribute"):
-        load_registry("tests.effector.test_main:NOPE")
+        _load_registry("tests.effector.test_main:NOPE")
 
 
 def test_config_is_built_from_parsed_arguments() -> None:
@@ -118,7 +121,7 @@ async def test_serve_shuts_down_cleanly_when_cancelled() -> None:
     # collaborators instead of leaving claims and connections dangling.
     harness = build_harness(registry=TOOLS, intents=[an_intent()], clock=lambda: NOW_MS)
 
-    await serve(harness.service)
+    await _serve(harness.service)
 
     assert harness.source.closed
     assert harness.results.closed
@@ -158,7 +161,7 @@ async def test_serve_releases_unexecuted_claims_on_shutdown() -> None:
         runner=_StallingRunner(tool_timeout_ms=1_000),
     )
 
-    serving = asyncio.create_task(serve(harness.service))
+    serving = asyncio.create_task(_serve(harness.service))
     for _ in range(50):
         await asyncio.sleep(0)
         if "claim" in dedup.calls:
@@ -176,7 +179,7 @@ async def test_serve_releases_unexecuted_claims_on_shutdown() -> None:
 def test_the_service_builder_wires_every_adapter_from_the_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # `build_service` is the only place the URIs become live clients; a wrong
+    # `_build_service` is the only place the URIs become live clients; a wrong
     # dispatch here would surface as a connection error in production, not a
     # test failure.
     module = types.ModuleType("aiokafka")
@@ -187,11 +190,113 @@ def test_the_service_builder_wires_every_adapter_from_the_config(
     monkeypatch.setitem(sys.modules, "aiokafka", module)
 
     config = config_from_args(_args())  # type: ignore[arg-type]
-    service = build_service(config, TOOLS)
+    service = _build_service(config, TOOLS)
 
     assert isinstance(service, EffectorService)
     assert isinstance(service._source, KafkaIntentSource)
     assert isinstance(service._dedup, InMemoryDedupStore)
+
+
+def _fake_aiokafka(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = types.ModuleType("aiokafka")
+    module.AIOKafkaConsumer = _FakeConsumer  # type: ignore[attr-defined]
+    module.AIOKafkaProducer = _FakeProducer  # type: ignore[attr-defined]
+    module.TopicPartition = _FakeTopicPartition  # type: ignore[attr-defined]
+    module.ConsumerRebalanceListener = object  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiokafka", module)
+
+
+# --- effector-security: the CLI's half of the verification wiring ------------
+
+
+def test_verification_settings_reach_the_config_from_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MAIN_KEYS", f"k1={base64.b64encode(b'k' * 32).decode()}")
+    args = _args(
+        verify_intents="require",
+        signing_keys="env:TEST_MAIN_KEYS",
+        dead_letters_to="kafka://localhost:9092/dead-letters",
+    )
+
+    config = config_from_args(args)  # type: ignore[arg-type]
+
+    assert config.verify_intents == "require"
+    assert config.signing_keys == "env:TEST_MAIN_KEYS"
+    assert config.dead_letters_to == "kafka://localhost:9092/dead-letters"
+
+
+def test_the_service_builder_loads_the_keyring_and_the_dead_letter_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_aiokafka(monkeypatch)
+    monkeypatch.setenv("TEST_MAIN_KEYS", f"k1={base64.b64encode(b'k' * 32).decode()}")
+    config = config_from_args(
+        _args(
+            verify_intents="require",
+            signing_keys="env:TEST_MAIN_KEYS",
+            dead_letters_to="kafka://localhost:9092/dead-letters",
+        )  # type: ignore[arg-type]
+    )
+
+    service = _build_service(config, TOOLS)
+
+    assert service._keyring == {"k1": b"k" * 32}
+    assert isinstance(service._dead_letter_sink, KafkaMessageSink)
+
+
+def test_a_verifying_mode_with_an_unresolvable_keyring_fails_before_any_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Scenario: A verifying mode without a keyring fails at startup — the
+    # *unresolvable* half. Reference syntax is fine; the secret was never
+    # materialized, which is a mis-provisioned deployment, not a typo.
+    monkeypatch.delenv("TEST_MAIN_MISSING_KEYS", raising=False)
+    config = config_from_args(
+        _args(verify_intents="permissive", signing_keys="env:TEST_MAIN_MISSING_KEYS")  # type: ignore[arg-type]
+    )
+    # aiokafka is deliberately NOT installed here: if the keyring were loaded
+    # after client construction this would raise ImportError instead.
+    with pytest.raises(ValueError, match="TEST_MAIN_MISSING_KEYS"):
+        _build_service(config, TOOLS)
+
+
+def test_off_mode_builds_no_keyring_and_no_dead_letter_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_aiokafka(monkeypatch)
+
+    service = _build_service(config_from_args(_args()), TOOLS)  # type: ignore[arg-type]
+
+    assert service._keyring == {}
+    assert service._dead_letter_sink is None
+
+
+def test_transport_security_is_absent_unless_a_flag_asks_for_it() -> None:
+    # An unconfigured deployment must construct exactly the clients it did
+    # before this change, so "no flags" has to mean `None`, not an empty block.
+    assert transport_security_from_args(build_parser().parse_args([])) is None
+
+
+def test_transport_security_flags_become_a_validated_block() -> None:
+    args = build_parser().parse_args(
+        [
+            "--kafka-security-protocol",
+            "SASL_SSL",
+            "--kafka-sasl-mechanism",
+            "SCRAM-SHA-512",
+            "--kafka-sasl-username-reference",
+            "env:KAFKA_USER",
+            "--kafka-sasl-password-reference",
+            "env:KAFKA_PASSWORD",
+        ]
+    )
+
+    security = transport_security_from_args(args)
+
+    assert security is not None
+    assert security.security_protocol == "SASL_SSL"
+    assert security.sasl_password_reference == "env:KAFKA_PASSWORD"
 
 
 def test_main_runs_the_service_to_completion(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,9 +308,9 @@ def test_main_runs_the_service_to_completion(monkeypatch: pytest.MonkeyPatch) ->
         served.append(service)
 
     monkeypatch.setattr(
-        "beam_agents.effector.__main__.build_service", lambda config, registry: "svc"
+        "beam_agents.effector.__main__._build_service", lambda config, registry: "svc"
     )
-    monkeypatch.setattr("beam_agents.effector.__main__.serve", _fake_serve)
+    monkeypatch.setattr("beam_agents.effector.__main__._serve", _fake_serve)
 
     code = main(
         [
@@ -229,7 +334,7 @@ def test_main_constructs_the_service_inside_the_event_loop(
 ) -> None:
     # Regression (found by the effectively-once e2e gate): the Kafka adapters
     # construct aiokafka clients in __init__, and aiokafka requires a running
-    # loop at construction — so `main` must call `build_service` from inside
+    # loop at construction — so `main` must call `_build_service` from inside
     # the loop it starts. Built outside, the CLI crashes at startup for every
     # real (non-memory://) transport, which no memory://-based test can see.
     built_inside_loop: list[bool] = []
@@ -242,8 +347,8 @@ def test_main_constructs_the_service_inside_the_event_loop(
     async def _fake_serve(service: object) -> None:
         assert service == "svc"
 
-    monkeypatch.setattr("beam_agents.effector.__main__.build_service", _probing_build)
-    monkeypatch.setattr("beam_agents.effector.__main__.serve", _fake_serve)
+    monkeypatch.setattr("beam_agents.effector.__main__._build_service", _probing_build)
+    monkeypatch.setattr("beam_agents.effector.__main__._serve", _fake_serve)
 
     code = main(
         [

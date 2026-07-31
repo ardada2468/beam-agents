@@ -6,6 +6,8 @@ round-trips, oneof exclusivity, and unknown-field forward compatibility.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import beam_agents._protos as protos
 from beam_agents._protos import (
     ActivationErrorRecord,
@@ -13,10 +15,13 @@ from beam_agents._protos import (
     Continuation,
     LlmCacheBlob,
     MemoryBlob,
+    StateSnapshot,
     ToolIntent,
     ToolResult,
     TraceEvent,
 )
+
+GOLDEN_DIR = Path(__file__).parent / "golden"
 
 
 def _varint(value: int) -> bytes:
@@ -41,9 +46,9 @@ def _unknown_field(field_number: int, value: int) -> bytes:
 # --- Requirement: Proto package and committed generation ---------------------
 
 
-def test_all_eight_message_classes_importable() -> None:
+def test_all_ten_message_classes_importable() -> None:
     # Scenario: Bindings are importable from the installed package.
-    for name in (
+    expected = {
         "MemoryBlob",
         "ToolIntent",
         "ToolResult",
@@ -52,18 +57,12 @@ def test_all_eight_message_classes_importable() -> None:
         "Continuation",
         "LlmCacheBlob",
         "ActivationErrorRecord",
-    ):
-        assert hasattr(protos, name)
-    assert set(protos.__all__) == {
-        "MemoryBlob",
-        "ToolIntent",
-        "ToolResult",
-        "TraceEvent",
-        "AgentEnvelope",
-        "Continuation",
-        "LlmCacheBlob",
-        "ActivationErrorRecord",
+        "LongTermRecord",
+        "StateSnapshot",
     }
+    for name in expected:
+        assert hasattr(protos, name)
+    assert set(protos.__all__) == expected
 
 
 # --- Requirement: MemoryBlob carries versioned, LRU-orderable memory ---------
@@ -210,6 +209,75 @@ def test_intent_without_kind_reads_as_unspecified_tool_call() -> None:
     assert parsed.kind != ToolIntent.APPROVAL
 
 
+def test_signature_fields_round_trip() -> None:
+    # Scenario: Signature fields round-trip.
+    signature = bytes(range(32))
+    intent = ToolIntent(
+        intent_id="11111111-2222-5333-8444-555555555555",
+        tool_name="http.post",
+        signature_scheme=ToolIntent.HMAC_SHA256,
+        signing_key_id="k1",
+        signature=signature,
+    )
+
+    parsed = ToolIntent()
+    parsed.ParseFromString(intent.SerializeToString(deterministic=True))
+
+    assert parsed.signature_scheme == ToolIntent.HMAC_SHA256
+    assert parsed.signing_key_id == "k1"
+    assert parsed.signature == signature
+    assert len(parsed.signature) == 32
+
+
+def test_a_pre_signature_intent_decodes_as_unsigned() -> None:
+    # Scenario: A pre-signature intent decodes as unsigned.
+    # An unset proto3 scalar is absent from the wire, so bytes produced before
+    # the signature fields existed are exactly these bytes. The committed
+    # `tests/core/golden/v1/tool_intent.bin` blob is the real pre-signature
+    # artifact; test_schema_compat.py asserts it there.
+    legacy = ToolIntent(intent_id="legacy", tool_name="http.post").SerializeToString()
+
+    parsed = ToolIntent()
+    parsed.ParseFromString(legacy)
+
+    assert parsed.signature_scheme == ToolIntent.SIGNATURE_SCHEME_UNSPECIFIED
+    assert parsed.signature == b""
+    assert parsed.signing_key_id == ""
+
+
+def test_a_future_field_intent_still_yields_a_stable_signing_input() -> None:
+    # Scenario: A future-field intent still yields a stable signing input.
+    #
+    # The signing input is the message with its three signature fields cleared,
+    # serialized deterministically. A verifier running older bindings sees a
+    # newer, higher-numbered field as an *unknown* field, which protobuf
+    # preserves and re-emits after the known fields — matching the signer's
+    # sorted-by-number layout. Signing the whole message therefore stays stable
+    # across schema skew, which is what makes the additive-evolution rule
+    # load-bearing for signatures rather than merely tidy.
+    future_field = _unknown_field(500, 42)
+    base = ToolIntent(intent_id="keep-me", seq=7, tool_name="t")
+    signer_input = base.SerializeToString(deterministic=True) + future_field
+
+    delivered = ToolIntent()
+    delivered.ParseFromString(
+        signer_input
+        + ToolIntent(
+            signature_scheme=ToolIntent.HMAC_SHA256,
+            signing_key_id="k1",
+            signature=b"\xaa" * 32,
+        ).SerializeToString(deterministic=True)
+    )
+
+    cleared = ToolIntent()
+    cleared.CopyFrom(delivered)
+    cleared.ClearField("signature_scheme")
+    cleared.ClearField("signing_key_id")
+    cleared.ClearField("signature")
+
+    assert cleared.SerializeToString(deterministic=True) == signer_input
+
+
 # --- Requirement: ToolResult correlates outcomes with terminal statuses ------
 
 
@@ -274,8 +342,8 @@ def test_agent_envelope_oneof_is_exclusive() -> None:
     assert not envelope.HasField("tool_result")
 
 
-def test_agent_envelope_all_three_variants_round_trip() -> None:
-    # Scenario: All three variants round-trip.
+def test_agent_envelope_all_four_variants_round_trip() -> None:
+    # Scenario: All four variants round-trip.
     external = AgentEnvelope(entity_key=b"k", event_time_ms=1, external_event=b"raw-bytes")
     result_env = AgentEnvelope(
         entity_key=b"k",
@@ -289,16 +357,126 @@ def test_agent_envelope_all_three_variants_round_trip() -> None:
             intent_id="i", approved=True, approver="alice", decided_at_ms=99
         ),
     )
+    export_env = AgentEnvelope(
+        entity_key=b"k",
+        event_time_ms=4,
+        export_request=AgentEnvelope.StateExportRequest(request_id="req-1"),
+    )
 
     for env, expected_case in (
         (external, "external_event"),
         (result_env, "tool_result"),
         (approval_env, "approval"),
+        (export_env, "export_request"),
     ):
         parsed = AgentEnvelope()
         parsed.ParseFromString(env.SerializeToString())
         assert parsed.WhichOneof("payload") == expected_case
         assert parsed == env
+    assert export_env.export_request.request_id == "req-1"
+
+
+def test_an_envelope_written_before_export_request_still_decodes() -> None:
+    # Scenario: An envelope written before export_request still decodes.
+    # `v1/agent_envelope.bin` was serialized before the variant existed, so
+    # these are the real predating bytes rather than a reconstruction.
+    parsed = AgentEnvelope()
+    parsed.ParseFromString((GOLDEN_DIR / "v1" / "agent_envelope.bin").read_bytes())
+
+    assert parsed.entity_key == b"entity-1"
+    assert parsed.event_time_ms == 1_700_000_000_000
+    assert parsed.WhichOneof("payload") == "approval"
+    assert parsed.approval.intent_id == "11111111-2222-5333-8444-555555555555"
+    assert parsed.approval.approved is True
+    assert parsed.approval.approver == "alice@example.test"
+    assert parsed.approval.decided_at_ms == 1_700_000_000_500
+    # The new variant reads as absent, never as a parse failure.
+    assert not parsed.HasField("export_request")
+
+
+def test_export_request_variant_clears_the_others() -> None:
+    # Scenario: Exactly one payload variant is set, extended to the new variant.
+    envelope = AgentEnvelope(entity_key=b"k", event_time_ms=5)
+    envelope.approval.approved = True
+    envelope.export_request.request_id = "req-1"
+
+    assert envelope.WhichOneof("payload") == "export_request"
+    assert not envelope.HasField("approval")
+
+
+# --- Requirement: StateSnapshot carries a versioned per-key state image -------
+
+
+def _populated_snapshot() -> StateSnapshot:
+    snapshot = StateSnapshot(
+        state_schema_version=1,
+        entity_key=b"entity-1",
+        seq=7,
+        snapshot_at_ms=1_700_000_000_000,
+        request_id="req-1",
+    )
+    snapshot.memory.state_schema_version = 1
+    snapshot.memory.total_value_bytes = 4
+    snapshot.memory.entries.add(key="alpha", value=b"aa", last_access_ms=1)
+    snapshot.memory.entries.add(key="beta", value=b"bb", last_access_ms=2)
+    snapshot.llm_cache.state_schema_version = 1
+    snapshot.llm_cache.entries.add(
+        cache_key="0" * 64, response=b"hello", response_digest=b"d", created_at_ms=1
+    )
+    snapshot.continuation.state_schema_version = 1
+    snapshot.continuation.seq = 7
+    snapshot.continuation.step_index = 2
+    snapshot.continuation.pending_intent_ids.append("i-1")
+    snapshot.continuation.adapter = "test"
+    snapshot.continuation.snapshot = b"waiting"
+    snapshot.pending.add(intent_id="i-1", entity_key=b"entity-1", seq=7, tool_name="http.post")
+    snapshot.pending.add(intent_id="i-2", entity_key=b"entity-1", seq=7, tool_name="http.get")
+    return snapshot
+
+
+def test_a_populated_snapshot_round_trips() -> None:
+    # Scenario: A populated snapshot round-trips.
+    snapshot = _populated_snapshot()
+
+    parsed = StateSnapshot()
+    parsed.ParseFromString(snapshot.SerializeToString(deterministic=True))
+
+    assert parsed == snapshot
+    assert [e.key for e in parsed.memory.entries] == ["alpha", "beta"]
+    assert [e.cache_key for e in parsed.llm_cache.entries] == ["0" * 64]
+    assert [i.intent_id for i in parsed.pending] == ["i-1", "i-2"]
+    assert parsed.continuation.snapshot == b"waiting"
+    assert parsed.request_id == "req-1"
+
+
+def test_embedded_blobs_keep_their_own_schema_versions() -> None:
+    # Scenario: Embedded blobs keep their own schema versions.
+    snapshot = _populated_snapshot()
+    snapshot.state_schema_version = 1
+    snapshot.memory.state_schema_version = 9
+    snapshot.llm_cache.state_schema_version = 4
+    snapshot.continuation.state_schema_version = 3
+
+    parsed = StateSnapshot()
+    parsed.ParseFromString(snapshot.SerializeToString(deterministic=True))
+
+    assert parsed.state_schema_version == 1
+    assert parsed.memory.state_schema_version == 9
+    assert parsed.llm_cache.state_schema_version == 4
+    assert parsed.continuation.state_schema_version == 3
+
+
+def test_a_snapshot_without_a_continuation_reports_it_absent() -> None:
+    # A key that is not suspended carries no `Continuation`: the loader must be
+    # able to tell "not suspended" from "suspended at step 0", which proto3
+    # message presence is exactly what gives it.
+    snapshot = StateSnapshot(state_schema_version=1, entity_key=b"k", seq=3)
+
+    parsed = StateSnapshot()
+    parsed.ParseFromString(snapshot.SerializeToString(deterministic=True))
+
+    assert not parsed.HasField("continuation")
+    assert list(parsed.pending) == []
 
 
 # --- Requirement: ActivationErrorRecord carries dead-letter triage fields -----

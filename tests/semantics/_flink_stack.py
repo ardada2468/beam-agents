@@ -60,10 +60,21 @@ class FlinkStackControl:
     # -- freshness (e2e design F8) ----------------------------------------------
 
     def freshen_flink(self) -> None:
-        """Restart the Flink-side services so no prior run's degradation leaks in."""
+        """Restart the Flink-side services so no prior run's degradation leaks in.
+
+        The JobManager is in the restart set, and was not until 2026-07-31.
+        Leaving it out made freshness a half-measure: it is the one Flink-side
+        service that outlives every submission of a whole CI job — the e2e
+        gate's retries plus one leg per conformance adapter — and its blob
+        server is where the accumulated degradation actually surfaced. The
+        failure looked like `uploadUserJars` dying with `PUT operation failed:
+        Broken pipe`, or a job accepted and then never leaving submission with
+        its source stuck at in=0/out=0. Restarting the TaskManager under a
+        JobManager that has been up for forty minutes does not clear that.
+        """
         self._cancel_all_jobs()
         subprocess.run(
-            [*COMPOSE, "restart", "flink-taskmanager", "flink-jobserver"],
+            [*COMPOSE, "restart", "flink-jobmanager", "flink-taskmanager", "flink-jobserver"],
             check=True,
             capture_output=True,
         )

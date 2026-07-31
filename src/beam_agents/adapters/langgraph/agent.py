@@ -36,11 +36,11 @@ from langgraph.types import Command
 
 from beam_agents._protos import ToolResult
 from beam_agents.adapters.langgraph.checkpoint import BeamCheckpointSaver
-from beam_agents.adapters.langgraph.toolnode import TOOL_CALLS_MARKER
+from beam_agents.adapters.langgraph.toolnode import _TOOL_CALLS_MARKER
 from beam_agents.adapters.langgraph.transport import (
     _current_activation,
-    install_transport,
-    warn_fallback,
+    _install_transport,
+    _warn_fallback,
 )
 from beam_agents.core.agent import Complete, Outcome, Suspend
 
@@ -51,6 +51,10 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from beam_agents.core.context import ActivationContext
+
+__all__ = [
+    "LangGraphAgent",
+]
 
 _KIND_APPROVAL = "approval"
 _KIND_TOOL = "tool"
@@ -96,6 +100,15 @@ class LangGraphAgent:
         self._instrumented = False
 
     async def __call__(self, ctx: ActivationContext) -> Outcome:
+        """Drive one LangGraph run as a beam-agents activation.
+
+        Resumes from ``ctx.snapshot`` when ``ctx.is_resume``, replaying the
+        re-injected results into the framework; otherwise starts fresh. Returns
+        ``Suspend`` when the run staged an intent and yielded, ``Complete``
+        otherwise. Model calls made by the framework are served through the
+        activation's cache-first path by the installed transport, so a retried
+        bundle reaches the provider zero additional times (invariant 3).
+        """
         self._instrument_chat_models()
         saver = BeamCheckpointSaver(ctx.memory)
         compiled = self._compiled_with(saver)
@@ -109,7 +122,7 @@ class LangGraphAgent:
                 return self._suspend_with(snapshot)
             result = await self._run(compiled, ctx, Command(resume=self._resume_map(snapshot)))
         else:
-            result = await self._run(compiled, ctx, self._decode_event(ctx.event))
+            result = await self._run(compiled, ctx, self._decode_event(ctx.single_event))
 
         if isinstance(result, dict) and "__interrupt__" in result:
             return self._stage_and_suspend(ctx, result["__interrupt__"])
@@ -136,8 +149,8 @@ class LangGraphAgent:
             return
         self._instrumented = True
         for model in self._chat_models:
-            if not install_transport(model):
-                warn_fallback(model)
+            if not _install_transport(model):
+                _warn_fallback(model)
 
     def _compiled_with(self, saver: BeamCheckpointSaver) -> CompiledStateGraph:  # type: ignore[type-arg]
         if isinstance(self._graph, StateGraph):
@@ -148,8 +161,8 @@ class LangGraphAgent:
         """Stage one intent per pending item and build the resume-map snapshot."""
         pending: dict[str, dict[str, Any]] = {}
         for intr in interrupts:
-            if isinstance(intr.value, dict) and TOOL_CALLS_MARKER in intr.value:
-                for call in intr.value[TOOL_CALLS_MARKER]:
+            if isinstance(intr.value, dict) and _TOOL_CALLS_MARKER in intr.value:
+                for call in intr.value[_TOOL_CALLS_MARKER]:
                     intent_id = ctx.act(call["name"], _canonical_json(call["args"]))
                     pending[intent_id] = {
                         "kind": _KIND_TOOL,
