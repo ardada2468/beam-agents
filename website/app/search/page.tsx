@@ -9,6 +9,10 @@ import { absoluteUrl } from '@/lib/site';
  * This route is the no-JavaScript path: the header's search box is a real GET
  * form, and this page answers it with results already in the HTML. It carries
  * `noindex` because a search-results URL is not content.
+ *
+ * Presentation follows the landing page: a reading-width `.shell-narrow`, flat
+ * `.field` and `.btn` controls, and results as hairline-separated rows rather
+ * than a stack of bordered cards.
  */
 export const metadata: Metadata = {
   title: 'Search',
@@ -33,10 +37,19 @@ export default async function SearchPage({
   const results = query ? searchServerSide(query) : [];
 
   return (
-    <div className="mx-auto max-w-3xl px-5 py-10">
-      <h1 className="text-[1.9rem] leading-tight font-bold tracking-tight">Search</h1>
+    <div className="shell-narrow pt-12 pb-16 sm:pt-16 sm:pb-20">
+      <p className="eyebrow">Documentation search</p>
 
-      <form action="/search" method="get" role="search" className="mt-5 flex gap-2">
+      <h1 className="h-page mt-4">Search</h1>
+
+      <p className="lede mt-5">
+        Every indexable page and every public API symbol, matched on this server. The header&rsquo;s
+        box does the same search in the browser; this page is the answer without JavaScript.
+      </p>
+
+      {/* The row stretches, so the input takes the button's height rather than
+          the two controls disagreeing by a few pixels. */}
+      <form action="/search" method="get" role="search" className="mt-8 flex gap-2">
         <label htmlFor="q" className="sr-only">
           Search query
         </label>
@@ -45,46 +58,48 @@ export default async function SearchPage({
           name="q"
           type="search"
           defaultValue={query}
-          className="w-full rounded border px-3 py-2"
-          style={{ borderColor: 'var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}
+          placeholder="intents, replay cache, HitlPolicy…"
+          className="field flex-1"
         />
-        <button
-          type="submit"
-          className="rounded border px-3 py-2"
-          style={{ borderColor: 'var(--border)', color: 'var(--fg)' }}
-        >
+        <button type="submit" className="btn btn--primary">
           Search
         </button>
       </form>
 
       {query ? (
-        <p className="mt-4 text-sm" style={{ color: 'var(--fg-muted)' }}>
+        <p className="eyebrow mt-8">
           {results.length} result{results.length === 1 ? '' : 's'} for &ldquo;{query}&rdquo;
         </p>
       ) : null}
 
-      <ul className="mt-4 space-y-3">
-        {results.map((result) => (
-          <li
-            key={result.href}
-            className="rounded-md border p-3"
-            style={{ borderColor: 'var(--border)' }}
-          >
-            <Link href={result.href} className="font-semibold no-underline">
-              {result.title}
-            </Link>
-            <span className="ml-2 text-xs" style={{ color: 'var(--fg-faint)' }}>
-              {result.section} · {result.status}
-            </span>
-            <p className="mt-1 text-sm" style={{ color: 'var(--fg-muted)' }}>
-              {result.summary}
-            </p>
-          </li>
-        ))}
-      </ul>
+      {results.length > 0 ? (
+        <ul className="list-rule mt-4">
+          {results.map((result) => (
+            <li key={result.href}>
+              <Link href={result.href} className="font-medium no-underline">
+                {result.title}
+              </Link>
+              <p className="mono mt-1.5 text-[0.72rem]" style={{ color: 'var(--ink-3)' }}>
+                {result.section} · {result.status} · {result.href}
+              </p>
+              {/* An API hit's summary is the symbol's own signature, so it is
+                  set in mono and clamped — a constructor signature runs to
+                  several hundred characters and would otherwise bury the rows
+                  around it. The symbol's page carries it in full. A page's
+                  summary is prose, already a sentence, and is left alone. */}
+              <p
+                className={`mt-2 ${result.section === 'API' ? 'mono line-clamp-2 text-[0.82rem]' : 'text-[0.93rem]'}`}
+                style={{ color: 'var(--ink-2)' }}
+              >
+                {result.summary}
+              </p>
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       {query && results.length === 0 ? (
-        <p className="mt-6" style={{ color: 'var(--fg-muted)' }}>
+        <p className="mt-4 max-w-[56ch]" style={{ color: 'var(--ink-2)' }}>
           Nothing matched. Try a single term — the fallback search requires every word to appear.
         </p>
       ) : null}
