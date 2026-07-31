@@ -28,9 +28,9 @@ None. The release machinery's own spec (established by `add-0-1-0-release`) is r
 
 **Depends on:** `add-effector-security` (C44), `add-1-0-api-freeze` (C45), `add-state-guarantees` (C46), `promote-spark-runner` (C47) — all four must be implemented and archived before the gate can pass. Builds on `add-0-1-0-release` (C25) for the release machinery (workflow, changelog automation, versioning policy) and on `add-0-5-0-release` (C43) as the preceding milestone release.
 
-**New code:** none. The only artifacts are the version bump, the changelog entry, and the tag.
+**New code:** *(amended — see tasks.md Revision 1)* `tests/release/test_release_1_0_0.py`, the release-artifact consistency gate for this milestone, mirroring `tests/release/test_release_0_5_0.py`. No `src/` code and no public API name: the gate's *process* conditions are unexecutable, but its *artifact* conditions — version floor, lockfile agreement, batch enumeration, the recorded gate verdicts, the Spark decision, and the two named regime artifacts — are checkable, and both sibling milestones ship such a test.
 
-**Modified code:** [pyproject.toml:3](../../../pyproject.toml:3) (`version = "0.0.0"` → `1.0.0` at release time, on top of whatever the preceding milestone set) and the changelog file maintained by the C25 process.
+**Modified code:** *(amended — see tasks.md Revision 1)* four files, not two. [pyproject.toml:8](../../../pyproject.toml:8) (`version` → `1.0.0`); `uv.lock`, which records the project's own version and which `docs/releasing.md` requires be refreshed with every bump; `CHANGELOG.md`, maintained by the C25 process; and `docs/yaml.md`, whose two `beam-agents==X.Y.Z` provider pins are asserted against the installed version by `tests/yaml/test_docs_example.py`. No `src/`, and no proto or workflow change.
 
 **CI/build:** no workflow changes. The existing release workflow from `add-0-1-0-release` runs as-is for `v1.0.0`; the gate consumes signals CI already produces (the C45 snapshot test and C46 compat test run in the suites their own changes placed them in).
 

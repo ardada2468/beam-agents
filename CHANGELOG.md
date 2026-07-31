@@ -4,13 +4,125 @@ All notable changes to `beam-agents` are recorded here. Entries are written at
 change time as [`changelog.d/`](changelog.d/README.md) fragments and assembled
 into a dated section by `make changelog` when a release is cut.
 
-The project is pre-1.0 and versioned `0.MINOR.PATCH`: a MINOR release may add
-features and may break the documented compatibility surface (every break gets a
-**Breaking changes** entry naming the migration); a PATCH release contains only
-fixes and documentation. See [`docs/releasing.md`](docs/releasing.md) for the
-compatibility surface and the release procedure.
+Every `0.MINOR.PATCH` section below was written under the pre-1.0 policy: a
+MINOR release could add features and break the documented compatibility surface
+(every break gets a **Breaking changes** entry naming the migration), and a
+PATCH release contained only fixes and documentation. From `1.0.0` that
+latitude is gone — see [what the 1.0.0 number promises](#what-the-100-number-promises).
+[`docs/releasing.md`](docs/releasing.md) carries the compatibility surface and
+the release procedure.
 
 <!-- towncrier release notes start -->
+
+## 1.0.0 - 2026-07-31
+
+The **M4 milestone release**, and the first release whose version number is a
+promise rather than a snapshot. It closes out the four M4 hardening changes,
+which together are the *stability surface*: what the public API is and how it is
+allowed to change (`add-1-0-api-freeze`), what keyed state survives a version
+hop (`add-state-guarantees`), who is authorized to make the effector act
+(`add-effector-security`), and where Spark stands (`promote-spark-runner`).
+
+The **Breaking changes** subsection below is assembled mechanically from
+`changelog.d/`. The three subsections around it — the M4 batch, what the number
+promises, and the release gate — are the milestone record the `release-1-0`
+capability requires, and are hand-curated.
+
+### The M4 hardening batch
+
+The four changes this milestone is defined as closing out. Only one of them
+(`add-1-0-api-freeze`) wrote a changelog fragment that assembly rendered below;
+`add-effector-security`'s fragment was consumed into the `0.5.0` section, and
+`add-state-guarantees`' into `0.3.0`, while `promote-spark-runner` is test and
+CI infrastructure that landed with no fragment at all. Mechanical assembly
+therefore could never have produced a complete M4 section, which is why this
+table is not optional.
+
+| Roadmap | Change | What it delivered |
+| ------- | ------ | ----------------- |
+| C44 | `add-effector-security` | Application-level authenticity for the effects loop: `ToolIntent` gains an additive HMAC-SHA256 signature envelope, `WriteIntents` signs at the outbox writer, and the effector verifies **before** every other phase — ahead of even expiry refusal, so an unauthenticated message drives no behavior at all. Failures dead-letter and never publish a `ToolResult`. Rollout is a dial (`off` → `permissive` → `require`), broker transport security (SASL/TLS) is configurable by credential *reference* rather than value, and [`docs/security.md`](docs/security.md) states the hardening baseline, the least-privilege role matrices, and the rule that secrets never travel in tool arguments. |
+| C45 | `add-1-0-api-freeze` | The public surface audited, frozen into the generated `public-surface.toml` snapshot, and enumerated one contract-line per name in [`docs/api.md`](docs/api.md). `tests/test_public_surface.py` fails on any unreviewed addition *or* removal, ruff `D1` requires a docstring on every public name, and `src/beam_agents/_deprecation.py` is the executable half of the deprecation window CONTRIBUTING.md defines. This is what makes 1.0 a freeze rather than an announcement. |
+| C46 | `add-state-guarantees` | The cross-release state contract written down in [`docs/state-compat.md`](docs/state-compat.md) — state written by release N is readable by N+1, Dataflow `--update` is supported between adjacent releases, and a table classifies every schema/coder/graph-shape change an author can make — plus the nightly Dataflow `--update` gate (`tests/dataflow/test_update_compat.py`) that carries live suspended state and populated working memory across a real version hop, with a red gate blocking a release. |
+| C47 | `promote-spark-runner` | The Spark portable-runner **promotion process**, not a promotion: a third `spark` conformance leg with per-scenario `Run`/`Skip(reason)` declarations, the `docker/compose.spark.yaml` overlay, a weekly-never-per-PR `.github/workflows/spark-weekly.yml`, and `scripts/spark_weekly_status.py` computing the four-consecutive-green-scheduled-weeks streak and the two-red-weeks demotion verdict mechanically. The support statement itself is untouched by design — flipping it is what the streak authorizes. |
+
+### Breaking changes
+
+- The public API surface is now audited, frozen, and documented. `beam_agents` re-exports two more names the docs always promised — `tool` and `StreamAgent` — and every public module now declares an `__all__` naming exactly its contract, enumerated with one line each in the new [API reference](https://beam-agents.readthedocs.io/api/). Names that were only ever internal machinery are now underscore-prefixed and are no longer importable under their old spelling: the adapter transport helpers (`find_async_client`, `install_transport`, `warn_fallback` in each `adapters/*/transport.py`), the provider `decode` functions (still exported as `beam_agents.model.anthropic_decode` / `openai_compat_decode`), the memory-store envelope/seq codecs, the ADK and Pydantic AI session/history internals, and effector wiring (`build_service`, `load_registry`, `serve`, `execute_intent`, `encode_payload`, the dedup lease codecs). This is the last such sweep: after 1.0, removing or renaming any frozen name requires a deprecation window of at least one minor release with a `DeprecationWarning` naming the replacement. (add-1-0-api-freeze)
+
+### What the 1.0.0 number promises
+
+1.0.0 is a regime change, not a feature release. Its content is the pair of
+standing policies it activates, and both are artifacts you can point at rather
+than sentiments:
+
+- **The public API is frozen by `public-surface.toml`.** From `v1.0.0`, every
+  change to the public surface is governed by the deprecation policy in
+  [`CONTRIBUTING.md`](CONTRIBUTING.md): removing or renaming a frozen name needs
+  a window of at least one minor release during which the old spelling keeps
+  working and emits a `DeprecationWarning` naming its replacement and the first
+  release that may take it away. The snapshot is generated, never hand-edited,
+  and `tests/test_public_surface.py` compares it against the tree by exact
+  equality in both directions — so the review artifact for an API change is the
+  diff to that file. Two tiers are frozen: the sixteen names
+  `beam_agents/__init__.py` re-exports, and the module-tier names each public
+  module declares in its `__all__`, enumerated in [`docs/api.md`](docs/api.md).
+- **Wire and state changes are governed by `docs/state-compat.md`.** From
+  `v1.0.0`, every change to a wire or state proto complies with the documented
+  migration guarantees — additive, or `state_schema_version`-bumped with a lazy
+  migration and golden-blob coverage — and Dataflow `--update` between adjacent
+  releases stays supported. A post-1.0 proposal that breaks either policy
+  without following it is rejected or re-scoped before implementation lands.
+
+**In-flight deprecations at 1.0.0: none.** The C45 freeze renamed its internal
+machinery outright rather than deprecating it — that sweep is the release's
+**Breaking changes** entry above and is the last one — so no name in
+`public-surface.toml` carries a `DeprecationWarning` or a removal horizon, and
+`src/beam_agents/_deprecation.py` ships with no call sites. The first
+deprecation will be the policy's first exercise, not its backlog.
+
+**Spark: deferred, not promoted.** `promote-spark-runner` landed the weekly
+Spark conformance leg and the mechanical promotion gate, and that gate requires
+**four consecutive green scheduled weekly runs with no skip added during the
+window**. Zero such runs exist at this commit — the leg has never run against a
+Spark job server, three of its seven scenarios are declared structural skips
+with named constraints, and the other four are provisional `Run()` declarations
+whose evidence is the first weekly run. Promotion is therefore **deferred**:
+`openspec/project.md`'s support statement is unchanged and still reads
+"Supported runners v1.0: DirectRunner, Dataflow, Flink. Spark is best-effort",
+which is what 1.0 has scoped all along. This is a recorded outcome, not an
+omission — the gate is indifferent between promoting and deferring and strict
+about writing the decision down, because an unrecorded decision is what makes a
+release announcement unable to state Spark's status truthfully. The window,
+the promotion checklist, and the symmetric two-red-weeks demotion path are in
+[`docs/ci.md`](docs/ci.md); a future release promotes Spark when the streak is
+real.
+
+### Release gate
+
+Evaluated as a whole at the release-candidate commit and recorded here with its
+evidence. **Status: not yet fully green — `v1.0.0` is not tagged.** The gate
+does not bend: an unmet condition is resolved in the change that owns it and
+never waived here, and it slips the release date rather than shrinking the
+release.
+
+| Gate condition | Evidence | Verdict |
+| -------------- | -------- | ------- |
+| All four M4 hardening changes archived | All four are implemented, gated, and merged; every one is still a **live** folder under `openspec/changes/`, and `openspec/changes/archive/` still holds only the nine pre-0.1.0 changes. Archival — not merge — is the gating state, because archival is when a change's delta lands in the main specs, and an unarchived change is by definition not yet part of the promised surface | pending (archival) |
+| The public-surface freeze snapshot test is green | `tests/test_public_surface.py` runs in the required offline `ci` tier and is green at this commit; `public-surface.toml` matches the tree by exact equality in both directions, and the ruff `D1` docstring gate is part of `make lint` | pass |
+| State guarantees documented, and the nightly Dataflow `--update` compat test green on the latest scheduled run | [`docs/state-compat.md`](docs/state-compat.md) ships with the full change-class table, and its offline companions (`tests/dataflow/test_update_compat_harness.py`, `tests/core/test_state_compat_doc.py`) are green here. The gate itself, `tests/dataflow/test_update_compat.py`, is `dataflow`-marked and nightly-only: it needs a GCP project, a region, and a temp bucket, and no scheduled run exists at this commit to be green *on* | pending (CI run) |
+| Effector intent signing shipped with its rollout complete — verification *enforced*, not merely available | Signing ships end to end: the additive proto envelope, `IntentSigner` on `WriteIntents`, verification as the effector's first phase, dead-lettering that never publishes a `ToolResult`, and an offline semantics gate (`tests/semantics/test_effector_signing.py`) proving a mixed genuine/tampered/forged stream under `require`. But `EffectorConfig.verify_intents` still defaults to `off`, and moving a deployment to `require` is an operator step this repository cannot observe or evidence. "Available" is what shipped; "enforced" is not yet a fact anyone here can assert | pending (rollout) |
+| The Spark promotion decision is recorded either way | Recorded above as **deferred**, with the reason (zero of four qualifying weekly runs) and the unchanged best-effort support statement in `openspec/project.md`. The gate requires the decision to exist, not to be "promote" | pass |
+| Standing release blockers re-verified: semantics gates green and unskipped; no open latency-budget benchmark regression | The offline semantics selection is green here — `make test-semantics-offline`: 79 passed, 5 skipped, every skip declared and pre-existing — and no gate is marked flaky or xfail. The docker-backed semantics leg needs the compose stack at this commit, and the p50 < 15 ms / p99 < 60 ms overhead budget still has no admissible figure: `benchmark-baseline.toml`'s `[medians_ms]` is deliberately unseeded and `docs/benchmarks.md` forbids seeding it from developer hardware | pending (CI hardware) |
+| Offline gate roster green at the candidate commit | `make lint`, `make type`, `make test-unit` (1941 passed, 4 skipped, total coverage 95.68%), `make test-semantics-offline`, `make coverage-ratchet` (at baseline) | pass |
+| Version and changelog agree | `pyproject.toml` and `uv.lock` both read `1.0.0`, `docs/yaml.md`'s two provider pins follow, and this section names all four M4 changes and both policy artifacts — pinned by `tests/release/test_release_1_0_0.py` | pass |
+
+The archival row and the Spark row are both checked against the repository
+rather than asserted. `test_recorded_archival_verdict_matches_the_repository`
+fails if this table records `pending (archival)` once every M4 change *is*
+archived, and fails just as loudly if the table drops the marker while any of
+them is not; `test_changelog_section_records_the_spark_promotion_decision`
+fails if no decision is recorded at all, and fails if this section claims
+promotion while `openspec/project.md` still scopes Spark as best-effort.
 
 ## 0.5.0 - 2026-07-31
 
