@@ -193,10 +193,30 @@ export function DataTable<T>({
   empty,
   caption,
 }: DataTableProps<T>) {
+  /*
+   * Whether anything is hidden to the left of the pinned first column.
+   *
+   * Driven by a scroll listener rather than CSS because there is no selector
+   * for "this element is scrolled": the divider on the sticky column should
+   * appear when it is actually covering something and stay absent on a table
+   * that fits, where a permanent rule would just be a line with nothing to say.
+   */
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const onScroll = () => setScrolled(wrap.scrollLeft > 0);
+    onScroll();
+    wrap.addEventListener('scroll', onScroll, { passive: true });
+    return () => wrap.removeEventListener('scroll', onScroll);
+  }, []);
+
   if (rows.length === 0 && empty) return <>{empty}</>;
 
   return (
-    <div className="table-wrap">
+    <div className={`table-wrap${scrolled ? ' table-wrap--scrolled' : ''}`} ref={wrapRef}>
       <table className="table">
         {caption ? <caption className="visually-hidden">{caption}</caption> : null}
         <thead className="table__head">

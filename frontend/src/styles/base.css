@@ -43,6 +43,17 @@ h4 {
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
   letter-spacing: -0.01em;
+  /* Detail pages title themselves with an identifier, and an entity key like
+     `suspension_denied|000163|004` is a single unbreakable token to the line
+     breaker — on a narrow screen that heading hung 43px past the viewport and
+     was the only thing making the page scroll sideways.
+
+     `anywhere` rather than `break-word`, which was tried first and did nothing
+     here: the two break identically once a line is being laid out, but only
+     `anywhere` counts the break opportunity when computing min-content width,
+     and these headings sit in flex rows where min-content is exactly what
+     sizes them. */
+  overflow-wrap: anywhere;
 }
 
 h1 {

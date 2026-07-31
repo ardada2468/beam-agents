@@ -1,0 +1,168 @@
+/*
+ * The run graph: lanes of steps, with the connectors drawn as borders.
+ *
+ * Tones match the lifecycle diagram's spine colours, so a model call is the
+ * same colour in both places. The step card carries its colour on a left edge
+ * rather than a fill, for the reason the token file gives: status is a solid
+ * accent plus a word, so the card survives a grayscale screenshot in a bug
+ * report.
+ */
+
+.run-graph {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* -- A lane: one attempt --------------------------------------------------- */
+
+.run-lane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The rule between lanes is the effector hop: a suspend and its resume are one
+   activation, and the gap between them is where the intent left the pipeline
+   and a decision came back. */
+.run-lane + .run-lane {
+  border-top: 1px dashed var(--line-strong);
+  padding-top: var(--space-4);
+}
+
+.run-lane__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* Zero-padded, monospace, and the one place a number is decoration rather than
+   a measurement — it is the lane's position, not a count of anything. */
+.run-lane__ordinal {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+.run-lane__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.run-lane__meta {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* -- The steps ------------------------------------------------------------- */
+
+.run-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--space-3) var(--space-4);
+}
+
+/*
+ * The arrow between steps.
+ *
+ * On the ::before of each step after the first, so it never trails the last one
+ * and never needs a wrapper element per gap. A wrapped row starts with an arrow
+ * pointing into it, which reads correctly: the sequence continues.
+ */
+.run-step + .run-step::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--space-4));
+  top: 50%;
+  width: var(--space-4);
+  border-top: 1px solid var(--line-strong);
+}
+
+.run-step + .run-step::after {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--space-2));
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-top: 1px solid var(--line-strong);
+  border-right: 1px solid var(--line-strong);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.run-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Content-sized between bounds: a step with a long detail line earns its
+     width, but a bare "Suspended" should not collapse to the width of the
+     word — a row of cards that vary threefold reads as unrelated objects. */
+  min-width: 132px;
+  max-width: 320px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.run-step__role {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+.run-step__step {
+  font-size: var(--text-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Identifiers and figures: monospace, because a model name and a token count
+   are both things you compare character by character against another row. */
+.run-step__detail {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* -- Tones ----------------------------------------------------------------- */
+
+.run-step--model {
+  border-left-color: var(--info);
+}
+
+.run-step--tool {
+  border-left-color: var(--ok);
+}
+
+.run-step--intent {
+  border-left-color: var(--warn);
+}
+
+.run-step--suspended {
+  border-left-color: var(--suspended);
+}
+
+.run-step--error {
+  border-left-color: var(--error);
+}
+
+.run-lane__empty {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.run-graph__empty {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}

@@ -37,6 +37,7 @@ import {
   Tabs,
   TileRow,
 } from '@/components/ui';
+import RunGraph from '@/components/flow/RunGraph';
 import { api, queryKeys } from '@/lib/api';
 import type { SpanNode } from '@/lib/api-types';
 import { formatCount, formatDuration, formatEntityKey, formatTimestamp } from '@/lib/format';
@@ -46,7 +47,7 @@ import { SpanTree } from './SpanTree';
 import { attemptFacts, attributeToAttempts, buildForest, flattenEvents, mergeSpans } from './spans';
 import './traces.css';
 
-type TabKey = 'spans' | 'attempts' | 'raw';
+type TabKey = 'spans' | 'flow' | 'attempts' | 'raw';
 type RawView = 'events' | 'spans' | 'response';
 
 const RAW_OPTIONS = [
@@ -229,10 +230,33 @@ export default function TraceDetailPage() {
         onChange={(key) => setTab(key as TabKey)}
         items={[
           { key: 'spans', label: 'Span tree', count: spans.length },
+          { key: 'flow', label: 'Flow', count: spans.length },
           { key: 'attempts', label: 'Attempts', count: attempts.length },
           { key: 'raw', label: 'Raw records', count: events.length },
         ]}
       />
+
+      {tab === 'flow' ? (
+        <div className="panel">
+          <div className="panel-header">
+            <div className="row">
+              <h2 className="tr-section__title">What this run did</h2>
+              <span className="muted">
+                Every step in recorded order, laned by attempt. Two lanes mean a suspension — the
+                gap between them is where the intent left the pipeline and a decision came back.
+              </span>
+            </div>
+            {attempts.length > 1 ? <Chip tone="suspended">Resumed</Chip> : null}
+          </div>
+          <div className="panel-body">
+            {spansLoading && spans.length === 0 ? (
+              <SkeletonRows rows={4} columns={3} />
+            ) : (
+              <RunGraph spans={spans} attempts={attempts} />
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {tab === 'spans' ? (
         <div className="panel">

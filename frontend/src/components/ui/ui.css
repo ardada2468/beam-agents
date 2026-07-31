@@ -160,14 +160,23 @@
   background: var(--surface);
 }
 
+/*
+ * Sentence case, no extra tracking.
+ *
+ * These were uppercase at 11px with `--tracking-eyebrow` on top — the eyebrow
+ * treatment, which is right for one label standing alone and wrong for twelve
+ * headers a reader scans across. Uppercasing removes the ascenders and
+ * descenders that make a word identifiable without reading it, and the added
+ * tracking widens every column at once, which is part of why the right-hand
+ * columns of a wide table ran off the edge. Weight and colour carry the header
+ * instead, which is quieter and narrower at the same time.
+ */
 .table__th {
   height: var(--row-height);
   padding: 0 var(--space-3);
   text-align: left;
   font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase;
+  font-weight: var(--weight-medium);
   color: var(--muted);
   white-space: nowrap;
   border-bottom: 1px solid var(--line);
@@ -267,6 +276,50 @@
 .table__td--num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The identifying column stays put while the rest scrolls.
+ *
+ * A wide table — activations carries twelve columns — scrolls horizontally, and
+ * scrolling it used to take the entity key off screen with everything else,
+ * leaving a row of numbers belonging to nothing. Pinning the first column keeps
+ * every value attached to the thing it describes, which is the whole reason to
+ * read a row.
+ *
+ * The cell needs its own opaque background or the scrolled content shows
+ * through it, and that background then has to restate the row's hover and
+ * selected states, which it can no longer inherit.
+ */
+.table__th:first-child,
+.table__td:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+}
+
+/* Above the body cells, below the sticky header's own corner cell. */
+.table__td:first-child {
+  z-index: 1;
+}
+
+.table__th:first-child {
+  z-index: 2;
+}
+
+.table__row--clickable:hover .table__td:first-child {
+  background: var(--surface-2);
+}
+
+.table__row--selected .table__td:first-child {
+  background: var(--surface-3);
+}
+
+/* Only once something is actually hidden behind it: a permanent divider on a
+   table that fits would be a line with nothing to say. */
+.table-wrap--scrolled .table__th:first-child,
+.table-wrap--scrolled .table__td:first-child {
+  box-shadow: 1px 0 0 var(--line-strong);
 }
 
 .table__td--wrap {
