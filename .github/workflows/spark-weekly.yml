@@ -1,0 +1,140 @@
+# The weekly Spark conformance leg and its promotion-window report.
+#
+# NOT triggered by `pull_request`, and NOT a required check — deliberately, and
+# not just for cost (promote-spark-runner design D3): while Spark is
+# best-effort, a red spark run says something about Spark, not about the PR
+# under review, and putting it in a per-PR lane would train people to ignore
+# red — poisoning the very signal promotion is defined over. The promotion
+# evidence is "four consecutive green SCHEDULED weeks", which needs a fixed
+# cadence to mean anything; `workflow_dispatch` exists for investigation and is
+# excluded from the streak by the status script.
+#
+# After promotion this workflow stays weekly. "Supported" upgrades the
+# CONSEQUENCE of a red run (release blocker, demotion clock armed), not the
+# frequency.
+name: spark-weekly
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — an hour before `nightly` (0 7 * * *) so the two never
+    # contend for runners. Any weekly slot works: the streak logic keys on
+    # `event=schedule`, not on the hour.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# Never cancel a run in progress: a cancelled scheduled run is a lost week of
+# evidence, and the window has no way to get it back.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The leg itself: base stack + the spark overlay, then the ONLY selection
+  # anywhere that reaches a spark cell.
+  spark-conformance:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --group test --group integration
+
+      # docker-container driver: required for the type=gha layer cache.
+      - uses: docker/setup-buildx-action@v3
+
+      # The same image the Flink leg uses (one SDK-harness image serves both
+      # portable legs), built from THIS checkout so the leg never runs against
+      # yesterday's runtime.
+      - name: Build SDK-harness image (layer-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/sdk-harness.Dockerfile
+          tags: beam-agents-sdk-harness:2.72.0
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Base compose file PLUS docker/compose.spark.yaml. `--build` is
+      # suppressed (COMPOSE_UP_FLAGS=--wait) only because the step above just
+      # built the image from the same checkout; if that step is ever removed,
+      # compose fails on the missing tag rather than running a stale image.
+      - name: Start local stack + Spark overlay
+        run: make compose-up-spark COMPOSE_UP_FLAGS=--wait
+
+      - name: Adapter conformance matrix (Spark leg)
+        run: make test-conformance-spark
+
+      # Capture-before-teardown, exactly as the docker lanes in
+      # integration.yml: logs run only on failure, from the still-running
+      # stack, and teardown happens afterwards. A green run uploads nothing.
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          make compose-logs LOGS_DIR=compose-diagnostics
+          make compose-logs-spark LOGS_DIR=compose-diagnostics
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-weekly-diagnostics-attempt-${{ github.run_attempt }}
+          path: compose-diagnostics/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Stop local stack
+        if: always()
+        run: make compose-down-spark
+
+  # The promotion-window report. `if: always()` so a red leg still publishes
+  # the window (a red week IS the evidence the streak is defined over), and
+  # report-only by construction: the script exits 0 whatever the verdict, and
+  # writes nothing outside the job summary.
+  status:
+    if: always()
+    needs: [spark-conformance]
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reading this workflow's own run history via the Actions API.
+      actions: read
+    steps:
+      # Full history: the skip-drift scan is `git log -p` over the conformance
+      # spec across the trailing 28 days, which a shallow clone cannot see.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # The script reads the CURRENT spark skip inventory from
+      # tests/conformance/_spec.py, which imports beam_agents.
+      - name: Install dependencies
+        run: uv sync --locked --group test
+
+      - name: Report the promotion window
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          uv run --no-sync python scripts/spark_weekly_status.py \
+            --repo "${{ github.repository }}" \
+            --workflow spark-weekly.yml \
+            --current-run-id "${{ github.run_id }}" \
+            --current-event "${{ github.event_name }}" \
+            --current-conclusion "${{ needs.spark-conformance.result }}"

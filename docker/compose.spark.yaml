@@ -1,0 +1,101 @@
+# The Spark job-server overlay for the weekly adapter-conformance spark leg.
+#
+# Started ONLY as an overlay on the base file:
+#
+#   docker compose -f docker/compose.yaml -f docker/compose.spark.yaml up -d
+#
+# which `make compose-up-spark` wraps. Nothing here belongs in
+# docker/compose.yaml: `make compose-up` runs on every per-PR integration job,
+# so a Spark service in the base file would make every pull request pay for a
+# runner that is verified weekly and gates nothing (promote-spark-runner,
+# design D2/D3). The base stack is what supplies Redpanda and the shared
+# artifact-staging volume these services join.
+services:
+  # Beam's Spark job server: translates a portable Python pipeline and runs it
+  # on Spark. `--spark-master-url=local[4]` uses the job server's EMBEDDED
+  # local master, so there is no separate Spark master/worker container: the
+  # driver and its executors all live in THIS container. That choice is why
+  # the conformance matrix's restart-mid-suspension scenario is a declared
+  # spark skip (tests/conformance/_spec.py) — there is no executor container to
+  # restart mid-suspension. Growing the overlay a real master/worker pair is
+  # the documented follow-up if that cell is ever wanted.
+  #
+  # The tag MUST track this repository's Beam pin (2.72.0 — see
+  # docker/sdk-harness.Dockerfile and the flink-jobserver service): a skew
+  # between the job server, the SDK-harness image, and the `apache-beam`
+  # dependency surfaces as confusing portable-protocol errors, not as a clean
+  # version complaint.
+  spark-jobserver:
+    image: apache/beam_spark3_job_server:2.72.0@sha256:91b9a02c3c872dd1eeb294537aaf27eb3a366e022b70db2e0194ecf686516b95
+    command:
+      - --spark-master-url=local[4]
+      - --job-host=0.0.0.0
+      - --job-port=8099
+      - --artifact-port=8098
+      - --expansion-port=8097
+    # Published on 280xx, not the flink-jobserver's 180xx: both job servers can
+    # then be up simultaneously, so a spark run never requires tearing the
+    # Flink stack down (and a mis-pointed endpoint fails loudly instead of
+    # silently submitting to Flink).
+    ports:
+      - "28099:8099"
+      - "28098:8098"
+      - "28097:8097"
+    # Same staged-artifact reason as the Flink trio: artifacts are handed to
+    # the executing process as local file paths, so everything that executes
+    # work must see the same directory. With the embedded master that is this
+    # container plus the worker pool sharing its namespace.
+    volumes:
+      - beam-artifact-staging:/tmp/beam-artifact-staging
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8099"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+  # The Python SDK harness as an external worker pool for the spark leg.
+  #
+  # `network_mode: service:spark-jobserver` is load-bearing for the same reason
+  # the Flink pool binds to the TaskManager (docker/compose.yaml): Beam hands
+  # the worker pool the executing container's endpoints as `localhost:<port>`,
+  # so the pool only works inside that container's network namespace. With the
+  # embedded local master the executors run inside the job server, so the pool
+  # binds to IT — which is exactly why the existing beam-sdk-harness service
+  # (bound to flink-taskmanager) cannot be shared.
+  #
+  # Same image and build context as beam-sdk-harness: one image, built once,
+  # serving both portable legs. A consequence to respect: restarting
+  # spark-jobserver destroys the namespace this container borrows, so a job
+  # server restart must be followed by a restart of this service (which
+  # SparkStackControl.freshen_spark does).
+  beam-sdk-harness-spark:
+    build:
+      context: ..
+      dockerfile: docker/sdk-harness.Dockerfile
+    image: beam-agents-sdk-harness:2.72.0
+    command: ["--worker_pool"]
+    network_mode: "service:spark-jobserver"
+    depends_on:
+      spark-jobserver:
+        condition: service_started
+    volumes:
+      - beam-artifact-staging:/tmp/beam-artifact-staging
+      # The conformance leg's ingest spool: the test process drains Kafka into
+      # segment files here (host side) and the spool SDF replays them from
+      # inside this container. Bind mount, not a named volume, because the
+      # writer is the host-side pytest process.
+      - ./e2e-spool:/var/beam-agents/spool
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+volumes:
+  # Declared in the base file too; compose merges the two declarations, so both
+  # job servers and all three worker pools share one staging volume.
+  beam-artifact-staging:

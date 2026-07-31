@@ -1,6 +1,6 @@
 # CI workflow map
 
-Five workflows under `.github/workflows/` — one per testing tier in
+Six workflows under `.github/workflows/` — one per testing tier in
 [`openspec/project.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/project.md),
 plus the docs build:
 
@@ -11,6 +11,7 @@ plus the docs build:
 | `integration.yml` → `flink-minicluster` job | push to `main`, pull request | docker-backed semantics gates on the Flink mini-cluster (`make test-semantics` + `make test-conformance-flink`, full compose stack) | yes (add to required contexts at merge) |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
 | `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation and the [benchmark suite](benchmarks.md) unconditionally; dataflow and provider smoke tests when credentials exist | no |
+| `spark-weekly.yml`  | schedule `0 6 * * 1` UTC, manual  | the adapter conformance matrix's weekly Spark leg (`make test-conformance-spark`, base stack + `docker/compose.spark.yaml`) plus the promotion-window report | no (never per-PR — see [the weekly Spark leg](#the-weekly-spark-leg)) |
 | `docs.yml`          | push to `main`, pull request      | docs (strict `mkdocs` build; Pages deploy from `main`) | no (see the docs-workflow note) |
 
 The two `integration.yml` jobs run in parallel and re-run independently: a
@@ -69,6 +70,106 @@ quieter machine than a shared PR runner. The one-iteration smoke tests in
 that breaks a benchmark fails at PR time. See
 [`docs/benchmarks.md`](benchmarks.md) for what each dimension measures, how to
 read the report, and the baseline-update procedure.
+
+## The weekly Spark leg
+
+`openspec/project.md` supports DirectRunner, Dataflow, and Flink, and calls
+Spark **best-effort**. `spark-weekly.yml` is what turns "best-effort" from
+*unexercised* into *measured*: it runs the adapter conformance matrix's third
+leg (`spark`) against a Beam Spark job server, once a week.
+
+**It never runs on a pull request and is never a required check.** The spark
+cells carry `integration + spark` and deliberately not `semantics`, so all
+four per-PR selections (`make test-integration`, `make test-semantics-offline`,
+`make test-semantics`, `make test-conformance-flink`) exclude them by
+construction; `tests/conformance/test_spark_selection.py` fails the required
+`ci` lane if that ever stops being true. The Spark services live in
+`docker/compose.spark.yaml`, an overlay the base `make compose-up` never
+loads, so a pull request pays nothing for Spark.
+
+Locally:
+
+```sh
+make compose-up-spark        # base stack + the Spark overlay
+make test-conformance-spark  # the leg
+make compose-down-spark      # tears the overlay down too (compose-down does not)
+```
+
+Scenarios not expressible on this leg are declared skips in
+`tests/conformance/_spec.py` with a reason naming the concrete missing runner
+feature or harness constraint. They are still matrix cells: the meta-test
+counts adapters x scenarios x three legs, so the spark leg cannot silently
+shrink.
+
+### The promotion window
+
+Every weekly run ends with a `status` job running
+`scripts/spark_weekly_status.py`, which reports (and only reports):
+
+- the **consecutive green streak** over **scheduled** runs — `workflow_dispatch`
+  runs neither extend nor break it, so investigating a red week is free;
+- **cadence**: adjacent scheduled runs more than 8 days apart break the streak
+  rather than bridging it, which is what turns a silently disabled schedule
+  into a visibly broken window;
+- **skip drift**: spark `Skip` declarations added in the trailing 28 days,
+  plus the full current skip inventory with reasons;
+- a `PROMOTION READY` / `NOT READY (reason)` line and a demotion-watch line.
+
+Reruns count at their final conclusion: re-running an infrastructure failure
+to green is legitimate (the harness classifies stack breakage as
+`InfraFailure`, never as a Spark verdict), but the rerun must land before the
+next scheduled run.
+
+### Promotion checklist (author of the stage-2 change)
+
+Spark flips from best-effort to supported only through a reviewed OpenSpec
+change. Before opening it, confirm from the weekly job summaries alone:
+
+1. **Four qualifying runs.** The latest summary reports a streak of at least
+   `4/4` and `PROMOTION READY`. Copy the four most recent run links it lists
+   into the change's proposal — no change may flip the support statement
+   without citing them.
+2. **Zero skip drift.** The same summary's "Skip drift in the last 28 days"
+   section reads `none`. (A skip *added* in the window resets the clock; a
+   long-standing skip does not.)
+3. **Cadence intact.** No cadence-gap note on the streak; the four runs are
+   consecutive Mondays.
+4. **Surviving skips enumerated.** Copy the summary's skip inventory into the
+   change and state, per skip, what the supported claim consequently does
+   **not** cover on Spark. If `suspension_resume` or
+   `approval_timeout_fallback` is still skipped, the leg is not exercising
+   suspension or fail-closed timers and "supported" would be hollow — the
+   review makes that call with the inventory in front of it.
+5. **Benchmark position stated.** The supported claim inherits the latency
+   budget in `openspec/project.md`. The promotion change must state whether a
+   green Spark benchmark run *gates* promotion or merely accompanies it; it
+   may not leave the question open.
+6. **Files the change flips:** the runner-support statement in
+   `openspec/project.md`, the runner-verification note in `README.md`, this
+   document, and the weekly leg's required-ness (a red weekly run becomes a
+   release blocker — cadence stays weekly, never per-PR).
+
+### Demotion checklist
+
+After promotion, two consecutive red **scheduled** weekly runs demote Spark
+back to best-effort. A single red week opens an investigation and demotes
+nothing — one red is too often infra, and the promotion evidence was itself
+trend-based.
+
+1. **Two consecutive reds confirmed.** The latest summary's demotion-watch
+   line reads `DEMOTION TRIGGERED (2 consecutive red scheduled weeks)` and
+   lists both runs. Open them and confirm each is at its final conclusion (a
+   rerun to green before the next scheduled run clears that week) and that
+   neither is an `InfraFailure` left un-rerun — the harness classifies stack
+   breakage separately precisely so it is not counted as a Spark verdict.
+2. **Files the change flips back:** the support statement in
+   `openspec/project.md`, the README note, and this document; the weekly leg
+   stops being required.
+3. **Announce it.** The demotion goes in the release notes as well as the
+   README — downstream users of the supported claim should hear about it
+   rather than discover it.
+4. **The leg keeps running.** Re-promotion uses the same four-week gate with
+   no shortcuts and no partial credit carried across the demotion.
 
 ## Mutation-tested surface
 

@@ -1,10 +1,15 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose -f docker/compose.yaml
+# The spark overlay is NEVER part of $(COMPOSE): `make compose-up` runs on
+# every per-PR integration job, and the weekly-cadence decision for the Spark
+# leg (promote-spark-runner, design D2/D3) would be undone at the
+# infrastructure layer if a PR paid for Spark containers.
+COMPOSE_SPARK := docker compose -f docker/compose.yaml -f docker/compose.spark.yaml
 # Lazily expanded (`=`, not `:=`): every target, including `help`, would
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-down compose-logs harness-build proto docs docs-serve build changelog changelog-draft
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build proto docs docs-serve build changelog changelog-draft
 
 BENCH_RESULTS := bench-results
 # Local-iteration knob only. CI pins the modules' own sampling constants by
@@ -40,8 +45,14 @@ test-unit: ## Run the unit test tier (offline, no docker), with coverage
 # job. The trade-off is deliberate: deleting the test-semantics step from the
 # workflow now silently removes the release gate, so treat any edit to that
 # step as review-sensitive.
-test-integration: ## Run integration-marked tests except semantics gates (requires compose-up)
-	uv run pytest -m "integration and not semantics"
+#
+# `not spark`: the Spark conformance leg carries `integration + spark` (never
+# `semantics` while Spark is best-effort — promote-spark-runner design D4), so
+# without this exclusion a per-PR integration job would run a best-effort
+# runner's leg against a stack it never started. The spark leg runs ONLY in the
+# weekly spark-weekly workflow, via test-conformance-spark below.
+test-integration: ## Run integration-marked tests except semantics gates and the spark leg (requires compose-up)
+	uv run pytest -m "integration and not semantics and not spark"
 
 # Docker-backed semantics gates only: the offline gates run (required) in ci
 # via test-semantics-offline, and re-running them here would let a new gate
@@ -59,6 +70,13 @@ test-semantics: ## Run docker-backed semantics gates (requires compose-up)
 # deselected, not that it is pending.
 test-conformance-flink: ## Run the adapter conformance matrix's Flink leg (requires compose-up)
 	uv run pytest -m "semantics and integration" tests/conformance
+
+# The weekly workflow's ONLY test selection, and the only selection anywhere
+# that reaches a spark cell. Same no-exit-5 stance as the Flink target: an
+# empty selection is a deselected leg, not a pending one. Requires
+# compose-up-spark (base stack + spark overlay).
+test-conformance-spark: ## Run the adapter conformance matrix's Spark leg (weekly; requires compose-up-spark)
+	uv run pytest -m "integration and spark" tests/conformance
 
 # No exit-5 tolerance: this selection is required to be non-empty. An empty
 # collection here means the gate was accidentally deselected, not that it's
@@ -125,8 +143,19 @@ harness-build: ## Build the SDK-harness image via buildx (cache args overridable
 	docker buildx build --load -t beam-agents-sdk-harness:2.72.0 \
 		-f docker/sdk-harness.Dockerfile $(HARNESS_CACHE_ARGS) .
 
+# Base stack + the Spark job server and its spark-scoped worker pool. Used by
+# the weekly spark-weekly workflow and for local iteration on the spark leg;
+# nothing per-PR calls it.
+compose-up-spark: ## Start the local stack plus the Spark job-server overlay
+	$(COMPOSE_SPARK) up -d $(COMPOSE_UP_FLAGS)
+
 compose-down: ## Tear down the local stack
 	$(COMPOSE) down
+
+# Tears down the overlay's services too: `compose-down` alone leaves the
+# Spark containers running, because they are not in the base file's project view.
+compose-down-spark: ## Tear down the local stack including the Spark overlay
+	$(COMPOSE_SPARK) down
 
 # Failure diagnostics for the docker lanes, run by CI `if: failure()` strictly
 # BEFORE `compose-down` removes the containers — and usable locally after a
@@ -151,6 +180,16 @@ compose-logs: ## Collect compose service logs + Flink diagnostics into LOGS_DIR
 		> $(LOGS_DIR)/flink-taskmanagers.json 2>/dev/null \
 		|| echo "flink REST /taskmanagers unreachable at capture time" \
 			> $(LOGS_DIR)/flink-taskmanagers.json
+
+# The spark overlay's half of compose-logs, for the weekly workflow's
+# capture-before-teardown step. Separate target (not extra services in
+# compose-logs) because $(COMPOSE) does not know the overlay's services: asking
+# it for them writes a compose error into the log file instead of logs.
+compose-logs-spark: ## Collect the Spark overlay's service logs into LOGS_DIR
+	mkdir -p $(LOGS_DIR)
+	for svc in spark-jobserver beam-sdk-harness-spark; do \
+		$(COMPOSE_SPARK) logs --no-color --timestamps $$svc > $(LOGS_DIR)/$$svc.log 2>&1 || true; \
+	done
 
 proto: ## Regenerate protobuf Python bindings from protos/*.proto
 	scripts/gen_proto.sh

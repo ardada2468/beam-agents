@@ -91,6 +91,127 @@ After promotion, the same status script watches the inverse condition: **two con
 
 This change modifies the `adapter-conformance-matrix` capability, whose spec currently exists only as the pending `add-adapter-conformance-matrix` change's `ADDED` delta (implementation complete, archive pending — `openspec/specs/adapter-conformance-matrix/` does not exist yet). This change's `MODIFIED`/`RENAMED` delta is written against that delta's exact requirement headers and **must archive after it**. The pre-archive check in `tasks.md` re-reads the main spec at archive time and confirms the base requirement text is present (the `drop-macos-ci-matrix-leg` D4 rule, applied to an ADD→MODIFY chain rather than a MODIFY/MODIFY collision).
 
+## Findings (stage 1 implementation)
+
+Recorded per the `add-adapter-conformance-matrix` precedent. **The D6 spike was
+not performed: no docker is available in the implementation environment, so no
+Spark job server was ever started and no pipeline was submitted.** What follows
+separates what was *determined* from what remains *open* — nothing below claims
+Spark works.
+
+### F1 — The spike is deferred to the first weekly runs, by design, not by omission
+
+D6 assumed the initial declarations would be spike outcomes. They are instead
+**a priori** declarations of two kinds, and the distinction is load-bearing for
+the promotion gate:
+
+* **Structural skips** — three scenarios are inexpressible on this leg for
+  reasons that are properties of the harness and the overlay topology, not of
+  the Spark runner, so no spike could have changed them (F2).
+* **Provisional `Run()`** — the remaining four (`single_shot`,
+  `multi_tool_inline`, `suspension_resume`, `approval_timeout_fallback`) are
+  declared runnable *pending evidence*. The first `workflow_dispatch` or
+  scheduled run IS the spike. If the Spark portable runner cannot execute the
+  streaming profile, those cells go red, the weekly summary says so publicly,
+  the promotion clock never starts, and the red cells are converted to `Skip`
+  declarations naming the concrete gap — which, per D6, resets the window
+  rather than failing CI.
+
+This is the honest ordering: declaring them `Skip("unknown")` would have been a
+worse lie than declaring them `Run()` and letting the weekly lane produce the
+answer, because `Skip` reasons are required to name a *specific* constraint and
+"we could not test it" is not one. What is explicitly NOT done is bending the
+leg to batch mode to manufacture green (design risk 1).
+
+### F2 — Three scenarios are structurally skipped on spark, with reasons that no runner feature can lift
+
+| Scenario | Why it cannot run on the spark leg |
+|---|---|
+| `bundle_retry_cache` | The chaos commit-failure monkeypatch is in-process and cannot reach the spark-scoped `beam-sdk-harness` container. Identical to the Flink skip — and *worse* than Flink's, because on Flink the replay evidence is carried by `restart_mid_suspension`, which spark also skips (below). The spark leg therefore exercises **no** replay-after-failure path. |
+| `restart_mid_suspension` | D2 chose the job server's embedded `local[4]` master, so the driver and its executors all live in the `spark-jobserver` container. Restarting it tears down the driver, which is a job resubmission, not a mid-suspension executor restart. Answers the D2/open-question "what is `restart_mid_suspension` on an embedded-master Spark?": **not expressible without dedicated master/worker containers.** |
+| `ttl_expiry` | The same missing idle-partition watermark control that skips it on Flink: the spool SDF's watermark cannot be advanced past the TTL from the host side. |
+
+Consequence for a future promotion change, stated now so the review cannot
+miss it: with these three skips surviving, a "supported" claim would cover
+fast-path activation, inline tools, suspension/resume, and fail-closed HITL
+timers — and would **not** cover checkpoint-recovery replay, executor restart
+mid-suspension, or watermark-driven TTL GC on Spark. Per the spec's *Surviving
+skips bound the supported claim* scenario, the promotion change must say so.
+Whether that residue is acceptable is a review decision; if it is not, the
+overlay grows a real master/worker pair first (D2 follow-up).
+
+### F3 — The Spark job server needs no new Beam options seam, but its options differ from Flink's
+
+The pipeline is submitted through the same `PortableRunner` +
+`environment_type=EXTERNAL` path as the Flink leg. Two differences, both in
+`tests/conformance/_spark/pipeline.py`:
+
+* `--checkpointing_interval` is a Flink option. The Spark side uses
+  `--checkpoint_dir`, pointed at the shared `beam-artifact-staging` volume so
+  the checkpoint survives for the run's duration.
+* Endpoints are published on `280xx` rather than `180xx`, so both job servers
+  can be up at once and a mis-pointed endpoint fails loudly instead of
+  silently submitting the spark leg to Flink.
+
+Whether the Spark runner honors `checkpoint_dir` for this pipeline shape is
+part of what the first weekly runs will show.
+
+### F4 — Health checking has no REST equivalent; the diagnosis surface is thinner
+
+`FlinkStackControl` leans on Flink's REST API for slot counts, running jobs,
+and per-vertex read/write counters — the last of which is what makes a Flink
+submission stall self-diagnosing. The Beam Spark job server exposes no such
+surface. `SparkStackControl` therefore health-checks by connecting to the job
+and artifact ports from the host, and attaches the job server's recent log tail
+to every stall and unmet-deadline message instead of vertex counters. Expect
+first-run stalls to be harder to attribute than the Flink leg's were; the
+`InfraFailure` classification still keeps them out of the verdict.
+
+### F5 — `flink_variant()` generalized without a spark-specific budget
+
+`variant_for(leg)` replaces `flink_variant()` (D1) and applies the single
+real-time HITL override to both portable legs, since both wait on a wall clock
+under CI load. `flink_hitl_timeout_ms` keeps its name — it is the field the
+Flink measurement produced — and a spark-specific field is added only if
+measurements demand it. `RULE_BUILDERS` in the Flink leg's pipeline module was
+made public so both legs script their adapters' rules from one mapping; a fifth
+adapter therefore joins both portable legs at once.
+
+### F6 — Wall-clock per adapter: not measured
+
+Task 3.5 asked for per-adapter wall-clock. Unmeasurable without docker. The
+leg's per-cell timeout is budgeted at the Flink leg's 1200 s and its phase
+deadline at 420 s (above Flink's, because this stack has none of Flink's
+hardening); the weekly workflow is budgeted at 60 minutes for the whole job.
+Both should be re-derived from the first green weekly runs.
+
+### F7 — What the offline gates DO prove about this leg
+
+The parts of the change that are not "does Spark work" are fully verified
+offline and are what the required lanes protect:
+
+* the three-leg matrix accounting (`test_matrix.py`, derived from
+  `len(ADAPTERS) x len(SCENARIOS) x len(LEGS)`) — 4 adapters x 7 scenarios x 3
+  legs = 84 cells collected, 28 of them spark;
+* every scenario declares every leg, and every spark `Skip` names a specific
+  constraint (`test_harness_unit.py`);
+* no per-PR selection collects a spark cell, the spark selection collects
+  exactly the declared 28, and no spark cell carries the `semantics` marker
+  (`test_spark_selection.py`, collection-level);
+* the semantics partition is byte-identical in behavior to before
+  (`scripts/check_semantics_partition.py`: 65 offline + 29 docker = 94);
+* the promotion-window logic — streak, cadence gaps, dispatch exclusion,
+  final-conclusion reruns, skip drift, both verdicts, summary rendering — over
+  offline fixtures (`tests/scripts/test_spark_weekly_status.py`, 34 tests).
+
+### F8 — The dry run changed the summary
+
+Task 5.3's dry run of both checklists against a synthetic 4-green window and a
+synthetic 2-red window found one gap: the demotion checklist has to confirm
+both red runs are scheduled runs at their final conclusion, but the summary
+printed only the red streak's *length*. `render_summary` now lists the red
+runs' links too. Both checklists are answerable from the summary text alone.
+
 ## Risks / Trade-offs
 
 - **The Spark portable runner may not run this shape of pipeline at all.** Streaming + unbounded SDF source + keyed user state + REAL_TIME timers is the hardest profile a portable runner can be asked for, and Spark's portable streaming support has historically trailed Flink's. Worst case, the spike ends with `single_shot` itself skipped and the leg is a scaffold around findings. That outcome is *accepted and designed for*: the leg still lands (declarations, harness, workflow), the summary reports it, promotion stays parked, and the findings feed upstream-Beam issues. What is explicitly rejected is bending the leg to batch mode to manufacture green — batch would not exercise timers, checkpoint recovery, or suspension across bundles, which are the substance of the supported claim.

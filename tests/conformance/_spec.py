@@ -28,10 +28,20 @@ from beam_agents._protos import ToolIntent
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, HITL_TIMEOUT_OUTPUT
 from beam_agents.tools import Tool, ToolRegistry, tool
 
-# Leg names: the two runners every scenario must declare itself for.
+# Leg names: the runners every scenario must declare itself for. `spark` is the
+# weekly (never per-PR) leg of the `promote-spark-runner` change — it is a leg
+# like any other here, so the meta-test's registry x scenario x leg accounting
+# counts its cells whether they run or are declared skips.
 DIRECT = "direct"
 FLINK = "flink"
-LEGS = (DIRECT, FLINK)
+SPARK = "spark"
+LEGS = (DIRECT, FLINK, SPARK)
+
+#: Legs whose HITL deadline waits on a real wall clock (portable runner on a
+#: container stack under CI load), as opposed to the DirectRunner leg's
+#: scripted processing time. Both portable legs share one override field
+#: (design D1): a spark-specific budget is added only if measurements demand it.
+_REAL_TIME_LEGS = frozenset({FLINK, SPARK})
 
 _HOUR_MS = 3_600_000
 # Large event-time TTL so working-memory GC never fires unless the scenario is
@@ -129,8 +139,10 @@ class ScenarioSpec:
     #: ``Suspend.timeout_ms`` a suspending scenario uses on the DirectRunner
     #: leg (scripted processing time); None for scenarios that never suspend.
     hitl_timeout_ms: int | None = None
-    #: Real-time override for the Flink leg, where the HITL timer actually
-    #: waits on a wall clock under CI load.
+    #: Real-time override for the portable-runner legs (Flink and Spark),
+    #: where the HITL timer actually waits on a wall clock under CI load.
+    #: Named for Flink because Flink is where it was measured; ``variant_for``
+    #: applies it to every real-time leg.
     flink_hitl_timeout_ms: int | None = None
     #: Working-memory TTL for the cell's AgentConfig.
     memory_ttl_ms: int = BIG_TTL_MS
@@ -146,9 +158,15 @@ class ScenarioSpec:
     #: reported as a skip carrying the reason, exactly like a per-leg `Skip`.
     adapter_skips: dict[str, str] = field(default_factory=dict)
 
-    def flink_variant(self) -> ScenarioSpec:
-        """The spec as built for the Flink leg (real-time HITL deadline)."""
-        if self.flink_hitl_timeout_ms is None:
+    def variant_for(self, leg: str) -> ScenarioSpec:
+        """The spec as built for ``leg``.
+
+        Only the real-time legs differ from the declaration: on Flink and
+        Spark the HITL timer waits on a wall clock, so the scenario's
+        real-time override (if any) replaces the scripted deadline. The
+        DirectRunner leg is always the spec as declared.
+        """
+        if leg not in _REAL_TIME_LEGS or self.flink_hitl_timeout_ms is None:
             return self
         return replace(self, hitl_timeout_ms=self.flink_hitl_timeout_ms)
 
@@ -205,7 +223,7 @@ SINGLE_SHOT = ScenarioSpec(
     tools=(),
     expected_outputs=(b"done-single-shot",),
     expected_provider_calls=1,
-    legs={DIRECT: Run(), FLINK: Run()},
+    legs={DIRECT: Run(), FLINK: Run(), SPARK: Run()},
 )
 
 MULTI_TOOL_INLINE = ScenarioSpec(
@@ -223,7 +241,7 @@ MULTI_TOOL_INLINE = ScenarioSpec(
     # without staging traces — a surfaced finding, see design.md.)
     expected_outputs=(b"AA,BB|done-multi-tool",),
     expected_provider_calls=3,
-    legs={DIRECT: Run(), FLINK: Run()},
+    legs={DIRECT: Run(), FLINK: Run(), SPARK: Run()},
 )
 
 SUSPENSION_RESUME = ScenarioSpec(
@@ -235,7 +253,7 @@ SUSPENSION_RESUME = ScenarioSpec(
     expected_intents=(IntentExpectation(0, 1, "charge", ToolIntent.TOOL),),
     expected_provider_calls=2,
     hitl_timeout_ms=_HOUR_MS,
-    legs={DIRECT: Run(), FLINK: Run()},
+    legs={DIRECT: Run(), FLINK: Run(), SPARK: Run()},
 )
 
 APPROVAL_TIMEOUT_FALLBACK = ScenarioSpec(
@@ -251,7 +269,7 @@ APPROVAL_TIMEOUT_FALLBACK = ScenarioSpec(
     # never race it, short enough to demonstrably fire mid-run (the e2e gate's
     # late-population value).
     flink_hitl_timeout_ms=30_000,
-    legs={DIRECT: Run(), FLINK: Run()},
+    legs={DIRECT: Run(), FLINK: Run(), SPARK: Run()},
 )
 
 RESTART_MID_SUSPENSION = ScenarioSpec(
@@ -263,7 +281,20 @@ RESTART_MID_SUSPENSION = ScenarioSpec(
     expected_intents=(IntentExpectation(0, 1, "charge", ToolIntent.TOOL),),
     expected_provider_calls=2,
     hitl_timeout_ms=_HOUR_MS,
-    legs={DIRECT: Run(), FLINK: Run()},
+    legs={
+        DIRECT: Run(),
+        FLINK: Run(),
+        SPARK: Skip(
+            "the spark overlay runs the job server's embedded local[4] master, so "
+            "executors live inside the job-server container and there is no separate "
+            "worker container to restart between the suspend commit and the result "
+            "delivery; restarting the job server itself tears down the driver, which "
+            "is a job resubmission, not a mid-suspension executor restart. Expressing "
+            "this cell needs dedicated Spark master/worker containers in the overlay "
+            "(design D2 / open question), and its absence is enumerated as a bound on "
+            "any future supported claim"
+        ),
+    },
 )
 
 BUNDLE_RETRY_CACHE = ScenarioSpec(
@@ -284,6 +315,13 @@ BUNDLE_RETRY_CACHE = ScenarioSpec(
             "the chaos commit-failure monkeypatch is in-process and cannot reach "
             "the beam-sdk-harness container; real replay on Flink is exercised by "
             "the restart-mid-suspension cell"
+        ),
+        SPARK: Skip(
+            "the chaos commit-failure monkeypatch is in-process and cannot reach the "
+            "spark-scoped beam-sdk-harness container — the identical harness "
+            "constraint that skips this cell on Flink, and one no runner feature can "
+            "lift; on Spark there is not even a restart-mid-suspension cell to carry "
+            "the replay evidence instead (see that scenario's spark skip)"
         ),
     },
     adapter_skips={
@@ -319,6 +357,14 @@ TTL_EXPIRY = ScenarioSpec(
             "have; TTL GC is runtime (not adapter-visible) behavior, so the "
             "DirectRunner leg keeps full adapter coverage"
         ),
+        SPARK: Skip(
+            "the same missing idle-partition watermark control as on Flink: the spool "
+            "SDF source's watermark cannot be advanced deterministically past the TTL "
+            "from the host side, and the Spark portable runner exposes no watermark "
+            "hold the harness could drive instead; TTL GC is runtime (not "
+            "adapter-visible) behavior, so the DirectRunner leg keeps full adapter "
+            "coverage"
+        ),
     },
 )
 
@@ -338,3 +384,23 @@ SCENARIOS_BY_NAME: dict[str, ScenarioSpec] = {spec.name: spec for spec in SCENAR
 FLINK_SCENARIOS: tuple[ScenarioSpec, ...] = tuple(
     spec for spec in SCENARIOS if isinstance(spec.legs[FLINK], Run)
 )
+
+SPARK_SCENARIOS: tuple[ScenarioSpec, ...] = tuple(
+    spec for spec in SCENARIOS if isinstance(spec.legs[SPARK], Run)
+)
+
+
+def skip_inventory(leg: str, scenarios: tuple[ScenarioSpec, ...] = SCENARIOS) -> dict[str, str]:
+    """``scenario name -> declared reason`` for every skip on ``leg``.
+
+    Read by ``scripts/spark_weekly_status.py`` so each weekly summary prints
+    the current spark skip inventory: the diff-based drift scan is a
+    heuristic, and a printed inventory makes a refactor-shaped evasion visible
+    week over week (design D5).
+    """
+    inventory: dict[str, str] = {}
+    for spec in scenarios:
+        declaration = spec.legs[leg]
+        if isinstance(declaration, Skip):
+            inventory[spec.name] = declaration.reason
+    return inventory
