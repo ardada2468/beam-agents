@@ -31,6 +31,16 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   };
 }
 
+/**
+ * A section index.
+ *
+ * These used to be bordered cards, one per page, which said "these are separate
+ * objects". A section index is not that — it is rows of one thing, so it is
+ * built on the same hairline-and-eyebrow language as the landing page: a hero
+ * band for the section's own header, a rule, then `.list-rule` rows. The status
+ * of each page rides on the row, because deciding what to read next depends on
+ * knowing what is finished.
+ */
 export default async function SectionIndex({ params }: { params: Promise<Params> }) {
   const { section } = await params;
   const def = sectionFor(section);
@@ -38,37 +48,45 @@ export default async function SectionIndex({ params }: { params: Promise<Params>
   const pages = pagesInSection(section);
 
   return (
-    <div className="mx-auto max-w-4xl px-5 py-10">
-      <h1 className="text-[1.9rem] leading-tight font-bold tracking-tight">{def.title}</h1>
-      <p className="mt-2 max-w-[70ch]" style={{ color: 'var(--fg-muted)' }}>
-        {def.blurb}
-      </p>
-
-      <ul className="mt-8 space-y-3">
-        {pages.map((page) => (
-          <li
-            key={page.href}
-            className="rounded-md border p-4"
-            style={{ borderColor: 'var(--border)' }}
-          >
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <Link href={page.href} className="text-[1.05rem] font-semibold no-underline">
-                {page.frontmatter.title}
-              </Link>
-              <StatusBadge status={page.frontmatter.status} size="sm" />
-            </div>
-            <p className="mt-1 text-sm" style={{ color: 'var(--fg-muted)' }}>
-              {page.frontmatter.summary}
-            </p>
-          </li>
-        ))}
-      </ul>
-
-      {pages.length === 0 ? (
-        <p className="mt-8" style={{ color: 'var(--fg-muted)' }}>
-          No pages in this section yet.
+    <>
+      <section className="shell pt-12 pb-10 sm:pt-16 sm:pb-12">
+        <p className="eyebrow">
+          {pages.length} {pages.length === 1 ? 'page' : 'pages'}
         </p>
-      ) : null}
-    </div>
+        <h1 className="h-page mt-4">{def.title}</h1>
+        <p className="lede mt-5">{def.blurb}</p>
+      </section>
+
+      <section className="rule-top">
+        <div className="shell py-10 sm:py-12">
+          {pages.length > 0 ? (
+            <ul className="list-rule">
+              {pages.map((page) => (
+                <li key={page.href}>
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-5 gap-y-1.5">
+                    <Link
+                      href={page.href}
+                      className="text-[1.05rem] font-semibold no-underline"
+                      style={{ color: 'var(--ink)', letterSpacing: '-0.014em' }}
+                    >
+                      {page.frontmatter.title}
+                    </Link>
+                    <StatusBadge status={page.frontmatter.status} size="sm" />
+                  </div>
+                  <p
+                    className="mt-1.5 max-w-[74ch] text-[0.93rem]"
+                    style={{ color: 'var(--ink-2)' }}
+                  >
+                    {page.frontmatter.summary}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p style={{ color: 'var(--ink-2)' }}>No pages in this section yet.</p>
+          )}
+        </div>
+      </section>
+    </>
   );
 }

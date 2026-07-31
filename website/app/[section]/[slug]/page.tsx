@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { allPages, findPage, isIndexable } from '@/lib/content';
 import { renderMdx } from '@/lib/mdx';
 import { absoluteUrl, SITE_NAME } from '@/lib/site';
 import { Sidebar } from '@/components/Sidebar';
-import { TableOfContents } from '@/components/TableOfContents';
+import { hasTableOfContents, TableOfContents } from '@/components/TableOfContents';
 import { StatusBadge } from '@/components/StatusBadge';
 import { Provenance } from '@/components/Provenance';
 import { STATUS_DESCRIPTIONS } from '@/lib/schema';
@@ -44,6 +45,23 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   };
 }
 
+/**
+ * A documentation page.
+ *
+ * The three columns sit inside the same `.shell` the landing page and the site
+ * header use, so the reading column lands on the same gutters rather than in a
+ * narrower box of its own — walking from `/` into a doc page should not look
+ * like walking into a different site. The two gutters are separated from the
+ * article by hairlines, which is how this site divides everything; nothing is
+ * drawn as a card.
+ *
+ * The column track stays the same whether or not a page has a table of
+ * contents, so the reading measure does not jump between pages; only the
+ * gutter's contents and its hairline come and go with it.
+ *
+ * The header deliberately carries no bottom rule. The first `.prose h2` already
+ * draws one, so adding a second here would stack two rules a few lines apart.
+ */
 export default async function ContentPage({ params }: { params: Promise<Params> }) {
   const { section, slug } = await params;
   const page = findPage(section, slug);
@@ -61,46 +79,62 @@ export default async function ContentPage({ params }: { params: Promise<Params> 
   };
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-8 px-5 py-8 lg:grid-cols-[13rem_minmax(0,1fr)_13rem]">
+    <div className="shell">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <aside className="hidden lg:block">
-        <div className="sticky top-20">
-          <Sidebar sectionSlug={section} current={slug} />
-        </div>
-      </aside>
 
-      <article className="min-w-0">
-        <nav aria-label="Breadcrumb" className="mb-2 text-sm">
-          <a href={`/${page.section.slug}`} style={{ color: 'var(--fg-muted)' }}>
-            {page.section.title}
-          </a>
-        </nav>
-        <header className="mb-6">
-          <h1 className="text-[1.9rem] leading-tight font-bold tracking-tight">
-            {page.frontmatter.title}
-          </h1>
-          <p className="mt-2 max-w-[70ch]" style={{ color: 'var(--fg-muted)' }}>
-            {page.frontmatter.summary}
-          </p>
-          <p className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-            <StatusBadge status={page.frontmatter.status} />
-            <span style={{ color: 'var(--fg-faint)' }}>
-              {STATUS_DESCRIPTIONS[page.frontmatter.status]}
-            </span>
-          </p>
-        </header>
-        <div className="prose">{body}</div>
-        <Provenance verifies={page.frontmatter.verifies} sources={page.frontmatter.sources} />
-      </article>
+      <div className="grid gap-x-8 gap-y-10 py-10 sm:py-12 lg:grid-cols-[14rem_minmax(0,1fr)_13rem]">
+        <aside
+          className="hidden lg:block lg:border-r lg:pr-8"
+          style={{ borderColor: 'var(--rule)' }}
+        >
+          <div className="sticky top-20">
+            <Sidebar sectionSlug={section} current={slug} />
+          </div>
+        </aside>
 
-      <aside className="hidden lg:block">
-        <div className="sticky top-20">
-          <TableOfContents headings={page.headings} />
-        </div>
-      </aside>
+        <article className="min-w-0">
+          {/* `.eyebrow` sits on the nav so its line box matches the two
+              gutters' labels; on the link alone the parent strut wins and the
+              three headers sit on visibly different baselines. */}
+          <nav aria-label="Breadcrumb" className="eyebrow mb-5">
+            <Link
+              href={`/${page.section.slug}`}
+              className="no-underline"
+              style={{ color: 'var(--ink-3)' }}
+            >
+              {page.section.title}
+            </Link>
+          </nav>
+
+          <header className="mb-8">
+            <h1 className="h-page">{page.frontmatter.title}</h1>
+            <p className="lede mt-4">{page.frontmatter.summary}</p>
+            <p className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <StatusBadge status={page.frontmatter.status} />
+              <span className="text-[0.85rem]" style={{ color: 'var(--ink-3)' }}>
+                {STATUS_DESCRIPTIONS[page.frontmatter.status]}
+              </span>
+            </p>
+          </header>
+
+          <div className="prose">{body}</div>
+          <Provenance verifies={page.frontmatter.verifies} sources={page.frontmatter.sources} />
+        </article>
+
+        {hasTableOfContents(page.headings) ? (
+          <aside
+            className="hidden lg:block lg:border-l lg:pl-8"
+            style={{ borderColor: 'var(--rule)' }}
+          >
+            <div className="sticky top-20">
+              <TableOfContents headings={page.headings} />
+            </div>
+          </aside>
+        ) : null}
+      </div>
     </div>
   );
 }
