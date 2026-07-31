@@ -510,6 +510,7 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 module = [
     "examples.hello_world",
     "examples.fraud_triage",
+    "examples.quickstart.pipeline",
     "examples.fraud_triage_dataflow.launch",
     "examples.iot_reaction",
     "examples.slack_approval.agent",

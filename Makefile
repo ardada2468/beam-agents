@@ -13,7 +13,7 @@ COMPOSE_CONSOLE := docker compose -f docker/compose.console.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build console-build console-up console-down console-logs console-frontend proto docs docs-serve build changelog changelog-draft
+.PHONY: quickstart quickstart-flink help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build console-build console-up console-down console-logs console-frontend proto docs docs-serve build changelog changelog-draft
 
 BENCH_RESULTS := bench-results
 # Local-iteration knob only. CI pins the modules' own sampling constants by
@@ -223,6 +223,30 @@ console-build: ## Build the console image (UI bundle included)
 CONSOLE_UP_FLAGS ?= --build
 console-up: ## Start the console at http://localhost:8787 with the demo pipeline
 	$(COMPOSE_CONSOLE) up -d $(CONSOLE_UP_FLAGS)
+
+# The quickstart (docs/quickstart.md). Unlike every other example target, this
+# one calls a real provider over the network by default and refuses rather than
+# downgrading when no credential is set — see examples/quickstart/pipeline.py.
+#
+# `--scale console-demo=0`: the console's own stack ships a looping demo
+# producer, and leaving it running would bury the handful of activations the
+# quickstart produces under a few hundred synthetic ones. The point here is to
+# watch *your* run arrive.
+PROVIDER ?= auto
+quickstart: ## Real model + real tools + HITL, streamed into the console (needs an API key)
+	$(COMPOSE_CONSOLE) up -d --build --scale console-demo=0
+	uv run python -m examples.quickstart --provider $(PROVIDER)
+
+# Same module, submitted to the Beam-on-Flink stack rather than run in-process:
+# real distributed execution, real checkpointing, one job on a real JobManager.
+# Requires `make compose-up` first, and reaches the console on the host.
+quickstart-flink: ## Run the quickstart on the local Flink cluster (requires compose-up)
+	uv run python -m examples.quickstart --provider $(PROVIDER) \
+		--console console://host.docker.internal:8787 \
+		--runner PortableRunner \
+		--job_endpoint localhost:18099 \
+		--environment_type EXTERNAL \
+		--environment_config localhost:50000
 
 # No `-v`: the database volume is the point (design D6). `docker compose
 # -f docker/compose.console.yaml down -v` is the deliberate way to discard it.

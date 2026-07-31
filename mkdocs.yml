@@ -44,6 +44,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Quickstart: quickstart.md
   - Examples:
       - Hello, world: examples/hello-world.md
       - Fraud triage: examples/fraud-triage.md
