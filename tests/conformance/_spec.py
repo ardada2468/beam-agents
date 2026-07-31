@@ -223,7 +223,22 @@ SINGLE_SHOT = ScenarioSpec(
     tools=(),
     expected_outputs=(b"done-single-shot",),
     expected_provider_calls=1,
-    legs={DIRECT: Run(), FLINK: Run(), SPARK: Run()},
+    legs={
+        DIRECT: Run(),
+        FLINK: Run(),
+        SPARK: Skip(
+            "the Spark portable runner registers no bundle checkpoint handler, and this "
+            "leg's ingest requires one: every spark cell reads its events through the "
+            "unbounded-per-element spool SDF in tests/semantics/_e2e/spool.py, whose "
+            "tail poll calls tracker.defer_remainder to self-checkpoint while waiting "
+            "for the next sealed segment, and the residual that produces fails the job "
+            "invocation with 'The ActiveBundle does not have a registered bundle "
+            "checkpoint handler'. Even the simplest cell in the matrix — one scripted "
+            "answer, no tools, no timers, no suspension — dies in the source before any "
+            "agent code runs, which is why the failure was byte-identical for all four "
+            "adapters on the first real job-server run (2026-07-31)"
+        ),
+    },
 )
 
 MULTI_TOOL_INLINE = ScenarioSpec(
@@ -241,7 +256,22 @@ MULTI_TOOL_INLINE = ScenarioSpec(
     # without staging traces — a surfaced finding, see design.md.)
     expected_outputs=(b"AA,BB|done-multi-tool",),
     expected_provider_calls=3,
-    legs={DIRECT: Run(), FLINK: Run(), SPARK: Run()},
+    legs={
+        DIRECT: Run(),
+        FLINK: Run(),
+        SPARK: Skip(
+            "the same runner-level ingest gap that skips single_shot, reached before "
+            "the first model request: the spool SDF in tests/semantics/_e2e/spool.py "
+            "tails its input by calling tracker.defer_remainder, and the Spark portable "
+            "runner has no registered bundle checkpoint handler to accept that "
+            "residual, so the invocation fails with 'The ActiveBundle does not have a "
+            "registered bundle checkpoint handler' and no tool is ever dispatched. "
+            "Nothing about inline tool execution is implicated — the job server starts "
+            "its SparkContext, builds the DStream graph and checkpoints batches, then "
+            "fails on the source's residual, identically for every adapter (first real "
+            "job-server run, 2026-07-31)"
+        ),
+    },
 )
 
 SUSPENSION_RESUME = ScenarioSpec(
@@ -253,7 +283,22 @@ SUSPENSION_RESUME = ScenarioSpec(
     expected_intents=(IntentExpectation(0, 1, "charge", ToolIntent.TOOL),),
     expected_provider_calls=2,
     hitl_timeout_ms=_HOUR_MS,
-    legs={DIRECT: Run(), FLINK: Run(), SPARK: Run()},
+    legs={
+        DIRECT: Run(),
+        FLINK: Run(),
+        SPARK: Skip(
+            "blocked by the same missing runner capability as every other spark cell, "
+            "so this scenario's actual subject — staging an intent, suspending, and "
+            "resuming from the injected result — is never exercised on Spark at all: "
+            "the leg's ingest is the unbounded-per-element spool SDF in "
+            "tests/semantics/_e2e/spool.py, whose tracker.defer_remainder tail poll "
+            "needs a bundle checkpoint handler the Spark portable runner does not "
+            "register, and the invocation dies with 'The ActiveBundle does not have a "
+            "registered bundle checkpoint handler' before the first activation. The "
+            "gap is runner-level and adapter-independent: all four adapters failed "
+            "identically on the first real job-server run (2026-07-31)"
+        ),
+    },
 )
 
 APPROVAL_TIMEOUT_FALLBACK = ScenarioSpec(
@@ -269,7 +314,22 @@ APPROVAL_TIMEOUT_FALLBACK = ScenarioSpec(
     # never race it, short enough to demonstrably fire mid-run (the e2e gate's
     # late-population value).
     flink_hitl_timeout_ms=30_000,
-    legs={DIRECT: Run(), FLINK: Run(), SPARK: Run()},
+    legs={
+        DIRECT: Run(),
+        FLINK: Run(),
+        SPARK: Skip(
+            "the spark leg never gets far enough to arm the REAL_TIME approval timer: "
+            "its ingest is the unbounded-per-element spool SDF in "
+            "tests/semantics/_e2e/spool.py, which self-checkpoints by calling "
+            "tracker.defer_remainder while tailing the spool, and the Spark portable "
+            "runner registers no bundle checkpoint handler for that residual, failing "
+            "the invocation with 'The ActiveBundle does not have a registered bundle "
+            "checkpoint handler'. This cell therefore says nothing about Spark's "
+            "REAL_TIME timer support, which stays untested; the failure is in the "
+            "source, is runner-level rather than adapter-level, and was identical for "
+            "all four adapters on the first real job-server run (2026-07-31)"
+        ),
+    },
 )
 
 RESTART_MID_SUSPENSION = ScenarioSpec(
@@ -385,6 +445,22 @@ FLINK_SCENARIOS: tuple[ScenarioSpec, ...] = tuple(
     spec for spec in SCENARIOS if isinstance(spec.legs[FLINK], Run)
 )
 
+# Every spark declaration above is a `Skip`, so this tuple is EMPTY: the spark
+# leg has zero executing cells. All of its matrix cells are still collected and
+# counted — they report their declared reason — but no pipeline is submitted and
+# nothing about the Spark portable runner is verified. Three of the seven skips
+# are structural (harness/overlay constraints, see their reasons); the other
+# four are the 2026-07-31 finding that the leg's SDF ingest needs a bundle
+# checkpoint handler the Spark portable runner does not register.
+#
+# The consequence is deliberate and should not surprise the next reader:
+# `scripts/spark_weekly_status.py` treats a spark `Skip` added inside the
+# promotion window as coverage shrinkage and resets the streak, so no number of
+# green weekly runs can promote an all-skip leg. A leg that executes nothing has
+# earned nothing. The leg stays wired (declarations, harness, overlay, weekly
+# workflow) so that closing the gap is a declaration flip: either a Beam Spark
+# runner that registers a bundle checkpoint handler, or a non-SDF ingest path
+# for this leg (see openspec/changes/record-spark-sdf-checkpoint-gap).
 SPARK_SCENARIOS: tuple[ScenarioSpec, ...] = tuple(
     spec for spec in SCENARIOS if isinstance(spec.legs[SPARK], Run)
 )

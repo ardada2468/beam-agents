@@ -39,6 +39,13 @@ mutants/
 bench-results/
 bench-report.md
 
+# Diagnostic capture from `make compose-logs LOGS_DIR=...` (per-service logs,
+# TaskManager thread dumps, Flink REST snapshots). Generated on demand when a
+# docker phase goes red — the local equivalent of what CI uploads as an
+# artifact, so it is reproducible rather than committed. The default LOGS_DIR
+# is named here; a custom one is the caller's to manage.
+compose-diagnostics/
+
 # e2e gate runtime artifacts (spool segments, worker logs, thread dumps).
 # The directory itself is committed (.gitkeep): the compose bind mount must
 # exist in a fresh checkout, or docker creates it root-owned on Linux CI

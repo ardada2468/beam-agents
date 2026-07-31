@@ -15,15 +15,46 @@
 # scripts/mutation_gate.py fails if an entry names a mutant that no longer
 # exists, so this list cannot silently accumulate stale suppressions.
 #
+# POSITIONAL DRIFT -- read before editing core/ and before trusting an entry.
+# Mutant names are POSITIONAL (`__mutmut_<n>` is an index, not an identity), so
+# inserting a statement into a mutated function silently re-points every entry
+# below the insertion at a DIFFERENT mutant while leaving its reason text
+# untouched. The entry keeps reading plausibly and now guards the wrong thing.
+#
+# This is not hypothetical. The verify-live-infrastructure run (2026-07-31) was
+# the first execution of `make mutation` on this tree, and it found exactly two
+# drifted entries, both in functions `add-token-budgets` inserted statements
+# into:
+#
+#   * `call_model__mutmut_45` -- reason described `cache_hit=None`; the mutant at
+#     that index had become `self._tally.llm_calls += 1` -> `+= 2`. That is a
+#     real off-by-one in the LLM call tally, and the stale entry would have
+#     suppressed it under a justification about something else entirely. The
+#     `cache_hit=None` mutant it was written for had moved to index 51.
+#   * `AgentContext.__init____mutmut_51` -- reason described `_drained = None`;
+#     the mutant at that index had become `_completion_tokens = 0` -> `None`.
+#     The intended mutant had moved to index 56.
+#
+# Both were repaired by RENUMBERING to the mutant the reason actually describes,
+# not by deletion: the described mutants are still live, still equivalent, and
+# still need exempting. Deleting them would have surfaced two genuinely
+# unkillable mutants as permanent survivors.
+#
+# When you edit a function that has an entry here, re-verify the entry against
+# `mutants/src/.../<module>.py` and confirm the mutation at that index still
+# matches its reason. The gate's "may exempt only live survivors" check catches
+# the case where drift lands on a KILLED mutant; it cannot catch drift that
+# lands on another surviving one.
+#
 # Format:
 #   [mutants]
 #   "beam_agents.core.loop.xǁLoopDriverǁ_advance__mutmut_12" = "Reorders operands of a commutative `and`; identical semantics."
 
 [mutants]
-"beam_agents.core.context.xǁAgentContextǁ__init____mutmut_51" = "Initial `_drained = None` is observably identical to `False`: both are private, falsy sentinels and the first drain replaces either with `True`."
+"beam_agents.core.context.xǁAgentContextǁ__init____mutmut_56" = "Initial `_drained = None` is observably identical to `False`: both are private, falsy sentinels and the first drain replaces either with `True`."
 "beam_agents.core.context.xǁAgentContextǁ_stage_intent__mutmut_6" = "`json.dumps(ensure_ascii=None)` is identical to `ensure_ascii=False` because the option is consumed only by truth-value testing."
 "beam_agents.core.context.xǁAgentContextǁ_stage_intent__mutmut_7" = "`json.dumps(allow_nan=None)` is identical to `allow_nan=False` because the option is consumed only by truth-value testing."
-"beam_agents.core.context.xǁActivationContextǁcall_model__mutmut_45" = "Passing `cache_hit=None` is identical to `False`: `_stage_llm_trace` selects `true` only for truthy values, and `billed=not cache_hit` is `True` for both."
+"beam_agents.core.context.xǁActivationContextǁcall_model__mutmut_51" = "Passing `cache_hit=None` is identical to `False`: `_stage_llm_trace` selects `true` only for truthy values, and `billed=not cache_hit` is `True` for both."
 "beam_agents.core.context.xǁActivationContextǁ_stage_intent__mutmut_21" = "For a protobuf scalar constructor field, `attempt=None` is treated as omitted and produces the same default integer value `0` and wire bytes."
 "beam_agents.core.context.xǁActivationContextǁ_stage_intent__mutmut_32" = "Omitting protobuf scalar field `attempt` produces the same default integer value `0` and wire bytes as explicitly passing `attempt=0`."
 "beam_agents.core.dofn.xǁ_AgentDoFnǁ_route_timeout__mutmut_12" = "Omitting `kind=\"timer\"` when building the FallbackContext is identical to passing it: `FallbackContext.kind` defaults to `\"timer\"`, the only kind that exists."

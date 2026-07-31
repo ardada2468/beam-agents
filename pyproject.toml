@@ -800,6 +800,16 @@ showcontent = true
 #      for the same DirectRunner reason (test_transform.py also drives
 #      TestPipeline/TestStream; its non-pipeline AgentConfig/SinkResolver unit
 #      tests still cover transform.py's validation logic, just not under mutmut).
+#   3. It drops `tests/core/test_state_compat_doc.py`, the tripwire over
+#      `docs/state-compat.md`. mutmut runs pytest with the CWD inside its copied
+#      `mutants/` tree, and the copy is `src/` plus `also_copy` (`tests/`,
+#      `pyproject.toml`) — `docs/` is never copied, so the test's
+#      `parents[2] / "docs" / "state-compat.md"` resolves to a path that cannot
+#      exist and the whole session aborts during baseline stats collection. The
+#      same reason `tests/test_import.py` and `tests/core/test_mutation_gate.py`
+#      are excluded: it asserts over an artifact intentionally outside mutmut's
+#      copied tree, reads only markdown, and so cannot kill a core mutant. It
+#      runs unchanged in the normal suite, where it carries the doc contract.
 only_mutate = ["src/beam_agents/core/*"]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
 do_not_mutate = ["*/_protos/*"]
@@ -808,6 +818,7 @@ pytest_add_cli_args_test_selection = [
   "--ignore=tests/core/test_dofn_pipeline.py",
   "--ignore=tests/core/test_dofn_streaming.py",
   "--ignore=tests/core/test_mutation_gate.py",
+  "--ignore=tests/core/test_state_compat_doc.py",
   "--ignore=tests/core/test_transform.py",
   "-k",
   "not shuffle_boundary and not group_by_key_key",

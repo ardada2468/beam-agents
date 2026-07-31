@@ -96,7 +96,17 @@ test-dataflow: ## Run dataflow-marked tests (nightly only, requires real GCP)
 test-smoke: ## Run smoke-marked tests against live providers (nightly only, requires credentials)
 	uv run pytest -m smoke; test $$? -eq 0 -o $$? -eq 5
 
+# `rm -rf mutants/tests`: mutmut's copy into `mutants/` only ever adds — it
+# skips targets that already exist and copytrees `tests/` with dirs_exist_ok —
+# so a file that MOVED in the real tree survives forever in the copy as a
+# phantom at its old path. That is not cosmetic: tests/core/test_schema_compat.py
+# asserts no golden fixture sits outside a version directory, and the pre-v1
+# flat `golden/*.bin` left behind by an older run made it fail inside the copy
+# while passing in the real tree, aborting the whole session during baseline
+# stats. Only the copied test tree is dropped; `mutants/src` keeps the expensive
+# generated mutants, so re-runs stay incremental.
 mutation: ## Run and enforce the core/ mutation gate
+	rm -rf mutants/tests
 	uv run mutmut run --max-children $(MUTATION_CHILDREN)
 	uv run python scripts/mutation_gate.py
 
@@ -128,18 +138,30 @@ compose-up: ## Start the local Redpanda/Redis/Flink stack
 	$(COMPOSE) up -d $(COMPOSE_UP_FLAGS)
 
 # The base integration lane's services only — no Flink JobManager/TaskManager,
-# no jobserver, no SDK-harness build. Service-list audit (2026-07-30): the
-# `integration and not semantics` tests reach exactly Redpanda
+# no jobserver, no SDK-harness build. Service-list audit (2026-07-31): the
+# `integration and not semantics and not spark` tests reach exactly Redpanda
 # (localhost:19092 — tests/actions/test_write_intents_integration.py,
 # tests/effector/test_service_integration.py), Redis (localhost:16379 —
-# tests/effector/test_dedup_redis.py, test_service_integration.py), the
+# tests/effector/test_dedup_redis.py, test_service_integration.py,
+# tests/memory/stores/test_redis_live.py), the
 # Pub/Sub emulator (localhost:8085 — test_write_intents_integration.py,
-# test_service_integration.py), and the Bigtable emulator (localhost:8086 —
-# tests/effector/test_dedup_bigtable.py). Nothing else in that selection
-# touches Flink (docker/compose.yaml: only the Beam-on-Flink gates submit
-# jobs). If a new test needs another service, grow this list — loudly.
+# test_service_integration.py), the Bigtable emulator (localhost:8086 —
+# tests/effector/test_dedup_bigtable.py,
+# tests/memory/stores/test_bigtable_emulator.py), and the Firestore emulator
+# (localhost:8087 — tests/memory/stores/test_firestore_emulator.py). Nothing
+# else in that selection touches Flink (docker/compose.yaml: only the
+# Beam-on-Flink gates submit jobs). If a new test needs another service, grow
+# this list — loudly.
+#
+# `firestore-emulator` was missing from this list until 2026-07-31 even though
+# tests/memory/stores/test_firestore_emulator.py is plainly `integration`-marked
+# and therefore inside this target's own selection. The documented sequence
+# `make compose-up-core && make test-integration` failed to connect for that
+# leg rather than exercising it. The lesson the previous audit comment already
+# stated — grow this list loudly — is the one that was missed, so the selection
+# above is now written to match `test-integration`'s marker expression verbatim.
 compose-up-core: ## Start only the non-Flink services (base integration lane)
-	$(COMPOSE) up -d --wait redpanda redis pubsub-emulator bigtable-emulator
+	$(COMPOSE) up -d --wait redpanda redis pubsub-emulator bigtable-emulator firestore-emulator
 
 # Local-parity equivalent of the flink-minicluster job's cached buildx build
 # (the CI step uses docker/build-push-action with the same tag and file).
