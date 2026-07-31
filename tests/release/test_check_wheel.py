@@ -45,9 +45,12 @@ Name: beam-agents
 Version: {VERSION}
 Requires-Python: <3.13,>=3.11
 Requires-Dist: apache-beam[gcp]>=2.60
+Provides-Extra: adk
 Provides-Extra: effector
 Provides-Extra: langgraph
+Provides-Extra: memory-stores
 Provides-Extra: otlp
+Provides-Extra: pydantic-ai
 Provides-Extra: vllm
 """
 
@@ -68,7 +71,17 @@ COMPLIANT_MEMBERS = (
 
 EXPECTED = Expected(
     requires_python=">=3.11,<3.13",
-    extras=frozenset({"effector", "langgraph", "otlp", "vllm"}),
+    extras=frozenset(
+        {
+            "adk",
+            "effector",
+            "langgraph",
+            "memory-stores",
+            "otlp",
+            "pydantic-ai",
+            "vllm",
+        }
+    ),
 )
 
 
@@ -275,8 +288,10 @@ class TestExpectedFromPyproject:
         text = (
             '[project]\nname = "beam-agents"\nrequires-python = ">=3.11,<3.13"\n\n'
             "[project.optional-dependencies]\n"
-            'effector = ["aiokafka"]\nlanggraph = ["langgraph"]\n'
-            'otlp = ["opentelemetry-proto"]\nvllm = ["vllm"]\n'
+            'adk = ["google-adk"]\neffector = ["aiokafka"]\n'
+            'langgraph = ["langgraph"]\nmemory-stores = ["redis"]\n'
+            'otlp = ["opentelemetry-proto"]\npydantic-ai = ["pydantic-ai-slim"]\n'
+            'vllm = ["vllm"]\n'
         )
         assert expected_from_pyproject(text) == EXPECTED
 

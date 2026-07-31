@@ -111,3 +111,17 @@ lock diff is large but is the minimum that makes `uv sync --locked` succeed at
 all; `tests/release/test_check_release.py::TestRepositoryStateIsSelfConsistent`
 now pins pyproject/lock agreement in the unit lane so this failure mode is
 legible next time.
+
+## 6. Revision: extras pin refreshed for the M2 batch (integration)
+
+- [x] 6.1 `tests/release/test_check_wheel.py` pins the published extras set in three places (the
+  `EXPECTED` constant, the synthetic wheel `METADATA`, and the synthetic pyproject fed to
+  `expected_from_pyproject`). That literal pin is the point — adding a distribution extra must be
+  a deliberate act, not a silent one — so the correct response to the three extras that landed in
+  the same merge window is to update it, not to loosen the assertion. Extras went from four
+  (`effector`, `langgraph`, `otlp`, `vllm`) to seven, adding `memory-stores` (C29), `adk` (C31),
+  and `pydantic-ai` (C39). Verified: `pytest tests/release` 96 passed, 5 skipped.
+- [x] 6.2 `uv.lock` regenerated once against the fully merged `pyproject.toml` rather than taking
+  either side of the merge, which is what this change's own Revision 3 anticipated: the lock now
+  carries every M2 extra and dependency-group mirror at once. `uv sync --locked` succeeds, so the
+  `ci` lane's locked sync — broken on the intermediate branch states — is green again.
