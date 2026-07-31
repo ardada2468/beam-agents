@@ -56,6 +56,71 @@ handler. If a human is waiting on a text box, this is the wrong tool.
 An activation is one execution of the agent, for one key, inside one
 `process()` call. The agent receives a context and returns an outcome.
 
+{/*
+  This page is the front door after the landing page, and it was the only one
+  describing the whole unit of work with no picture at all. The loop through
+  keyed state is the part worth drawing: state is read once at the top, the
+  agent never touches it directly, and the write is a single arrow that closes
+  the loop only after an outcome exists. That shape is what makes the three
+  guarantees listed under this diagram read as consequences rather than
+  assertions.
+*/}
+
+<Diagram
+  title="The shape of an activation"
+  desc="One pre-keyed element — a key and an AgentEnvelope — and the keyed state for that key, holding working memory, the LLM replay cache, any continuation and seq, are read into an AgentContext, which is the only surface the agent touches: memory, the model, read-only tools, act() for side effects and emit() for outputs. The agent runs against that context and returns an Outcome, either Complete or Suspend. Four named outputs leave: .output for terminal agent outputs, .intents for side-effect requests, .traces for observability records and .errors for dead letters. Everything the activation staged is written back to keyed state in one step, atomically with the Beam bundle; a dead letter on .errors means no outcome was produced and nothing was committed."
+  caption="One key, one element, one process() call. State is read once at the top and written once at the bottom — the agent itself never touches Beam state, and the four outputs are the only things that leave."
+  viewBox="0 0 640 412"
+  minWidth={560}
+>
+  <DgNode x={16} y={26} w={280} h={46} label="KV[key, AgentEnvelope]" sub="ONE ELEMENT, ONE KEY" />
+  <DgNode
+    x={324}
+    y={26}
+    w={300}
+    h={46}
+    label="keyed state, for this key"
+    sub="MEMORY LLM CACHE CONTINUATION SEQ"
+  />
+  <DgEdge arrow={false} d="M156,72 V96 M474,72 V96 M156,96 H474" />
+  <DgText x={320} y={88} anchor="middle" variant="faint">{'STATE IS READ ONCE, HERE'}</DgText>
+  <DgEdge d="M320,96 V124" />
+
+  <DgNode
+    x={170}
+    y={124}
+    w={300}
+    h={52}
+    label="AgentContext"
+    sub="MEMORY MODEL TOOLS act() emit()"
+  />
+  <DgEdge d="M320,176 V200" />
+  <DgNode x={190} y={200} w={260} h={52} label="your agent" sub="activate(ctx)" />
+  <DgEdge d="M320,252 V276" />
+  <DgNode x={180} y={276} w={280} h={52} label="Outcome" sub="COMPLETE OR SUSPEND" />
+
+  <DgEdge arrow={false} d="M320,328 V344 M80,344 H560" />
+  <DgEdge stream="output" d="M80,344 V360" />
+  <DgText x={80} y={374} anchor="middle" stream="output">{'.output'}</DgText>
+  <DgEdge stream="intents" d="M240,344 V360" />
+  <DgText x={240} y={374} anchor="middle" stream="intents">{'.intents'}</DgText>
+  <DgEdge stream="traces" d="M400,344 V360" />
+  <DgText x={400} y={374} anchor="middle" stream="traces">{'.traces'}</DgText>
+  <DgEdge stream="errors" d="M560,344 V360" />
+  <DgText x={560} y={374} anchor="middle" stream="errors">{'.errors'}</DgText>
+  <DgText x={560} y={388} anchor="middle" variant="faint">{'IF NO OUTCOME'}</DgText>
+  <DgText x={560} y={400} anchor="middle" variant="faint">{'NOTHING COMMITTED'}</DgText>
+
+  {/*
+    The write-back runs up the right margin and arrives at the state box from
+    below, so it cannot be read as the agent reaching into state mid-run: the
+    only path from the chain back to state leaves after an outcome exists.
+  */}
+  <DgEdge d="M460,302 H596 Q612,302 612,286 V72" />
+  <DgText x={474} y={316} variant="faint">{'COMMITTED ATOMICALLY'}</DgText>
+  <DgText x={474} y={328} variant="faint">{'WITH THE BUNDLE'}</DgText>
+</Diagram>
+
 <Example file="fast_path.py" region="agent" />
 
 Three things in that function are runtime guarantees rather than conveniences:
