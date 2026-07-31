@@ -20,6 +20,15 @@ verifies:
 An agent asks a person by staging an approval intent and suspending. The
 interesting part is not the asking — it is what happens when nobody answers.
 
+<HitlApprovalSequence />
+
+Nothing is blocked while the wait runs. The activation returns, the bundle
+commits, and the only thing that outlives it is a `Continuation` in keyed state
+holding the suspended `seq`, the snapshot the agent handed to `Suspend`, and the
+intent ids nothing has answered yet. The answer, whenever it comes, is an
+ordinary keyed element on the approvals topic — the same shape as any other
+input.
+
 ## Requesting an approval
 
 <Example file="human_in_the_loop.py" region="agent" />
@@ -64,6 +73,14 @@ Layer 1 is the timer above. Layer 2 is the effector refusing any intent past
 its `expires_at_ms`, so a late approval cannot cause an effect after the
 runtime has already given up. `refuse_expired` treats a non-positive expiry as
 **expired**, never as unbounded.
+
+<HitlFailClosed />
+
+The two guards run in different processes and read different fields, which is
+what makes them two layers rather than one rule applied twice. Layer 1 decides
+whether a suspension may resume; layer 2 decides whether an effect may happen at
+all, and it decides it *before* the dedup store is touched, so an outage there
+cannot turn a deadline into an unbounded wait.
 
 A result or approval that arrives with no live continuation is dropped to
 `.errors` as `orphaned_result`, with a detail naming why: `no_continuation`,

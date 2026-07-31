@@ -11,6 +11,9 @@ import { Figure } from '@/components/Figure';
 import { RepoDoc } from '@/components/RepoDoc';
 import { Spec } from '@/components/Spec';
 import { StateCells, StateWriteLifecycle } from '@/components/diagrams/StateDiagrams';
+import { HitlApprovalSequence } from '@/components/diagrams/HitlApprovalSequence';
+import { HitlFailClosed } from '@/components/diagrams/HitlFailClosed';
+import { HitlReinjection } from '@/components/diagrams/HitlReinjection';
 
 /**
  * Shiki is configured once and shared by both pipelines, because a code block
@@ -122,11 +125,14 @@ export async function renderMdx(source: string): Promise<ReactElement> {
       Figure,
       RepoDoc,
       Spec,
-      // Page-specific diagrams. Each is composed from the primitives above and
-      // named for the page it belongs to, so the map stays greppable as more
-      // pages get drawings.
+      // Page-specific diagrams. A diagram with real geometry is a component,
+      // not markup a content author retypes; naming it here is what lets the
+      // MDX call it by name without an import statement MDX cannot resolve.
       StateCells,
       StateWriteLifecycle,
+      HitlApprovalSequence,
+      HitlFailClosed,
+      HitlReinjection,
     },
   });
   return content;
