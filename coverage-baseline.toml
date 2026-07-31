@@ -38,4 +38,29 @@
 # add-state-schema-migration: 0.9497 (core/migration.py lands fully branch-
 # covered by the registry suite, and routing the seven keyed-state reads
 # through the hook added no uncovered branches).
-branch_rate = 0.9497
+#
+# Merge resolution (the M2 batch: add-vllm-provider, add-longterm-memory-stores,
+# add-adk-adapter, add-pydantic-ai-adapter, add-compaction-strategies,
+# add-hot-key-sharding-guidance and the rest): same rule as every merge above —
+# each number was measured against its own tree and the rate is a ratio over the
+# whole project, so the combined tree is re-measured rather than having a side
+# picked. Measured on the combined tree: 0.9015.
+#
+# This one moves DOWN, which no previous entry did, so the reason is recorded
+# explicitly rather than left to be rediscovered. add-longterm-memory-stores
+# ships four MemoryStore backends; three of them — memory/stores/{redis,
+# bigtable,firestore}.py — sit at 0.00 branch coverage in THIS lane because
+# every branch they own is inside a live-client call path. Their tests exist and
+# are `integration`-marked (docker/emulator-backed), so the offline unit lane
+# that produces this coverage.xml cannot reach them by construction; the
+# in-memory and SQLAlchemy backends, which offline tests can drive, are covered.
+# Together those three files contribute 16 uncovered branches, which is the
+# whole of the 0.9497 -> 0.9015 move.
+#
+# Deliberately NOT worked around by omitting those modules from
+# [tool.coverage.run]: the omit list is for generated protobuf only, and hiding
+# hand-written backends would make their coverage permanently unmeasurable
+# instead of merely lane-specific. Re-measure and raise this number when the
+# integration lane's coverage is folded in, or when those backends gain offline
+# call-shape tests that reach their branches.
+branch_rate = 0.9015
