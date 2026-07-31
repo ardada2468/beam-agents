@@ -81,24 +81,42 @@ def changelog_section(version: str) -> str:
 # --- Requirement: the shipped version and changelog match the milestone --------
 
 
-def test_project_version_is_the_release_version() -> None:
+def _parts(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def _project_version() -> str:
+    return str(tomllib.loads(_read(PYPROJECT))["project"]["version"])
+
+
+def test_project_version_is_at_least_the_release_version() -> None:
     # Scenario: The shipped version and changelog match the milestone (the
     # metadata half). check_release.py compares the tag against this string;
-    # this asserts the string is the one 0.3.0 promised.
-    data = tomllib.loads(_read(PYPROJECT))
-    assert data["project"]["version"] == RELEASE_VERSION, (
-        f"pyproject.toml [project].version must read {RELEASE_VERSION!r} for the 0.3.0 milestone"
+    # this asserts the string is at least the one 0.3.0 promised.
+    #
+    # Amended by add-0-5-0-release (C43), which bumped the tree to 0.5.0 and
+    # turned the original `== "0.3.0"` assertion red: a milestone's equality
+    # with the *current* version is only true between its own bump and the
+    # next one, so it was never the durable property. The floor is: the tree
+    # never regresses below a milestone whose release notes are already
+    # assembled. C43's own test carries the same shape, one milestone up.
+    assert _parts(_project_version()) >= _parts(RELEASE_VERSION), (
+        f"pyproject.toml [project].version reads {_project_version()!r}, below the "
+        f"{RELEASE_VERSION} milestone this repository has already assembled release notes for"
     )
 
 
-def test_lockfile_records_the_release_version() -> None:
+def test_lockfile_agrees_with_the_project_version() -> None:
     # The bump is only half-done without `uv lock`: uv.lock records the
     # project's own version and every CI job installs with `uv sync --locked`.
+    # Stated as agreement with pyproject.toml rather than equality with 0.3.0
+    # (same C43 amendment) — agreement is what `scripts/check_release.py`
+    # enforces at tag time and what stays true across later bumps.
     lock = tomllib.loads(_read(REPO_ROOT / "uv.lock"))
     versions = [p.get("version") for p in lock["package"] if p.get("name") == "beam-agents"]
-    assert versions == [RELEASE_VERSION], (
+    assert versions == [_project_version()], (
         f"uv.lock records beam-agents {versions} but pyproject.toml declares "
-        f"{RELEASE_VERSION} — refresh the lockfile with `uv lock`"
+        f"{_project_version()!r} — refresh the lockfile with `uv lock`"
     )
 
 

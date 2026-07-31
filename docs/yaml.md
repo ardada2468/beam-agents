@@ -23,7 +23,7 @@ Add a `providers:` block to your pipeline document:
 providers:
   - type: python
     config:
-      packages: ["beam-agents==0.3.0"]
+      packages: ["beam-agents==0.5.0"]
     transforms:
       RunAgent: "beam_agents.yaml.run_agent"
 ```
@@ -238,7 +238,7 @@ pipeline:
 providers:
   - type: python
     config:
-      packages: ["beam-agents==0.3.0"]
+      packages: ["beam-agents==0.5.0"]
     transforms:
       RunAgent: "beam_agents.yaml.run_agent"
 ```

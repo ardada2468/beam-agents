@@ -12,6 +12,66 @@ compatibility surface and the release procedure.
 
 <!-- towncrier release notes start -->
 
+## 0.5.0 - 2026-07-31
+
+The **M3 milestone release**. It closes out the seven M3 changes, which
+together are the *adoption surface*: the ways an agent reaches the runtime
+(Beam YAML, the Pydantic AI adapter), the ways a pipeline reaches production
+(the Dataflow Flex Template, the Slack approval surface, the continuous-eval
+pipeline), the way an activation is debugged after the fact (the replay CLI),
+and the way the design is put to the Beam community (the upstream design doc).
+
+The **Added** subsection below is assembled mechanically from `changelog.d/`.
+The two subsections around it — the M3 batch and the release gate — are the
+milestone record the `release-0-5` capability requires, and are hand-curated.
+
+### The M3 batch
+
+The seven changes this milestone is defined as closing out. Four of them
+(`add-yaml-provider`, `add-dataflow-flex-template`, `add-replay-cli`,
+`add-upstream-design-doc`) wrote changelog fragments that assembly consumed
+into the `0.3.0` section, and three (`add-pydantic-ai-adapter`,
+`add-slack-approval-example`, `add-eval-pipeline-example`) landed with no
+fragment at all. Both facts are why this table is not optional: a milestone
+whose contents a reader has to reconstruct from a previous section plus the
+git log is not a release note.
+
+| Roadmap | Change | What it delivered |
+| ------- | ------ | ----------------- |
+| C36 | `add-yaml-provider` | `RunAgent` reachable from a [Beam YAML](docs/yaml.md) document through one fully-qualified constructor, `beam_agents.yaml.run_agent`, with `module:object` references resolved at document-expansion time so a typo fails before submission rather than inside a bundle. |
+| C37 | `add-dataflow-flex-template` | The fraud-triage example as a Dataflow Flex Template (`examples/fraud_triage_dataflow/`): one `gcloud dataflow flex-template run`, topics and provider and approval deadline as parameters, provider keys as Secret Manager resource names resolved on the worker — never as launch parameters. |
+| C38 | `add-replay-cli` | `export_request` → `StateSnapshot` on `RunAgent`'s new `.snapshots` output, and the `beam-agents-replay` console script that re-runs that activation offline against a transport-free provider, diffing it against the traced record with scriptable exit codes. |
+| C39 | `add-pydantic-ai-adapter` | `PydanticAIAgent` (`pydantic-ai` extra): an existing Pydantic AI agent under the same durability and re-injection rules as a native agent — history persisted latest-only in working memory, `side_effect=True` tools declared external and staged as intents, recognized httpx-backed models served through the replay-cache path. Registered on the conformance matrix, so it is covered on both legs. |
+| C40 | `add-slack-approval-example` | A worked approval surface (`examples/slack_approval/`, [docs](docs/examples/slack-approval.md)): consume `kind == APPROVAL` intents through the effector's `IntentSource` seam, post one Block Kit message each, publish the decision back as an `Approval` on the same key — with the Slack transport behind a `SlackGateway` seam so the whole loop tests offline. |
+| C41 | `add-eval-pipeline-example` | A [continuous-evaluation pipeline](docs/continuous_eval.md): a second, ordinary Beam job that joins the traces topic to a late-arriving business-outcome stream on `(entity_key, seq)` and scores the pair with an LLM-as-judge, with `no_outcome`, `orphaned_outcomes`, and `judge_errors` as first-class outputs. |
+| C42 | `add-upstream-design-doc` | The `docs/design/` upstreaming artifacts: a Beam-community design document proposing an `apache_beam.ml.agents` package, plus a dev@beam.apache.org thread plan pairing the announcement draft with an objections register. |
+
+### Added
+
+- `ToolIntent`s can now be signed at the outbox writer and verified by the effector before anything else runs, so write access to the intents topic is no longer the authority to execute any side-effecting tool: pass `WriteIntents(..., signer=IntentSigner(key_id, "env:MY_KEYS"))` and roll the effector's `--verify-intents` dial from `off` through `permissive` to `require`, with failures preserved on `--dead-letters-to` and never published as a `ToolResult`. Kafka SASL/TLS is configurable on every client the library constructs, with credentials supplied as `env:`/`file:` references rather than values, and credentialed URIs are now redacted in configuration errors, `repr(EffectorConfig)`, and the CLI's startup output. See [`docs/security.md`](https://github.com/ardada2468/beam-agents/blob/main/docs/security.md) for the rollout, the least-privilege role matrices, and the rule that secrets must never travel in tool arguments. (add-effector-security)
+
+### Release gate
+
+Evaluated as a whole at the release-candidate commit and recorded here with its
+evidence. **Status: not yet fully green — `v0.5.0` is not tagged.** The gate
+does not bend: under this milestone's design decision D1 an unmet condition
+slips the release date, it does not shrink the release — no subset of the M3
+batch ships as 0.5.0 and no straggler trails in a 0.5.x.
+
+| Gate condition | Evidence | Verdict |
+| -------------- | -------- | ------- |
+| All seven M3 changes archived | All seven are implemented, gated, and merged; their change folders are still live under `openspec/changes/` awaiting the archive step, and `openspec/changes/archive/` still holds only the nine pre-0.1.0 changes. Archival — not merge — is the gating state (design D2) | pending (archival) |
+| Adapter conformance matrix green on the release commit, both legs, every registered adapter | The registry now carries four adapters (`reference`, `langgraph`, `pydantic_ai`, `adk`), so "matrix green" means "green including Pydantic AI" with no extra wiring (design D3). The DirectRunner leg is green here — `make test-semantics-offline`: 79 passed, 5 skipped, all declared — but the Flink leg is `make test-conformance-flink` in the `integration` workflow and needs a run at the candidate commit | pending (CI run) |
+| Benchmark regression gate green — overhead p50 < 15 ms and p99 < 60 ms per activation, excluding LLM and tool time | Requires the nightly `bench` job on a GitHub-hosted runner; `benchmark-baseline.toml`'s `[medians_ms]` is still unseeded and `docs/benchmarks.md` forbids seeding it from developer hardware | pending (CI hardware) |
+| `ci`, `integration`, and `quality` green on the release commit | The docker-backed halves of `integration` and the `quality` mutation job have not run at this commit; D3 requires the runs to be on the commit the tag will point at, not an earlier green one | pending (CI run) |
+| Offline gate roster green at the candidate commit | `make lint`, `make type`, `make test-unit`, `make test-semantics-offline`, `make coverage-ratchet` | pass |
+| Version and changelog agree | `pyproject.toml` and `uv.lock` both read `0.5.0`, `docs/yaml.md`'s provider pin follows, and this section names all seven M3 changes — pinned by `tests/release/test_release_0_5_0.py` | pass |
+
+The archival row is checked against the repository rather than asserted:
+`test_recorded_archival_verdict_matches_the_repository` fails if this table
+records `pending (archival)` once every M3 change *is* archived, and fails just
+as loudly if the table drops the marker while any of them is not.
+
 ## 0.3.0 - 2026-07-31
 
 The **M2 milestone release**. It closes out the nine M2 changes, records how
