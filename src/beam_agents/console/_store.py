@@ -425,6 +425,24 @@ def _latest(events: Sequence[_StoredEvent]) -> _StoredEvent:
     return max(events, key=lambda event: (event.start_ms, event.span_id, event.event_type))
 
 
+def _wall_ms(starts: Sequence[_StoredEvent], ended_ms: int | None) -> int | None:
+    """Return elapsed time across the activation, or ``None`` when unmeasured.
+
+    ``None`` rather than ``0`` for a single attempt. Every event of one attempt
+    carries that attempt's single injected clock read, so the difference between
+    its start and its end is a number subtracted from itself, not an elapsed
+    time the runtime measured. Only a suspend/resume spans two clock reads.
+
+    A resumed activation whose recorded end precedes its start is also ``None``:
+    two attempts' clocks are independent, and a negative interval is evidence
+    that the ordering assumption does not hold rather than a duration.
+    """
+    if not starts or ended_ms is None:
+        return None
+    elapsed = ended_ms - min(event.start_ms for event in starts)
+    return elapsed if elapsed > 0 else None
+
+
 def _summarize(
     entity_key: str,
     seq: int,
@@ -491,15 +509,19 @@ def _summarize(
         attempts=max(len(start_spans | end_spans), 1),
         started_ms=min(started),
         ended_ms=ended_ms,
-        # The only duration here, and it is a real one: two clock reads, one per
-        # attempt boundary. It is `0` for a single attempt because both events
-        # carry that attempt's single activation-clock read (traces D7) — a
-        # measured zero, not a missing measurement.
-        wall_ms=(
-            ended_ms - min(event.start_ms for event in starts)
-            if starts and ended_ms is not None
-            else None
-        ),
+        # The only duration here, and only when there is genuinely one to
+        # report. `ActivationTrace` holds a *single* injected clock read for a
+        # whole attempt and stamps every one of its events with it (traces D7,
+        # so the hot path never reads a wall clock), which means START and END
+        # of one attempt carry the identical timestamp. Their difference is not
+        # a measurement of zero elapsed time — it is the same number subtracted
+        # from itself, and rendering it as "0 ms" would tell an operator the
+        # activation was instantaneous.
+        #
+        # Across a suspend and resume there really are two clock reads, so the
+        # span between the first attempt's start and the last attempt's end is a
+        # real elapsed time. That is the only case that reports a number.
+        wall_ms=_wall_ms(starts, ended_ms),
         model=_latest(models).attributes[REQUEST_MODEL] if models else None,
         llm_calls=len(llm_calls),
         tool_calls=len(tool_calls),

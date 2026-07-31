@@ -38,7 +38,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import time
 from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -76,6 +78,24 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 
 STATIC_DIR_ENV = "BEAM_AGENTS_CONSOLE_STATIC"
+
+_LOG = logging.getLogger("beam_agents.console")
+
+# How often the retention sweep runs. Retention is measured in hours, so an
+# hourly sweep is as precise as the setting it enforces; anything faster is
+# repeated work against a store a pipeline is writing.
+_PRUNE_INTERVAL_S = 3600.0
+
+
+def _now_ms() -> int:
+    """Wall-clock milliseconds, read only by the retention sweep.
+
+    Nothing that derives a record reads a clock — every timestamp in the store
+    came from the runtime's own injected clock. Retention is the one thing that
+    is genuinely about now.
+    """
+    return int(time.time() * 1000)
+
 
 # The bundle hatchling ships *if present* (design D9). A module constant rather
 # than an expression buried in the resolver, so a test can point it somewhere
@@ -245,7 +265,11 @@ def create_app(
             Route(OTLP_TRACES_PATH, ingest_otlp, methods=["POST"]),
         ]
     )
-    app.include_router(_api.build_router(store), prefix="/api")
+    # No `prefix=` here: `build_router` already carries `/api`. Adding it again
+    # puts every read route at `/api/api/...`, where nothing 404s — the SPA
+    # mount at `/` answers `/api/overview` with `index.html` and a 200, so the
+    # whole read API silently returns HTML.
+    app.include_router(_api.build_router(store))
 
     @app.get("/api/stream", response_model=None)
     async def stream() -> Any:
@@ -300,18 +324,120 @@ def serve(
     """Open the store and run the server until interrupted.
 
     The one-call entry point behind the ``beam-agents-console`` script. Blocks;
-    returns normally on a clean shutdown, with the store closed. Every option
-    beyond ``log_level`` is forwarded to :func:`create_app`, which names any it
-    does not recognize.
+    returns normally on a clean shutdown, with the store closed.
+
+    This is where the pull sources and the retention sweep live, because both
+    need the store and the store is opened here. The CLI resolves and validates
+    configuration; it constructs nothing, precisely so that a source's lifetime
+    is bounded by the server's rather than by a caller remembering to stop it.
+    Every option beyond those consumed here is forwarded to :func:`create_app`,
+    which names any it does not recognize.
     """
     import uvicorn  # noqa: PLC0415
 
     from beam_agents.console._store import ConsoleStore  # noqa: PLC0415
 
     log_level = str(options.pop("log_level", "info"))
+    kafka_uri = options.pop("kafka_traces_from", None)
+    kafka_from_beginning = bool(options.pop("kafka_from_beginning", False))
+    bigquery_uri = options.pop("bigquery_traces_from", None)
+    import_traces = options.pop("import_traces", None)
+    import_snapshot = options.pop("import_snapshot", None)
+
     with ConsoleStore(database, retention_hours=retention_hours) as store:
-        app = create_app(store, static_dir=static_dir, **options)
+        labels: list[str] = []
+        # The import is one-shot and finite, so it runs before the port opens:
+        # a console started to look at a captured run should be showing it by
+        # the time the first request arrives, not filling in underneath one.
+        if import_traces is not None or import_snapshot is not None:
+            from beam_agents.console._sources._bundle import import_bundle  # noqa: PLC0415
+
+            result = import_bundle(store, traces=import_traces, snapshot=import_snapshot)
+            _LOG.info("imported bundle: %s", result.detail or result)
+            labels.append("bundle")
+
+        if kafka_uri:
+            labels.append("kafka")
+        if bigquery_uri:
+            labels.append("bigquery")
+
+        app = create_app(store, static_dir=static_dir, sources=tuple(labels), **options)
+        _attach_lifecycle(
+            app,
+            store,
+            kafka_uri=kafka_uri,
+            kafka_from_beginning=kafka_from_beginning,
+            bigquery_uri=bigquery_uri,
+        )
         uvicorn.run(app, host=host, port=port, log_level=log_level)
+
+
+def _attach_lifecycle(
+    app: FastAPI,
+    store: ConsoleStore,
+    *,
+    kafka_uri: str | None,
+    kafka_from_beginning: bool,
+    bigquery_uri: str | None,
+) -> None:
+    """Run the pull sources and the retention sweep for the server's lifetime.
+
+    Each background task is cancelled on shutdown and awaited, so a stopped
+    console leaves no consumer holding a broker connection.
+
+    A source that fails to start is logged and skipped rather than taken as
+    fatal. The console's own records are already in the store; refusing to serve
+    them because a broker is unreachable would withhold exactly the history
+    someone opened the console to read.
+    """
+    import asyncio  # noqa: PLC0415
+    import contextlib  # noqa: PLC0415
+
+    tasks: list[asyncio.Task[None]] = []
+
+    async def _prune_loop() -> None:
+        """Sweep expired records hourly, on the store's own clock."""
+        while True:
+            await asyncio.sleep(_PRUNE_INTERVAL_S)
+            removed = await asyncio.to_thread(store.prune, now_ms=_now_ms())
+            if removed:
+                _LOG.info("retention: pruned %d rows", removed)
+
+    @app.on_event("startup")
+    async def _start() -> None:
+        if kafka_uri:
+            from beam_agents.console._sources._kafka import KafkaTraceSource  # noqa: PLC0415
+
+            try:
+                source = KafkaTraceSource(kafka_uri, store, from_beginning=kafka_from_beginning)
+            except Exception:
+                _LOG.exception("kafka source not started: %s", kafka_uri)
+            else:
+                tasks.append(asyncio.create_task(source.run()))
+
+        if bigquery_uri:
+            from beam_agents.console._sources._bigquery import (  # noqa: PLC0415
+                BigQueryTraceSource,
+            )
+
+            try:
+                reader = BigQueryTraceSource(bigquery_uri, store)
+            except Exception:
+                _LOG.exception("bigquery source not started: %s", bigquery_uri)
+            else:
+                tasks.append(asyncio.create_task(reader.run()))
+
+        if store.retention_hours is not None:
+            tasks.append(asyncio.create_task(_prune_loop()))
+
+    @app.on_event("shutdown")
+    async def _stop() -> None:
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        tasks.clear()
 
 
 # -- internals -----------------------------------------------------------------
@@ -382,6 +508,12 @@ def _mount_ui(app: FastAPI, static: Path) -> None:
                 return await super().get_response(path, scope)
             except StarletteHTTPException as exc:
                 if exc.status_code != HTTPStatus.NOT_FOUND:
+                    raise
+                # An API path that reaches here is a routing mistake, and
+                # answering it with the SPA turns that into a 200 full of HTML —
+                # which is what a double `/api` prefix once did to every read
+                # route at once. Let it 404 so the mistake is visible.
+                if path.startswith(("api/", "ingest/")) or path == "api":
                     raise
                 return await super().get_response("index.html", scope)
 

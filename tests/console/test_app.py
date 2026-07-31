@@ -179,10 +179,18 @@ def _decode_snapshot_payload(payload: bytes) -> tuple[StateSnapshot, ...]:
 
 
 def _build_router(store: object, **options: Any) -> Any:
-    router = APIRouter()
+    # The real `build_router` carries its own `/api` prefix, so this stand-in
+    # must too. A fake that drops it lets `create_app` double-prefix without any
+    # test noticing — which is exactly what happened: every read route went to
+    # `/api/api/...` and the SPA fallback answered `/api/...` with HTML.
+    router = APIRouter(prefix="/api")
 
     @router.get("/overview")
     async def overview() -> dict[str, str]:
+        return {"from": "the read router"}
+
+    @router.get("/store")
+    async def store_status() -> dict[str, str]:
         return {"from": "the read router"}
 
     return router
@@ -605,6 +613,37 @@ async def test_a_closed_stream_leaves_no_subscriber_behind() -> None:
 # --- static assets ------------------------------------------------------------
 
 
+async def test_the_read_api_is_reachable_with_a_bundle_mounted(tmp_path: Path) -> None:
+    # Scenario: An empty store answers every endpoint. With a UI bundle mounted
+    # at `/`, a read route must still be served by the API — not by the SPA
+    # fallback. `include_router(..., prefix="/api")` over a router that already
+    # carries `/api` put every read route at `/api/api/...`, and because the
+    # fallback answers anything unmatched with `index.html` and a 200, the whole
+    # read API silently returned HTML instead of 404ing.
+    app = _build(static_dir=_bundle(tmp_path / "ui", "bundle"))
+
+    async with _client(app) as client:
+        response = await client.get("/api/store")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+
+
+async def test_an_unknown_api_path_404s_rather_than_serving_the_app(tmp_path: Path) -> None:
+    # Scenario: An API path that reaches the static mount is a routing mistake.
+    # Answering it with the single-page app hides the mistake behind a 200.
+    app = _build(static_dir=_bundle(tmp_path / "ui", "bundle"))
+
+    async with _client(app) as client:
+        api = await client.get("/api/no-such-endpoint")
+        ui = await client.get("/activations/deadbeef/3")
+
+    assert api.status_code == 404
+    # A UI route still falls back to the app, which is what the fallback is for.
+    assert ui.status_code == 200
+    assert "bundle" in ui.text
+
+
 def _bundle(root: Path, marker: str) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / "index.html").write_text(f"<!doctype html><title>{marker}</title>")
@@ -775,8 +814,35 @@ def test_serve_rejects_an_unknown_option(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr("beam_agents.console._store.ConsoleStore", FakeStore)
     monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
 
-    with pytest.raises(TypeError, match="kafka_traces_from"):
-        _app.serve(database=tmp_path / "console.db", kafka_traces_from="kafka://x/y")
+    with pytest.raises(TypeError, match="not_a_real_option"):
+        _app.serve(database=tmp_path / "console.db", not_a_real_option="x")
+
+
+def test_serve_accepts_the_options_the_cli_hands_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Scenario: The service starts with a database path. `serve` owns the store,
+    # so it also owns the lifetime of everything that needs one — the pull
+    # sources and the retention sweep. The CLI resolves configuration and
+    # constructs nothing, so every flag it parses has to be a keyword `serve`
+    # accepts. It previously accepted none of them and raised TypeError.
+    monkeypatch.setattr("beam_agents.console._store.ConsoleStore", FakeStore)
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+
+    _app.serve(
+        database=tmp_path / "console.db",
+        host="0.0.0.0",
+        port=8787,
+        static_dir=None,
+        retention_hours=72.0,
+        cors_origins=("http://localhost:5173",),
+        kafka_traces_from=None,
+        kafka_from_beginning=False,
+        bigquery_traces_from=None,
+        import_traces=None,
+        import_snapshot=None,
+        log_level="INFO",
+    )
 
 
 # --- the import boundary ------------------------------------------------------

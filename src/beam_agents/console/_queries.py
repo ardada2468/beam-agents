@@ -222,6 +222,22 @@ WITH trace_errors AS (
     WHERE event_type = '{_ERROR}' AND {_attr(REASON)} IS NOT NULL
     GROUP BY entity_key, seq, reason
 ),
+-- Which trace error, if any, is the other half of each record. Its own CTE
+-- because SQLite will not correlate a subquery in a JOIN's ON clause back to
+-- the left-hand table; in a SELECT list it will.
+matched AS (
+    SELECT r.error_id AS error_id,
+           -- An aggregate, not ORDER BY ... LIMIT 1: SQLite will not correlate
+           -- a subquery's ORDER BY back to the outer row, so "nearest in time"
+           -- is not expressible here. The earliest matching attempt is, and it
+           -- is deterministic, which is what stops one record fanning out
+           -- across several trace errors.
+           (SELECT IFNULL(MIN(t2.seq), -1) FROM trace_errors t2
+            WHERE t2.entity_key = r.entity_key
+              AND t2.reason = r.reason
+              AND (r.seq IS NULL OR t2.seq = r.seq)) AS trace_seq
+    FROM errors r
+),
 error_rows AS (
     SELECT r.entity_key AS entity_key,
            r.seq AS seq,
@@ -238,10 +254,22 @@ error_rows AS (
            t.failure_staged_intents AS failure_staged_intents,
            t.failure_llm_calls AS failure_llm_calls
     FROM errors r
+    -- The two halves of one failure rarely agree on `seq`. `ActivationError`
+    -- carries only (entity_key, reason, detail, event_time_ms) — it has no seq
+    -- field at all — while the ERROR trace event is stamped with the
+    -- activation's. Matching on seq therefore never joined them, and every
+    -- failure was reported twice: once with the detail and no error type, once
+    -- with the error type and no detail.
+    --
+    -- So: require seq only when the record actually has one, and otherwise
+    -- match on (entity_key, reason), resolving to the candidate nearest in time
+    -- so a key that failed the same way twice cannot fan one record out across
+    -- both.
+    JOIN matched m ON m.error_id = r.error_id
     LEFT JOIN trace_errors t
            ON t.entity_key = r.entity_key
-          AND IFNULL(t.seq, -1) = IFNULL(r.seq, -1)
           AND t.reason = r.reason
+          AND IFNULL(t.seq, -1) = m.trace_seq
     UNION ALL
     SELECT t.entity_key,
            t.seq,
@@ -255,11 +283,14 @@ error_rows AS (
            t.failure_staged_intents,
            t.failure_llm_calls
     FROM trace_errors t
+    -- The mirror of the join above: a trace error already claimed by a record
+    -- must not also be emitted on its own, or the unification undoes itself.
     WHERE NOT EXISTS (
         SELECT 1 FROM errors r
+        JOIN matched m ON m.error_id = r.error_id
         WHERE r.entity_key = t.entity_key
-          AND IFNULL(r.seq, -1) = IFNULL(t.seq, -1)
           AND r.reason = t.reason
+          AND m.trace_seq = IFNULL(t.seq, -1)
     )
 )
 """

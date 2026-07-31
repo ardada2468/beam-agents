@@ -368,6 +368,21 @@ def test_two_errors_differing_only_in_detail_are_two_rows(store: ConsoleStore) -
 # --- Requirement: activation rollups are derived, never written ---------------
 
 
+def test_a_single_attempt_reports_no_wall_time(store: ConsoleStore) -> None:
+    # Scenario: Real measurements are shown as numbers. A single attempt has no
+    # elapsed time to show. `ActivationTrace` holds one injected clock read and
+    # stamps every event of the attempt with it, so START and END carry the
+    # identical timestamp — their difference is that number subtracted from
+    # itself, not a measured zero. Reporting `0` would tell an operator the
+    # activation was instantaneous.
+    store.write(_batch(_completed_activation()))
+
+    row = _activation_row(store)
+    assert row["status"] == "completed"
+    assert row["ended_ms"] is not None
+    assert row["wall_ms"] is None
+
+
 def test_a_rollup_is_correct_after_a_partial_arrival(store: ConsoleStore) -> None:
     events = _completed_activation()
 
