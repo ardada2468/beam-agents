@@ -9,6 +9,11 @@ import { repoFileUrl } from '@/lib/site';
  * Given/When/Then scenarios that tests are derived from and named after. They
  * are published verbatim rather than summarized, because a summarized spec is
  * a different document with the same title.
+ *
+ * The opening line says so, and counts the requirements and scenarios it found
+ * in the file it just read — so the count cannot be stale either. It is drawn
+ * as a provenance line rather than as an info card, matching `RepoDoc`: both
+ * are saying the same thing about the page under them, and both are quoting.
  */
 export async function Spec({ capability }: { capability: string }) {
   const path = `openspec/specs/${capability}/spec.md`;
@@ -22,19 +27,22 @@ export async function Spec({ capability }: { capability: string }) {
 
   return (
     <div data-spec={capability}>
-      <p
-        className="mb-5 rounded-md border-l-4 px-4 py-2 text-sm"
-        style={{
-          background: 'var(--note-bg)',
-          borderColor: 'var(--note-border)',
-          color: 'var(--note-fg)',
-        }}
-      >
-        Published verbatim from <a href={repoFileUrl(path)}>{path}</a> — {requirements.length}{' '}
-        requirement{requirements.length === 1 ? '' : 's'}, {scenarios} scenario
-        {scenarios === 1 ? '' : 's'}. Each scenario is the source a test is derived from and named
-        after.
-      </p>
+      <div className="mb-8 pb-5" style={{ borderBottom: '1px solid var(--rule)' }}>
+        <span
+          aria-hidden="true"
+          className="block h-[3px] w-9"
+          style={{ background: 'var(--ink)' }}
+        />
+        <p className="mt-3.5 max-w-[68ch] text-[0.9rem]" style={{ color: 'var(--ink-2)' }}>
+          Published verbatim from{' '}
+          <a href={repoFileUrl(path)} className="mono text-[0.85rem]">
+            {path}
+          </a>{' '}
+          — {requirements.length} requirement{requirements.length === 1 ? '' : 's'}, {scenarios}{' '}
+          scenario{scenarios === 1 ? '' : 's'}. Each scenario is the source a test is derived from
+          and named after.
+        </p>
+      </div>
       {body}
     </div>
   );
