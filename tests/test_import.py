@@ -11,11 +11,14 @@ def test_import_succeeds() -> None:
 
 def test_public_surface_is_run_agent_config_outputs_and_hitl_policy() -> None:
     # `beam_agents/__init__.py` re-exports exactly the transform surface named
-    # in project.md plus the HITL policy types a caller must name to configure
-    # a timeout route.
+    # in project.md, plus the HITL policy types a caller must name to configure
+    # a timeout route and the caller-side key-sharding utilities.
     assert beam_agents.RunAgent is not None
     assert beam_agents.AgentConfig is not None
     assert beam_agents.RunAgentOutputs is not None
+    assert beam_agents.ShardKeys is not None
+    assert beam_agents.shard_key is not None
+    assert beam_agents.unshard_key is not None
     assert set(beam_agents.__all__) == {
         "AdkAgent",
         "AgentConfig",
@@ -28,6 +31,9 @@ def test_public_surface_is_run_agent_config_outputs_and_hitl_policy() -> None:
         "PydanticAIAgent",
         "RunAgent",
         "RunAgentOutputs",
+        "ShardKeys",
+        "shard_key",
+        "unshard_key",
     }
 
 

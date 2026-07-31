@@ -507,6 +507,19 @@ disable_error_code = ["no-untyped-call", "type-arg"]
 module = "beam_agents.core.transform"
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
+# Same Beam-untyped-API relaxation for the hot-key sharding transform and its
+# pipeline-driving tests: `ShardKeys` is a PTransform over Beam's
+# unparameterized PCollection generic, and the tests drive
+# TestPipeline/Create/Map/assert_that. The two pure functions
+# (`shard_key`/`unshard_key`) stay fully strict — they touch no Beam API.
+[[tool.mypy.overrides]]
+module = [
+    "beam_agents.keys",
+    "tests.keys.test_shard_keys_transform",
+    "tests.examples.test_shard_fanout",
+]
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
 # Same Beam-untyped-API relaxation for the OTLP export DoFn/transform (ParDo,
 # unparameterized PTransform/PCollection, untyped metric handles), plus the
 # lazily-imported opentelemetry-proto constructors reading as Any.

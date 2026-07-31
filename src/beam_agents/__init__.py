@@ -12,6 +12,11 @@ what a timed-out suspension does via a pure routing function returning
 :class:`Deny`, :class:`Drop`, or :class:`Escalate` for the
 :class:`FallbackContext` it is handed.
 
+:class:`ShardKeys`, :func:`shard_key` and :func:`unshard_key` are the
+caller-side hot-key escape hatch: one logical entity fanned across ``N``
+physical keys, upstream of :class:`RunAgent`. They are safe for memory-free
+agents only — see ``docs/sharding.md``.
+
 Importing this package has no side effects.
 """
 
@@ -20,6 +25,7 @@ from __future__ import annotations
 from beam_agents.core.agent import FallbackContext
 from beam_agents.core.transform import AgentConfig, RunAgent, RunAgentOutputs
 from beam_agents.hitl import Deny, Drop, Escalate, HitlPolicy
+from beam_agents.keys import ShardKeys, shard_key, unshard_key
 
 __all__ = [
     "AdkAgent",
@@ -33,6 +39,9 @@ __all__ = [
     "PydanticAIAgent",
     "RunAgent",
     "RunAgentOutputs",
+    "ShardKeys",
+    "shard_key",
+    "unshard_key",
 ]
 
 # Adapter classes are public API, but their framework dependencies are optional

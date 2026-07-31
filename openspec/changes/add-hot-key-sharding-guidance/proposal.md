@@ -31,7 +31,7 @@ None. The runtime treats a sharded key as an ordinary `entity_key`: no requireme
 
 **New code:** `src/beam_agents/keys.py` (two pure functions + `ShardKeys`), `tests/keys/test_shard_key.py`, `tests/keys/test_shard_keys_transform.py`, `tests/examples/test_shard_fanout.py`, `docs/sharding.md`.
 
-**Modified code:** `src/beam_agents/__init__.py` (three re-exports) and `tests/test_import.py` (the public-surface set). No proto, wire, or state change: shard keys are ordinary `bytes` keys to every existing coder and state spec, so there is no `state_schema_version` implication and no golden-blob movement.
+**Modified code:** `src/beam_agents/__init__.py` (three re-exports), `tests/test_import.py` (the public-surface set), and `pyproject.toml` (one mypy per-module `disable_error_code` block for the Beam-untyped-API call sites in `beam_agents.keys` and its two pipeline-driving test modules — the same relaxation `beam_agents.core.transform`, `beam_agents.actions.write_intents`, and every other Beam-driving module already carries; see tasks.md Revision 1). No proto, wire, or state change: shard keys are ordinary `bytes` keys to every existing coder and state spec, so there is no `state_schema_version` implication and no golden-blob movement.
 
 **CI/build:** no new workflow, marker, or dependency. All new tests are offline unit-tier (`TestPipeline` on DirectRunner with `FakeLLM`); the example test rides the existing `tests/examples/` collection.
 
