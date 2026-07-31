@@ -52,6 +52,7 @@ nav:
       - CI workflow map: ci.md
       - Running the effector: effector.md
       - Errors and dead letters: errors.md
+      - Adaptive batching: batching.md
       - Runtime metrics: metrics.md
       - Trace delivery: traces.md
       - Releasing: releasing.md

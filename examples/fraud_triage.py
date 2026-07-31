@@ -76,7 +76,7 @@ async def triage(ctx: ActivationContext) -> Complete | Suspend:
     verdict = await ctx.call_model(
         LlmRequest(
             model_id="fake-triage-model",
-            messages=[ctx.event.decode()],
+            messages=[ctx.single_event.decode()],
             tools_schema=None,
             sampling_params=None,
         )

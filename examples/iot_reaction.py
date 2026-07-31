@@ -66,7 +66,7 @@ def make_provider() -> FakeLLM:
 
 async def react(ctx: ActivationContext) -> Complete:
     """Append the reading to the device's rolling window; react on a breach."""
-    ctx.memory.append("readings", ctx.event, max_items=WINDOW_ITEMS)
+    ctx.memory.append("readings", ctx.single_event, max_items=WINDOW_ITEMS)
     window = [int(item) for item in ctx.memory.ring("readings")]
     average = sum(window) / len(window)
 

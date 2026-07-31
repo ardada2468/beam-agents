@@ -83,7 +83,7 @@ async def append_agent(ctx: ActivationContext) -> Complete:
     The joined ring reveals per-key ordering and memory persistence; the ``#seq``
     suffix reveals SEQ. A TTL wipe resets both (empty ring, seq back to 0).
     """
-    ctx.memory.append("log", ctx.event, max_items=64)
+    ctx.memory.append("log", ctx.single_event, max_items=64)
     ring = b",".join(ctx.memory.ring("log"))
     return Complete(output=ring + b"#" + str(ctx.seq).encode())
 
@@ -102,10 +102,10 @@ async def conditional_append_agent(ctx: ActivationContext) -> Complete:
     neither persists its scratch write nor advances SEQ, so the next append
     lands on the pre-failure ring with the next-lower seq.
     """
-    if ctx.event == b"FAIL":
+    if ctx.single_event == b"FAIL":
         ctx.memory.set("scratch", b"should-not-persist")
         raise RuntimeError("conditional failure")
-    ctx.memory.append("log", ctx.event, max_items=64)
+    ctx.memory.append("log", ctx.single_event, max_items=64)
     ring = b",".join(ctx.memory.ring("log"))
     return Complete(output=ring + b"#" + str(ctx.seq).encode())
 
@@ -130,7 +130,7 @@ def make_tool_registry() -> ToolRegistry:
 
 async def inline_tool_agent(ctx: ActivationContext) -> Complete:
     """Run the read-only `lookup` tool inline and complete with its value."""
-    value = await ctx.run_tool("lookup", {"customer_id": ctx.event.decode() or "x"})
+    value = await ctx.run_tool("lookup", {"customer_id": ctx.single_event.decode() or "x"})
     return Complete(output=str(value).encode())
 
 
@@ -144,15 +144,15 @@ async def outcome_routing_agent(ctx: ActivationContext) -> Complete:
     Suspension counting is asserted under `TestStream`, where both clocks are
     scripted (see test_dofn_streaming).
     """
-    if ctx.event == b"FAIL":
+    if ctx.single_event == b"FAIL":
         raise RuntimeError("routed failure")
-    if ctx.event == b"ACT":
+    if ctx.single_event == b"ACT":
         ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
         return Complete(output=b"acted")
-    if ctx.event == b"MODEL":
+    if ctx.single_event == b"MODEL":
         response = await ctx.call_model(request())
         return Complete(output=response.response)
-    return Complete(output=ctx.event)
+    return Complete(output=ctx.single_event)
 
 
 async def raising_agent(ctx: ActivationContext) -> Complete:
@@ -173,7 +173,7 @@ async def timeout_or_append_agent(ctx: ActivationContext) -> Complete:
     Paired with ``make_slow_provider`` and a small activation timeout so the SLOW
     element times out while the surrounding appends commit normally.
     """
-    if ctx.event == b"SLOW":
+    if ctx.single_event == b"SLOW":
         return await hang_agent(ctx)
     return await append_agent(ctx)
 
@@ -267,3 +267,97 @@ async def suspend_then_fail_agent(ctx: ActivationContext) -> Complete | Suspend:
 
 async def sleep_briefly(ms: int) -> None:  # pragma: no cover - trivial
     await asyncio.sleep(ms / 1000)
+
+
+# -- adaptive batching ----------------------------------------------------------
+
+
+async def batch_join_agent(ctx: ActivationContext) -> Complete:
+    """Join the activation's events and append its seq: ``a|b#0``.
+
+    Written against `ctx.events`, the uniform accessor, so the same agent runs
+    under either policy: one activation per event under `NONE`, one per flush
+    under `ADAPTIVE`. The joined payloads reveal the batch's contents and
+    arrival order; the ``#seq`` suffix reveals that a flush of N events
+    consumed exactly one seq.
+    """
+    return Complete(output=b"|".join(ctx.events) + b"#" + str(ctx.seq).encode())
+
+
+async def batch_shape_agent(ctx: ActivationContext) -> Complete:
+    """Report the agent-visible shape: ``<is_batch>:<type>:<len(events)>``.
+
+    The list-ness of `ctx.event` is a policy-level contract, so the agent has
+    to be able to see it; this is the runtime-visible proof of that.
+    """
+    kind = "list" if isinstance(ctx.event, list) else "bytes"
+    return Complete(output=f"{ctx.is_batch}:{kind}:{len(ctx.events)}".encode())
+
+
+async def batch_intent_agent(ctx: ActivationContext) -> Complete:
+    """Stage one intent, then complete with the joined batch.
+
+    The intent's `created_at_ms`/`expires_at_ms` are derived from the
+    activation clock, which for a flush is the batch's own `max(event_time_ms)`
+    — so the committed intent pins the batch clock.
+    """
+    ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
+    return Complete(output=b"|".join(ctx.events))
+
+
+async def batch_suspend_agent(ctx: ActivationContext) -> Complete | Suspend:
+    """Suspend the first batch on an intent; on resume, echo the snapshot.
+
+    The snapshot carries the batch's payloads, which is the only thing that
+    can: `Continuation` does not persist the batched events, so a resume that
+    reports them proves the snapshot-owns-resume-state rule holds at batch
+    granularity (design D5). Only the ``seq 0`` activation suspends, so a
+    later flush of the buffer that grew during the suspension completes and its
+    own seq is observable.
+    """
+    if ctx.is_resume:
+        return Complete(output=b"resumed:" + ctx.snapshot + b"#" + str(ctx.seq).encode())
+    if ctx.seq == 0:
+        ctx.act("http.post", '{"url":"batch"}', ttl_ms=_TTL_MS)
+        return Suspend(snapshot=b"|".join(ctx.events), adapter="test", timeout_ms=1000)
+    return await batch_join_agent(ctx)
+
+
+class FixedClock:
+    """Picklable wall-clock double reading one fixed epoch-seconds value.
+
+    `FLUSH_TIMER` is armed at `time_fn() + max_wait_ms`, and the DirectRunner's
+    `TestStream` clock starts at epoch zero — so a pipeline test must arm from
+    the same timeline it advances, or the mark lands decades in the future and
+    no scripted `advance_processing_time` can ever reach it. Never a `sleep()`.
+    """
+
+    def __init__(self, now_s: float = 0.0) -> None:
+        self._now_s = now_s
+
+    def __call__(self) -> float:
+        return self._now_s
+
+
+class SteppingClock:
+    """Picklable wall clock advancing a fixed step per reading.
+
+    Distinguishes "armed once, on the first buffered event" from "re-armed per
+    element": under this clock the two produce different marks, so a re-arming
+    implementation misses the scripted processing-time advance instead of
+    passing on an indistinguishable one.
+
+    The counter is module-instance state carried through pickling by value.
+    The classic DirectRunner (which a REAL_TIME timer forces) runs in-process,
+    and the DoFn reads this clock exactly once per buffer start, so the reading
+    sequence is deterministic for a scripted stream.
+    """
+
+    def __init__(self, start_s: float = 0.0, step_s: float = 0.4) -> None:
+        self._next_s = start_s
+        self._step_s = step_s
+
+    def __call__(self) -> float:
+        reading = self._next_s
+        self._next_s += self._step_s
+        return reading

@@ -56,7 +56,7 @@ Under `ADAPTIVE`, when an `event` element transitions the key's buffer from empt
 
 ### Requirement: Batch activations are batch-visible with ctx.event as a list
 
-A flush activation SHALL present the batch to the agent as `ctx.event: list[bytes]` containing the buffered events' payloads in arrival order. The list shape SHALL be determined by policy, not by batch size: under `ADAPTIVE`, every flush — including a flush of one — presents a list, and under `NONE`, `ctx.event` is always `bytes`. The context SHALL expose `ctx.is_batch` (true exactly on `ADAPTIVE` flush activations) and a uniform `ctx.events` tuple accessor (the batch under `ADAPTIVE`, a singleton under `NONE`, empty on resume) so agents and adapters detect batch mode without `isinstance` checks. The activation clock `now_ms` SHALL be the maximum `event_time_ms` across the batched envelopes — a pure function of buffer contents.
+A flush activation SHALL present the batch to the agent as `ctx.event: list[bytes]` containing the buffered events' payloads in arrival order. The list shape SHALL be determined by policy, not by batch size: under `ADAPTIVE`, every flush — including a flush of one — presents a list, and under `NONE`, `ctx.event` is always `bytes`. The context SHALL expose `ctx.is_batch` (true exactly on `ADAPTIVE` flush activations), a uniform `ctx.events` tuple accessor (the batch under `ADAPTIVE`, a singleton under `NONE`, empty on resume), and a narrowing `ctx.single_event` accessor typed `bytes` that raises under `ADAPTIVE`, so agents and adapters detect batch mode without `isinstance` checks and single-event consumers stay statically typed. The activation clock `now_ms` SHALL be the maximum `event_time_ms` across the batched envelopes — a pure function of buffer contents.
 
 #### Scenario: The agent receives the batch as a list in arrival order
 
@@ -67,6 +67,11 @@ A flush activation SHALL present the batch to the agent as `ctx.event: list[byte
 
 - **WHEN** `FLUSH_TIMER` fires over a buffer holding one event
 - **THEN** the activation presents `ctx.event` as a one-element list, so the agent-visible type does not depend on runtime batch size
+
+#### Scenario: A single-event consumer refuses a batch rather than guessing
+
+- **WHEN** an agent or framework adapter written against one event reads `ctx.single_event` on an `ADAPTIVE` flush activation
+- **THEN** it raises `TypeError` naming `ctx.events` as the batch accessor, rather than silently picking one element of the batch
 
 #### Scenario: The batch clock is the latest buffered event time
 

@@ -60,6 +60,15 @@ COUNTER_ORPHANED_RESULTS = "orphaned_results"
 # commit tail. Counted per row, on committed activations only: a failed
 # activation flushes nothing and a failed flush fails the activation.
 COUNTER_LONGTERM_UPSERTS = "longterm_upserts"
+# One `event` element appended to the `BATCH` buffer under `BatchPolicy.ADAPTIVE`.
+# Buffering is not an activation, so this is the only counter a buffered element
+# moves; under `NONE` it reads zero.
+COUNTER_EVENTS_BUFFERED = "events_buffered"
+# One *committed* flush activation, by the trigger that produced it. Committed
+# only, so the two together reconcile with `activations` and the SEQ increments;
+# a failed flush is visible through `agent_errors` instead.
+COUNTER_BATCH_FLUSHES_SIZE = "batch_flushes_size"
+COUNTER_BATCH_FLUSHES_TIMER = "batch_flushes_timer"
 
 # -- distributions (Beam distributions are integer-only) ----------------------
 # Wall time of running the agent for one element, on every exit including
@@ -79,6 +88,10 @@ DISTRIBUTION_TOKENS = "tokens"
 DISTRIBUTION_MEMORY_BYTES = "memory_bytes"
 # Agent steps consumed by an activation (the step cursor's advance).
 DISTRIBUTION_ITERATIONS = "iterations"
+# Envelopes in a committed flush's batch. One sample per committed flush, so the
+# sample count equals `batch_flushes_size + batch_flushes_timer` and the mean is
+# the batching ratio a cost model wants.
+DISTRIBUTION_BATCH_SIZE = "batch_size"
 
 # Declaration order is the surface's documented order; a name is part of the
 # observable contract, so adding one is a change and renaming one is breaking.
@@ -91,6 +104,9 @@ COUNTERS = (
     COUNTER_SUSPENSIONS,
     COUNTER_ORPHANED_RESULTS,
     COUNTER_LONGTERM_UPSERTS,
+    COUNTER_EVENTS_BUFFERED,
+    COUNTER_BATCH_FLUSHES_SIZE,
+    COUNTER_BATCH_FLUSHES_TIMER,
 )
 DISTRIBUTIONS = (
     DISTRIBUTION_ACTIVATION_MS,
@@ -99,6 +115,7 @@ DISTRIBUTIONS = (
     DISTRIBUTION_TOKENS,
     DISTRIBUTION_MEMORY_BYTES,
     DISTRIBUTION_ITERATIONS,
+    DISTRIBUTION_BATCH_SIZE,
 )
 
 __all__ = [

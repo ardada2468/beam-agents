@@ -27,15 +27,20 @@ keeps its separate namespace.
 | `llm_calls` | Once per model call that reached the provider. A replay-cache hit is not a call. |
 | `tool_calls` | Once per read-only tool executed inline via `ctx.run_tool(...)`, on either activation surface. The tools come from `AgentConfig.tool_registry`. |
 | `intents_emitted` | Once per `ToolIntent` put on `.intents`, including one minted by a HITL escalation. |
-| `agent_errors` | Once per `.errors` record that is not an orphaned result (`activation_timeout`, `activation_error`, `hitl_timeout`, `ttl_wiped_suspension`). |
+| `agent_errors` | Once per `.errors` record that is not an orphaned result (`activation_timeout`, `activation_error`, `hitl_timeout`, `ttl_wiped_suspension`, `ttl_wiped_batch`, `batch_buffer_overflow`). |
 | `suspensions` | Once per committed activation whose outcome was `Suspend`. |
 | `orphaned_results` | Once per `.errors` record with reason `orphaned_result`. |
 | `longterm_upserts` | Once per long-term memory row flushed through the `MemoryStore` in a committed activation's commit tail (`docs/memory.md`). A failed activation flushes nothing and a failed flush fails the activation, so this only counts durable writes on the committed path. |
+| `events_buffered` | Once per event appended to a key's adaptive-batching buffer (`docs/batching.md`). Zero under the default `BatchPolicy.NONE`. |
+| `batch_flushes_size` | Once per **committed** flush that the `max_batch_size` threshold triggered. |
+| `batch_flushes_timer` | Once per **committed** flush that the `max_wait_ms` `FLUSH_TIMER` triggered. |
 
-Two identities hold by construction, and are worth alerting on if they break:
+Three identities hold by construction, and are worth alerting on if they break:
 
 - `intents_emitted` equals the element count on `.intents`.
 - `agent_errors + orphaned_results` equals the element count on `.errors`.
+- `batch_flushes_size + batch_flushes_timer` equals the `batch_size` sample
+  count, and each committed flush counts as exactly one `activation`.
 
 ## Distributions
 
@@ -52,6 +57,7 @@ or the benchmark suite.)
 | `tokens` | Committed activation whose provider usage was actually decoded. Activations that decoded no usage contribute no sample, so the count means "activations with known usage". |
 | `memory_bytes` | Committed activation: the working-memory size that was committed. |
 | `iterations` | Committed activation: the agent steps it consumed. A resume reports only its own steps. |
+| `batch_size` | Committed batch flush: how many events it activated over. The mean is the batching ratio — how many events one activation (and one set of model calls) covered. No samples under `BatchPolicy.NONE`. |
 
 ### `activation_ms` vs. `overhead_ms`
 

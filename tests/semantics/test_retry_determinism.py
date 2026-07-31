@@ -26,13 +26,18 @@ from apache_beam.transforms.window import TimestampedValue
 
 from beam_agents._protos import AgentEnvelope, ToolIntent, ToolResult, TraceEvent
 from beam_agents.core.agent import intent_id_for
+from beam_agents.core.batching import BatchPolicy
 from beam_agents.core.loop import ActivationResult
 from beam_agents.core.transform import AgentConfig, RunAgent
 from beam_agents.observability import trace_id_for
 from beam_agents.observability.metrics import NAMESPACE
 from beam_agents.testing.chaos import fail_first_matching_commit
 from tests.core._dofn_helpers import keyed, make_pong_provider
-from tests.semantics._helpers import suspend_then_recall_agent
+from tests.semantics._helpers import (
+    batch_act_agent,
+    batch_suspend_then_recall_agent,
+    suspend_then_recall_agent,
+)
 
 pytestmark = pytest.mark.semantics
 
@@ -230,6 +235,113 @@ def test_assertion_helper_catches_a_broken_cache_first_path() -> None:
     ]
     with pytest.raises(AssertionError):
         _assert_zero_additional_calls(broken_traces)
+
+
+# --- Requirement: one activation per flush with unchanged replay accounting ---
+
+# The batch scenarios buffer two events per key and flush on the size
+# threshold, so no wall clock and no processing-time advance is involved: the
+# retry behavior under test is the flush's, not the timer's.
+_BATCH_SIZE = 2
+# The flush's `call_model` consumes step_index=0, so its `act` mints at 1 --
+# the same call-order derivation as the per-event scenario above.
+_BATCH_INTENT_ID = intent_id_for(_ENTITY_KEY, _SEQ, _INTENT_STEP_INDEX)
+
+
+def _adaptive_config() -> AgentConfig:
+    return AgentConfig(
+        provider_factory=make_pong_provider,
+        batch_policy=BatchPolicy.ADAPTIVE,
+        max_batch_size=_BATCH_SIZE,
+        max_wait_ms=500,
+    )
+
+
+def _check_batch_output(actual: object) -> None:
+    items = list(actual)  # type: ignore[call-overload]
+    assert items == [b"resumed:pong"], f"unexpected output: {items!r}"
+
+
+def _check_committed_batch_intent(actual: object) -> None:
+    items = list(actual)  # type: ignore[call-overload]
+    assert len(items) == 1, f"expected exactly one committed intent, got {items!r}"
+    intent = items[0]
+    assert intent.intent_id == _BATCH_INTENT_ID
+    assert intent.seq == _SEQ
+    assert intent.step_index == _INTENT_STEP_INDEX
+    assert intent.SerializeToString(deterministic=True) == _expected_intent_bytes(intent)
+
+
+def test_a_retried_flush_bundle_replays_deterministically() -> None:
+    # Scenario: A retried flush bundle replays deterministically.
+    #
+    # The suspending activation here is a *flush* over a two-event buffer, and
+    # the chaos-failed bundle is its resume -- the same pairing the per-event
+    # gate above uses, and for the same reason: the replay cache is keyed by
+    # `(entity_key, seq)`, so "zero additional provider calls" is only
+    # observable across a suspend/resume pair sharing one seq. What batching
+    # adds is that the seq, the cache scope, and the intent scope all belong to
+    # the batch rather than to any one event -- and that a retried bundle
+    # re-reads the same committed buffer. Both are asserted below.
+    with fail_first_matching_commit(_is_resume_commit), _streaming_pipeline() as p:
+        stream = (
+            TestStream()
+            .advance_watermark_to(0)
+            .add_elements([_event(_ENTITY_KEY, b"a", 1000)])
+            .add_elements([_event(_ENTITY_KEY, b"b", 2000)])  # size flush -> suspend
+            .add_elements([_tool_result(_ENTITY_KEY, _BATCH_INTENT_ID, 3000)])
+            .advance_watermark_to_infinity()
+        )
+        out = keyed(p | stream) | RunAgent(
+            batch_suspend_then_recall_agent, config=_adaptive_config()
+        )
+        assert_that(out.output, _check_batch_output, label="output")
+        assert_that(out.errors, _check_no_errors, label="errors")
+        assert_that(out.intents, _check_committed_batch_intent, label="intents")
+        assert_that(out.traces, _assert_zero_additional_calls, label="traces")
+        assert_that(out.traces, _check_one_trace_spans_the_suspension, label="trace-id")
+
+
+def _check_the_same_batch_was_reflushed(actual: object) -> None:
+    """The retried flush read the same buffer, in the same order.
+
+    A rolled-back bundle re-reads the committed bag plus its own replayed
+    element, so the batch a retry sees is fixed by state, not by arrival
+    timing -- and exactly one output reaches the sink however many attempts it
+    took.
+    """
+    items = list(actual)  # type: ignore[call-overload]
+    assert items == [b"a|b"], f"expected one flush over the same batch, got {items!r}"
+
+
+def _check_one_deterministic_flush_intent(actual: object) -> None:
+    items = list(actual)  # type: ignore[call-overload]
+    assert len(items) == 1, f"expected exactly one committed intent, got {items!r}"
+    intent = items[0]
+    # step_index 0: this agent's only step is its `act`.
+    assert intent.intent_id == intent_id_for(_ENTITY_KEY, _SEQ, 0)
+    assert intent.seq == _SEQ
+    assert intent.step_index == 0
+
+
+def test_a_retried_flush_commits_the_same_batch_and_the_same_intent() -> None:
+    # The flush's own commit is the failure point here (not a resume's), so
+    # this is the direct statement of "a retried flush bundle re-reads the same
+    # buffer": Beam rolls the bundle's state back, the retry re-reads the
+    # committed bag, and the second attempt commits one output and one
+    # byte-identical intent -- never two, and never a partial batch.
+    with fail_first_matching_commit(), _streaming_pipeline() as p:
+        stream = (
+            TestStream()
+            .advance_watermark_to(0)
+            .add_elements([_event(_ENTITY_KEY, b"a", 1000)])
+            .add_elements([_event(_ENTITY_KEY, b"b", 2000)])  # size flush
+            .advance_watermark_to_infinity()
+        )
+        out = keyed(p | stream) | RunAgent(batch_act_agent, config=_adaptive_config())
+        assert_that(out.output, _check_the_same_batch_was_reflushed, label="output")
+        assert_that(out.errors, _check_no_errors, label="errors")
+        assert_that(out.intents, _check_one_deterministic_flush_intent, label="intents")
 
 
 if __name__ == "__main__":  # pragma: no cover

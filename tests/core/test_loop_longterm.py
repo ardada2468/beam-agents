@@ -38,8 +38,8 @@ class _ScriptedStore(InMemoryMemoryStore):
 
 async def saving_agent(ctx: ActivationContext) -> Complete:
     """Stage two long-term saves computed from the event (blind upserts)."""
-    ctx.memory.longterm.save("profile", b"p:" + ctx.event)
-    ctx.memory.longterm.save("case/1", b"c:" + ctx.event)
+    ctx.memory.longterm.save("profile", b"p:" + ctx.single_event)
+    ctx.memory.longterm.save("case/1", b"c:" + ctx.single_event)
     return Complete(output=b"done")
 
 

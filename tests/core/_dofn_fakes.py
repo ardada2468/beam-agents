@@ -15,8 +15,6 @@ from typing import Any
 
 from apache_beam.utils.timestamp import Timestamp
 
-from beam_agents._protos import ToolIntent
-
 
 class FakeValue:
     """Stand-in for a ``ReadModifyWriteStateSpec`` handle."""
@@ -37,16 +35,21 @@ class FakeValue:
 
 
 class FakeBag:
-    """Stand-in for a ``BagStateSpec`` handle."""
+    """Stand-in for a ``BagStateSpec`` handle.
 
-    def __init__(self, items: list[ToolIntent] | None = None) -> None:
+    Element-typed as ``Any``: the DoFn declares two bag specs holding different
+    messages (``PENDING`` of ``ToolIntent``, ``BATCH`` of ``AgentEnvelope``) and
+    one double serves both.
+    """
+
+    def __init__(self, items: list[Any] | None = None) -> None:
         self.items = list(items or [])
         self.cleared = False
 
-    def read(self) -> list[ToolIntent]:
+    def read(self) -> list[Any]:
         return list(self.items)
 
-    def add(self, item: ToolIntent) -> None:
+    def add(self, item: Any) -> None:
         self.items.append(item)
 
     def clear(self) -> None:
@@ -73,14 +76,21 @@ class FakeSum:
 
 
 class FakeTimer:
-    """Stand-in for a ``TimerParam`` handle; records the mark it was set to."""
+    """Stand-in for a ``TimerParam`` handle; records the mark it was set to.
+
+    ``marks`` keeps every mark in order, not just the last one: "armed on the
+    empty-to-non-empty transition and never re-armed" is a claim about the
+    *number* of settings, which ``set_to`` alone cannot show.
+    """
 
     def __init__(self) -> None:
         self.set_to: Timestamp | None = None
+        self.marks: list[Timestamp] = []
         self.cleared = False
 
     def set(self, ts: Timestamp) -> None:
         self.set_to = ts
+        self.marks.append(ts)
 
     def clear(self) -> None:
         self.cleared = True

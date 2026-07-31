@@ -138,7 +138,7 @@ class PydanticAIAgent:
         else:
             result = await self._run(
                 ctx,
-                user_prompt=self._decode_event(ctx.event),
+                user_prompt=self._decode_event(ctx.single_event),
                 message_history=history,
                 deferred_tool_results=None,
             )
