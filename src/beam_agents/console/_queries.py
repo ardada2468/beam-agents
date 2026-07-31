@@ -163,15 +163,46 @@ _TRUE = "true"
 _NO_LIMIT = -1
 
 
-def _attr(name: str, *, table: str = "") -> str:
-    """Return SQL extracting attribute ``name`` from an ``attributes`` column.
+def _attr(name: str, *, table: str = "events") -> str:
+    """Return SQL reading attribute ``name`` for the event row in scope.
+
+    Attributes live in their own table rather than as a JSON column on
+    ``events``, so this is a correlated subquery on ``event_attributes``'s
+    primary key ``(trace_id, span_id, event_type, key)`` — an exact index probe
+    per row, not a JSON parse per row. That is the whole reason the schema
+    normalizes them: every dimensioned query names a specific key, and a JSON
+    column would make all of them scans.
+
+    ``table`` must name the *outer* event relation and is never empty. An
+    unqualified ``trace_id`` inside the subquery binds to ``event_attributes``
+    itself, which silently degenerates the correlation into
+    ``_a.trace_id = _a.trace_id`` — always true — so every row reads whichever
+    attribute row happens to come first. It fails as wrong numbers, not as an
+    error.
 
     ``name`` is always one of the constants in ``observability/traces.py``, none
     of which contains a quote, so the interpolation is over a closed set of
     literals rather than over anything a request can reach.
     """
-    prefix = f"{table}." if table else ""
-    return f"""json_extract({prefix}attributes, '$."{name}"')"""
+    return (
+        "(SELECT _a.value FROM event_attributes _a "
+        f"WHERE _a.trace_id = {table}.trace_id AND _a.span_id = {table}.span_id "
+        f"AND _a.event_type = {table}.event_type AND _a.key = '{name}')"
+    )
+
+
+def _attributes_json(table: str = "events") -> str:
+    """Return SQL rebuilding an event's whole attribute map as a JSON object.
+
+    Only for the paths that hand a complete event to the API. Anything asking
+    for *one* attribute uses :func:`_attr`, which probes the index instead of
+    materializing the map. ``table`` carries the same correlation requirement.
+    """
+    return (
+        "(SELECT json_group_object(_m.key, _m.value) FROM event_attributes _m "
+        f"WHERE _m.trace_id = {table}.trace_id AND _m.span_id = {table}.span_id "
+        f"AND _m.event_type = {table}.event_type)"
+    )
 
 
 # The unified error vocabulary. See the module docstring: one failure reaches
@@ -516,9 +547,9 @@ def activations(
 
 # -- events, spans, attempts ---------------------------------------------------
 
-_EVENT_COLUMNS = """
+_EVENT_COLUMNS = f"""
     trace_id, span_id, parent_span_id, entity_key, seq, step_index, event_type,
-    start_ms, end_ms, attributes, provenance
+    start_ms, end_ms, {_attributes_json()} AS attributes, provenance
 """
 # Stable across ties: `start_ms` alone is not unique, because a whole activation
 # can be stamped from one clock read.
@@ -833,8 +864,8 @@ def traces(
     if query is not None:
         clauses.append(
             "(a.trace_id LIKE ? OR a.entity_key LIKE ? OR EXISTS ("
-            "SELECT 1 FROM events e, json_each(e.attributes) "
-            "WHERE e.trace_id = a.trace_id AND json_each.value LIKE ?))"
+            "SELECT 1 FROM event_attributes _s "
+            "WHERE _s.trace_id = a.trace_id AND _s.value LIKE ?))"
         )
         params.extend([f"%{query}%"] * 3)
     scanned = [*clauses, "(a.started_ms, a.trace_id) < (?, ?)"] if cursor else clauses
@@ -1293,9 +1324,10 @@ def _search_events(connection: sqlite3.Connection, like: str, limit: int) -> lis
     rows = _rows(
         connection,
         "SELECT e.trace_id, e.span_id, e.entity_key, e.seq, e.event_type, e.step_index, "
-        "e.start_ms, json_each.key AS attribute, json_each.value AS matched "
-        "FROM events e, json_each(e.attributes) WHERE json_each.value LIKE ? "
-        "ORDER BY e.start_ms DESC LIMIT ?",
+        "e.start_ms, _s.key AS attribute, _s.value AS matched "
+        "FROM events e JOIN event_attributes _s ON _s.trace_id = e.trace_id "
+        "AND _s.span_id = e.span_id AND _s.event_type = e.event_type "
+        "WHERE _s.value LIKE ? ORDER BY e.start_ms DESC LIMIT ?",
         (like, limit),
     )
     return [

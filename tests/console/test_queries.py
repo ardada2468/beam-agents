@@ -1,35 +1,23 @@
 """The console's read layer, driven against a real SQLite database.
 
-These tests do not go through ``ConsoleStore``: they create the tables directly
-and hand ``_queries`` a stand-in exposing the one seam the query layer uses,
-``reader()``. That keeps this suite honest about the thing it is actually
-testing — the SQL — and lets it run while the store is still being built.
+These tests do not go through ``ConsoleStore``'s *write* path: they insert rows
+directly and hand ``_queries`` a stand-in exposing the one seam the query layer
+uses, ``reader()``. That keeps the suite honest about the thing it is actually
+testing — the SQL.
 
-ASSUMED SCHEMA
-==============
+The tables, however, come from ``_schema.apply_schema`` — the real schema, not a
+copy of it. This suite originally carried its own DDL, and the two drifted the
+moment the store normalized attributes out of ``events`` into their own
+``event_attributes`` table: every test here kept passing against a schema that
+no longer existed, while eight of the twelve query functions could not run
+against a real database at all. A test fixture that declares its own version of
+the schema under test can only ever prove the fixture self-consistent.
 
-The DDL in :data:`_DDL` below is what ``_queries.py`` is written against. It is
-implied by ``_records.py`` (the row vocabulary), ``_dto.py`` (the fields a
-rollup must be able to answer), and design D5/D6 (idempotent upsert on
-``(trace_id, span_id, event_type)``, one WAL SQLite file). The coordinator
-should reconcile it with the store unit's ``_schema.py``:
-
-- ``events`` — one row per ``EventRow``, primary key ``(trace_id, span_id,
-  event_type)``, ``attributes`` as a JSON object of string -> string.
-- ``errors`` — one row per ``ErrorRow``. ``seq`` is nullable, because several
-  reasons fire from timer callbacks that have no activation.
-- ``snapshots`` — one row per ``SnapshotRow``, keyed
-  ``(entity_key, seq, snapshot_at_ms)`` so repeated exports of one key do not
-  overwrite each other. ``pending_intent_ids`` is a JSON array.
-- ``activations`` — the derived rollup, keyed ``(entity_key, seq)``, one column
-  per ``ActivationSummary`` field. ``tools``/``reasons``/``provenance`` are JSON
-  arrays; ``complete_provenance`` is 0/1.
-- ``PRAGMA user_version`` carries the schema version.
-
-Nothing in ``_queries.py`` writes, so column *types* matter here only as far as
-SQLite's affinities go; what matters is the names, the JSON encodings, and the
-nullability of ``errors.seq`` and every ``*_tokens`` column — the query layer
-depends on NULL meaning "not recorded" rather than zero.
+What the query layer depends on, and what the schema therefore guarantees:
+``errors.seq`` is nullable (several reasons fire from timer callbacks with no
+activation), and every ``*_tokens`` column is NULL when not recorded rather than
+zero — the distinction between "not measured" and "measured zero" that the whole
+console is built to preserve.
 """
 
 from __future__ import annotations
@@ -44,6 +32,7 @@ import pytest
 
 from beam_agents.console import _queries
 from beam_agents.console._queries import ActivationFilter
+from beam_agents.console._schema import apply_schema
 from beam_agents.core.dofn import (
     REASON_BATCH_OVERFLOW,
     REASON_BUDGET_EXCEEDED,
@@ -62,86 +51,6 @@ if TYPE_CHECKING:
 
     from beam_agents.console._store import ConsoleStore
 
-_DDL = """
-PRAGMA user_version = 1;
-
-CREATE TABLE IF NOT EXISTS events (
-    trace_id       TEXT    NOT NULL,
-    span_id        TEXT    NOT NULL,
-    event_type     TEXT    NOT NULL,
-    parent_span_id TEXT    NOT NULL DEFAULT '',
-    entity_key     TEXT    NOT NULL,
-    seq            INTEGER NOT NULL,
-    step_index     INTEGER NOT NULL DEFAULT 0,
-    start_ms       INTEGER NOT NULL,
-    end_ms         INTEGER NOT NULL,
-    attributes     TEXT    NOT NULL DEFAULT '{}',
-    provenance     TEXT    NOT NULL DEFAULT 'native',
-    PRIMARY KEY (trace_id, span_id, event_type)
-);
-CREATE INDEX IF NOT EXISTS events_activation ON events (entity_key, seq, start_ms);
-CREATE INDEX IF NOT EXISTS events_type_time  ON events (event_type, start_ms);
-CREATE INDEX IF NOT EXISTS events_trace      ON events (trace_id);
-
-CREATE TABLE IF NOT EXISTS errors (
-    id            INTEGER PRIMARY KEY,
-    entity_key    TEXT    NOT NULL,
-    seq           INTEGER,
-    reason        TEXT    NOT NULL,
-    detail        TEXT    NOT NULL DEFAULT '',
-    event_time_ms INTEGER NOT NULL,
-    provenance    TEXT    NOT NULL DEFAULT 'native'
-);
-CREATE UNIQUE INDEX IF NOT EXISTS errors_identity
-    ON errors (entity_key, IFNULL(seq, -1), reason, detail, event_time_ms);
-CREATE INDEX IF NOT EXISTS errors_time ON errors (event_time_ms);
-
-CREATE TABLE IF NOT EXISTS snapshots (
-    entity_key              TEXT    NOT NULL,
-    seq                     INTEGER NOT NULL,
-    snapshot_at_ms          INTEGER NOT NULL,
-    state_schema_version    INTEGER NOT NULL DEFAULT 0,
-    request_id              TEXT    NOT NULL DEFAULT '',
-    memory_entries          INTEGER NOT NULL DEFAULT 0,
-    memory_bytes            INTEGER NOT NULL DEFAULT 0,
-    llm_cache_entries       INTEGER NOT NULL DEFAULT 0,
-    pending_intent_ids      TEXT    NOT NULL DEFAULT '[]',
-    continuation_step_index INTEGER,
-    continuation_deadline_ms INTEGER,
-    continuation_adapter    TEXT    NOT NULL DEFAULT '',
-    raw                     BLOB    NOT NULL DEFAULT x'',
-    provenance              TEXT    NOT NULL DEFAULT 'native',
-    PRIMARY KEY (entity_key, seq, snapshot_at_ms)
-);
-
-CREATE TABLE IF NOT EXISTS activations (
-    entity_key          TEXT    NOT NULL,
-    seq                 INTEGER NOT NULL,
-    trace_id            TEXT    NOT NULL DEFAULT '',
-    status              TEXT    NOT NULL DEFAULT 'in_flight',
-    kind                TEXT    NOT NULL DEFAULT 'unknown',
-    attempts            INTEGER NOT NULL DEFAULT 1,
-    started_ms          INTEGER NOT NULL,
-    ended_ms            INTEGER,
-    wall_ms             INTEGER,
-    model               TEXT,
-    llm_calls           INTEGER NOT NULL DEFAULT 0,
-    tool_calls          INTEGER NOT NULL DEFAULT 0,
-    intents             INTEGER NOT NULL DEFAULT 0,
-    errors              INTEGER NOT NULL DEFAULT 0,
-    prompt_tokens       INTEGER,
-    completion_tokens   INTEGER,
-    total_tokens        INTEGER,
-    cache_hits          INTEGER NOT NULL DEFAULT 0,
-    tools               TEXT    NOT NULL DEFAULT '[]',
-    reasons             TEXT    NOT NULL DEFAULT '[]',
-    provenance          TEXT    NOT NULL DEFAULT '["native"]',
-    complete_provenance INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (entity_key, seq)
-);
-CREATE INDEX IF NOT EXISTS activations_started ON activations (started_ms, entity_key, seq);
-"""
-
 
 class _Store:
     """A stand-in exposing the only seam `_queries` uses: `reader()`.
@@ -155,7 +64,12 @@ class _Store:
         self._path = path
         self._retention_hours = retention_hours
         self._connection = sqlite3.connect(path)
-        self._connection.executescript(_DDL)
+        # The *real* schema, not a local copy of it. An earlier version of this
+        # fixture declared its own DDL, and the two drifted the moment the store
+        # normalized attributes out of `events` into their own table: every test
+        # here passed against a schema that no longer existed, and the query
+        # layer did not run at all against a real database until integration.
+        apply_schema(self._connection)
         self._connection.commit()
 
     @property
@@ -203,13 +117,15 @@ def _event(
     attributes: Mapping[str, str] | None = None,
     provenance: str = "native",
 ) -> None:
+    trace_id = f"trace-{entity_key}-{seq}"
+    resolved_span = span_id if span_id is not None else f"span-{event_type}-{step_index}"
     store.write(
         "INSERT OR REPLACE INTO events (trace_id, span_id, event_type, parent_span_id, "
-        "entity_key, seq, step_index, start_ms, end_ms, attributes, provenance) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "entity_key, seq, step_index, start_ms, end_ms, provenance) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            f"trace-{entity_key}-{seq}",
-            span_id if span_id is not None else f"span-{event_type}-{step_index}",
+            trace_id,
+            resolved_span,
             event_type,
             parent_span_id,
             entity_key,
@@ -217,10 +133,16 @@ def _event(
             step_index,
             start_ms,
             start_ms,
-            json.dumps(dict(attributes or {})),
             provenance,
         ),
     )
+    # Attributes are their own table, keyed on the event's identity tuple.
+    for key, value in dict(attributes or {}).items():
+        store.write(
+            "INSERT OR REPLACE INTO event_attributes (trace_id, span_id, event_type, "
+            "key, value) VALUES (?, ?, ?, ?, ?)",
+            (trace_id, resolved_span, event_type, key, value),
+        )
 
 
 def _error(
@@ -232,10 +154,13 @@ def _error(
     seq: int | None = None,
     detail: str = "",
 ) -> None:
+    # `error_id` is the store's surrogate key. Derived from the identifying
+    # fields so re-writing the same error stays one row, as it does in the store.
+    error_id = f"{entity_key}|{seq}|{reason}|{detail}|{event_time_ms}"
     store.write(
-        "INSERT OR REPLACE INTO errors (entity_key, seq, reason, detail, event_time_ms) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (entity_key, seq, reason, detail, event_time_ms),
+        "INSERT OR REPLACE INTO errors (error_id, entity_key, seq, reason, detail, "
+        "event_time_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        (error_id, entity_key, seq, reason, detail, event_time_ms),
     )
 
 
@@ -247,6 +172,10 @@ def _activation(
         "seq": seq,
         "trace_id": f"trace-{entity_key}-{seq}",
         "started_ms": started_ms,
+        # `status` and `kind` are NOT NULL in the schema — the store always
+        # derives both — so a fixture row has to supply them too.
+        "status": "completed",
+        "kind": "start",
         **columns,
     }
     for name in ("tools", "reasons", "provenance"):
