@@ -59,3 +59,6 @@ frontend/screenshots/
 # Agent worktrees: ephemeral checkouts the harness creates for parallel work.
 # Tooling state, never source — each one is a full copy of this repository.
 .claude/worktrees/
+
+# TypeScript incremental build state: regenerated on every build.
+frontend/*.tsbuildinfo
