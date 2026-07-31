@@ -41,7 +41,12 @@ from examples.fraud_triage_dataflow import launch
 FAKE_MODEL = "examples.fraud_triage:make_provider"
 CREDENTIALED_MODEL = "beam_agents.model.anthropic:AnthropicProvider"
 SECRET_NAME = "projects/my-project/secrets/anthropic-key/versions/3"
-SECRET_VALUE = "sk-ant-do-not-log-me"
+# The stand-in for a Secret Manager payload. Every assertion below is
+# `SECRET_VALUE not in <pickled pipeline / message / argv>`, so the value needs
+# to be *distinctive* and nothing else — no entropy and no credential shape, or
+# a secret scanner flags this file on every PR for a constant that was never a
+# credential.
+SECRET_VALUE = "placeholder-secret-payload-not-a-credential"
 
 BASE_ARGV = [
     "--input_topic=pubsub://my-project/tx-events",
@@ -389,12 +394,14 @@ def test_a_credential_valued_flag_is_refused_outright(
 ) -> None:
     # The mutual-exclusion rule is only half the guard: unrecognized flags flow
     # on to `PipelineOptions`, so a key smuggled in as `--api_key=...` would
-    # otherwise ride into the serialized pipeline. It is refused by name.
+    # otherwise ride into the serialized pipeline. It is refused by name — the
+    # value never reaches the guard, so `SECRET_VALUE` stands in for one here.
     submitted = forbid_submission(monkeypatch)
+    smuggled = f"--api_key={SECRET_VALUE}"
 
     with pytest.raises(ValueError, match="api_key"):
-        launch.build_launch_plan(argv("--api_key=sk-ant-nope"))
-    assert launch.main(argv("--api_key=sk-ant-nope")) != 0
+        launch.build_launch_plan(argv(smuggled))
+    assert launch.main(argv(smuggled)) != 0
     assert submitted == []
 
 
