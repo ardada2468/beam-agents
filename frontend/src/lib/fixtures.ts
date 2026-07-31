@@ -866,17 +866,49 @@ function respond(path: string, params: URLSearchParams): unknown {
 let installed = false;
 
 /**
- * Serve fixture data from `fetch`, in dev only.
+ * Whether a real console is answering behind the dev proxy.
+ *
+ * `installFixtures` has to ask before it takes over, not merely assume. The
+ * banner it raises reads "no console is answering", and with a console up on
+ * 8787 that sentence is false: the proxy in `vite.config.ts` forwards `/api`
+ * and `/healthz` to it, so every page would quietly serve generated records
+ * while asserting the backend was absent. A UI silently showing fake data is
+ * the trap this module's own header warns about; claiming the backend is down
+ * while it is up is that trap with a label on it.
+ *
+ * `/healthz` is the probe because it is the one endpoint that answers on an
+ * empty store — the console being up is not the same question as the console
+ * having data.
+ */
+async function consoleIsAnswering(fetcher: typeof globalThis.fetch): Promise<boolean> {
+  try {
+    const response = await fetcher('/healthz', {
+      signal: AbortSignal.timeout(1500),
+      cache: 'no-store',
+    });
+    return response.ok;
+  } catch {
+    // Anything at all — no proxy target, a refused connection, the timeout
+    // above — means there is nothing to run against, which is what fixtures
+    // exist for.
+    return false;
+  }
+}
+
+/**
+ * Serve fixture data from `fetch`, in dev only and only with no console up.
  *
  * Idempotent. Returns whether the interceptor is active, so the shell can show
  * an unmistakable banner — a UI silently serving fake data is a trap.
  */
-export function installFixtures(): boolean {
+export async function installFixtures(): Promise<boolean> {
   if (installed) return true;
   if (!import.meta.env.DEV) return false;
-  installed = true;
 
   const original = globalThis.fetch.bind(globalThis);
+  if (await consoleIsAnswering(original)) return false;
+
+  installed = true;
 
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(
