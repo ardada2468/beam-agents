@@ -149,9 +149,12 @@ class PubSubMessageSink:
     """
 
     def __init__(self, project: str, topic: str) -> None:
-        # google.cloud is a namespace package; mypy can't see pubsub_v1 as an
-        # attribute of it (same as actions/write_intents.py).
-        from google.cloud import pubsub_v1  # type: ignore[attr-defined]
+        # `google.cloud` is a namespace package; `pubsub_v1` resolves for mypy
+        # because the `test` group's google-adk mirror pulls google-cloud-pubsub
+        # in transitively, and the `google.*` ignore_missing_imports override
+        # covers the environment where it is absent. No `type: ignore` needed in
+        # either case (same as actions/write_intents.py).
+        from google.cloud import pubsub_v1
         from google.cloud.pubsub_v1.types import PublisherOptions
 
         self._client = pubsub_v1.PublisherClient(
