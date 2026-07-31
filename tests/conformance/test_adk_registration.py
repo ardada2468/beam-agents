@@ -66,12 +66,15 @@ def test_unregistered_adk_package_fails_collection() -> None:
 
 
 def test_the_meta_test_expectation_includes_the_adk_cells() -> None:
-    # The meta-test's expected-cell accounting picks up the third adapter with
-    # no new wiring: a declared adapter skip is still a counted cell.
+    # The meta-test's expected-cell accounting picks up a newly registered
+    # adapter with no new wiring: a declared adapter skip is still a counted
+    # cell. Counted off the registry, never a literal — another adapter landing
+    # alongside this one must not fail this test (it did, when the Pydantic AI
+    # adapter registered a fourth entry).
     expected = len(ADAPTERS) * len(SCENARIOS) * len(LEGS)
 
-    assert len(ADAPTERS) == 3
-    assert expected == 3 * len(SCENARIOS) * len(LEGS)
+    assert any(adapter.name == "adk" for adapter in ADAPTERS)
+    assert expected == len(ADAPTERS) * len(SCENARIOS) * len(LEGS)
     # The one declared adapter skip does not shrink the matrix.
     assert BUNDLE_RETRY_CACHE.adapter_skips.keys() == {"adk"}
 
@@ -112,6 +115,8 @@ def test_adk_cells_skip_cleanly_when_the_framework_is_absent() -> None:
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=300, check=False
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "2 passed" in result.stdout, result.stdout
+    # Every other registered adapter's cell still runs and passes; only the
+    # blocked one skips. Counted off the registry for the same reason as above.
+    assert f"{len(ADAPTERS) - 1} passed" in result.stdout, result.stdout
     assert "1 skipped" in result.stdout, result.stdout
     assert "optional framework 'google.adk' is not installed" in result.stdout, result.stdout

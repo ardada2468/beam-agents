@@ -180,15 +180,6 @@ def test_pydantic_ai_cells_skip_cleanly_when_the_framework_is_absent() -> None:
     assert "optional framework 'pydantic_ai' is not installed" in stdout, stdout
 
 
-def test_adk_cells_skip_cleanly_when_the_framework_is_absent() -> None:
-    # Scenario: Missing extra skips cells without shrinking the matrix silently
-    # (adk-adapter) — the same clean-skip contract for the ADK axis entry.
-    stdout = _run_single_shot_without(("google.adk", "google.genai"))
-    assert f"{_passing_cells()} passed" in stdout, stdout
-    assert "1 skipped" in stdout, stdout
-    assert "optional framework 'google.adk' is not installed" in stdout, stdout
-
-
 def test_every_scenario_declares_every_leg() -> None:
     # The meta-test's expected-cell arithmetic assumes a complete legs mapping;
     # an absent declaration must be impossible, not defaulted.

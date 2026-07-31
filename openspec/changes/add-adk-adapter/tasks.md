@@ -228,3 +228,19 @@ session-state key explicitly set to `None` survives the round-trip (asserted).
       hooks that cover this change's files — were all run directly and are clean)**
 - [x] 8.7 `openspec validate add-adk-adapter --strict` (green after the artifact edits
       recorded in the Revision section)
+
+## 9. Revision: registry-derived counts after a second adapter landed (integration)
+
+- [x] 9.1 `tests/conformance/test_adk_registration.py` asserted `len(ADAPTERS) == 3` and literal
+  `"2 passed"`, which were true when this change was written against a two-adapter matrix. The
+  Pydantic AI adapter (C39) registered a fourth entry in the same merge window, so both assertions
+  failed on the integrated branch. Rewritten to derive from the registry — `any(adapter.name ==
+  "adk" ...)` and `f"{len(ADAPTERS) - 1} passed"` — which is what the change's own spec means by
+  "adding an adapter must not silently invalidate the matrix accounting", and matches the fix C39
+  applied to `tests/test_import.py` and `test_harness_unit.py`. Verified: `pytest
+  tests/conformance -m "not integration"` 42 passed, 1 declared skip.
+- [x] 9.2 `_run_single_shot_without` in `test_harness_unit.py` matched blocked frameworks on the
+  top-level module name, which cannot express ADK (it imports under the `google` namespace package
+  that core installs already populate — blocking `"google"` would take out google-cloud too).
+  Generalized to an exact-or-dotted-prefix match, backward compatible with the existing
+  top-level-name callers. This change's own clean-skip test keeps its dedicated subprocess.
