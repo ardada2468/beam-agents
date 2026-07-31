@@ -1,0 +1,84 @@
+/*
+ * The Connect page's own two pieces of chrome: the bundle drop zone and the
+ * file list under it. Everything else on the page is a panel, a code block, or
+ * a chip from the primitive set.
+ *
+ * The dashed rule is the one place in the console that is not a hairline solid,
+ * and it earns it: a dashed boundary is the conventional "you may drop here"
+ * signal, and the alternative — a solid box that only reveals itself on drag —
+ * is a target you cannot find before you start dragging.
+ */
+
+.connect-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: center;
+  transition:
+    border-color var(--duration) var(--ease),
+    background var(--duration) var(--ease);
+}
+
+.connect-drop--over {
+  border-color: var(--focus);
+  background: var(--info-bg);
+}
+
+/* A real file input rather than a styled label wrapping a hidden one: it is
+   focusable, it announces itself, and Space opens the picker. Only its button
+   is restyled, so nothing about how it works changes. */
+.connect-drop__input {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.connect-drop__input::file-selector-button {
+  height: 32px;
+  padding: 0 var(--space-3);
+  margin-right: var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.connect-drop__input::file-selector-button:hover {
+  background: var(--surface-3);
+}
+
+.connect-files {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.connect-files__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.connect-files__row:last-child {
+  border-bottom: 0;
+}
+
+.connect-files__name {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
