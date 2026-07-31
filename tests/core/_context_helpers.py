@@ -52,6 +52,7 @@ def make_context(
     decode: Decode | None = None,
     intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
     approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
+    max_tokens_per_activation: int | None = None,
 ) -> AgentContext:
     """Build an `AgentContext` with sensible defaults for tests that don't
     care about a particular knob.
@@ -75,4 +76,5 @@ def make_context(
         tool_registry=tool_registry if tool_registry is not None else ToolRegistry(),
         intent_ttl_ms=intent_ttl_ms,
         approval_channel=approval_channel,
+        max_tokens_per_activation=max_tokens_per_activation,
     )

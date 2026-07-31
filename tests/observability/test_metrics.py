@@ -30,10 +30,12 @@ from beam_agents.observability.metrics import (
     COUNTERS,
     DISTRIBUTION_ACTIVATION_MS,
     DISTRIBUTION_BATCH_SIZE,
+    DISTRIBUTION_COMPLETION_TOKENS,
     DISTRIBUTION_ITERATIONS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_MEMORY_BYTES,
     DISTRIBUTION_OVERHEAD_MS,
+    DISTRIBUTION_PROMPT_TOKENS,
     DISTRIBUTION_TOKENS,
     DISTRIBUTIONS,
     NAMESPACE,
@@ -46,7 +48,7 @@ from beam_agents.observability.metrics import (
 # --- Requirement: the runtime publishes a fixed metric surface ----------------
 
 
-def test_the_declared_names_are_the_eleven_counters_and_seven_distributions() -> None:
+def test_the_declared_names_are_the_eleven_counters_and_nine_distributions() -> None:
     # Scenario: Every declared metric is queryable after a pipeline run -- the
     # half of it that does not need a pipeline. Names are the observable
     # contract: a rename silently breaks every dashboard built on them, so the
@@ -70,6 +72,8 @@ def test_the_declared_names_are_the_eleven_counters_and_seven_distributions() ->
         "overhead_ms",
         "llm_ms",
         "tokens",
+        "prompt_tokens",
+        "completion_tokens",
         "memory_bytes",
         "iterations",
         "batch_size",
@@ -92,6 +96,8 @@ def test_the_declared_names_are_the_eleven_counters_and_seven_distributions() ->
         DISTRIBUTION_OVERHEAD_MS,
         DISTRIBUTION_LLM_MS,
         DISTRIBUTION_TOKENS,
+        DISTRIBUTION_PROMPT_TOKENS,
+        DISTRIBUTION_COMPLETION_TOKENS,
         DISTRIBUTION_MEMORY_BYTES,
         DISTRIBUTION_ITERATIONS,
         DISTRIBUTION_BATCH_SIZE,

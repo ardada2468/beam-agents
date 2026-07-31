@@ -57,6 +57,7 @@ from beam_agents.model.facade import (
     LlmFacade,
     RetryPolicy,
     Sleep,
+    TokenBudget,
     TokenUsage,
 )
 from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
@@ -141,6 +142,7 @@ class AgentContext:
         tool_runner: ToolRunner | None = None,
         intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
         approval_channel: str = DEFAULT_APPROVAL_CHANNEL,
+        max_tokens_per_activation: int | None = None,
     ) -> None:
         self._entity_key = entity_key
         self._seq = seq
@@ -151,9 +153,18 @@ class AgentContext:
         self._replay_cache = replay_cache
         self._tool_registry = tool_registry
         self._tool_runner = tool_runner if tool_runner is not None else ToolRunner()
+        # Fresh per attempt and never persisted (design D6). `decode` is required
+        # on this surface, so unlike `ActivationContext` there is no
+        # budget-without-a-decoder pair to reject here.
+        self._budget = (
+            TokenBudget(max_tokens_per_activation)
+            if max_tokens_per_activation is not None
+            else None
+        )
         # Built with `staging=self`: the context is structurally the facade's
         # StagingSink, so every trace/usage effect the facade stages lands in
-        # this same accumulator (design D1).
+        # this same accumulator (design D1). The facade is this surface's only
+        # model path, so handing it the budget is the whole of the enforcement.
         self.model = LlmFacade(
             provider,
             replay_cache,
@@ -164,6 +175,7 @@ class AgentContext:
             retry_policy=retry_policy,
             decode=decode,
             staging=self,
+            budget=self._budget,
         )
 
         # The activation's trace. Every event staged through this context is
@@ -341,8 +353,12 @@ class AgentContext:
         # The facade calls this only on a provider-reached call, so the flag
         # means "a real response was decoded" -- which is what lets the `tokens`
         # distribution skip activations whose usage nobody decoded rather than
-        # padding it with zeros.
+        # padding it with zeros. The input/output split rides the same rule: it
+        # is what a price sheet multiplies, and it is billed accounting, not the
+        # budget meter's consumption accounting.
         self._tally.total_tokens += usage.total_tokens
+        self._tally.prompt_tokens += usage.prompt_tokens
+        self._tally.completion_tokens += usage.completion_tokens
         self._tally.usage_observed = True
 
     # -- drain ------------------------------------------------------------
@@ -411,6 +427,7 @@ class ActivationContext:
         tool_registry: ToolRegistry | None = None,
         tool_runner: ToolRunner | None = None,
         longterm_store: MemoryStore | None = None,
+        max_tokens_per_activation: int | None = None,
     ) -> None:
         self.entity_key = entity_key
         self.seq = seq
@@ -452,6 +469,25 @@ class ActivationContext:
         # Optional: without it the token counts of a call are genuinely
         # unknown, and the trace omits them rather than reporting zeros (D4).
         self._decode = decode
+        # ...which is exactly why a budget without one is refused rather than
+        # metered: unknown-is-free silently bounds nothing (discovered on an
+        # invoice) and unknown-is-fatal trips on every undecoded call. Failing
+        # here is the third option. `AgentConfig` rejects the pair first, but
+        # this class is buildable without one, so it re-checks.
+        if max_tokens_per_activation is not None and decode is None:
+            raise ValueError(
+                "max_tokens_per_activation requires a provider response decode: "
+                "without one a call's token counts are unknown, and an "
+                "unenforceable budget must not silently meter nothing"
+            )
+        # Fresh per attempt and never persisted: a resume starts a new meter at
+        # zero, exactly as `activation_timeout_s` and `iterations` already do
+        # (design D6).
+        self._budget = (
+            TokenBudget(max_tokens_per_activation)
+            if max_tokens_per_activation is not None
+            else None
+        )
 
         # A resume shares the suspended activation's `seq`, so it recomputes the
         # same trace ID with nothing carried on the wire (D2); its own span is
@@ -561,7 +597,16 @@ class ActivationContext:
         calls (correctness invariant 3), so bundle retries never re-hit the
         provider. A miss calls the provider and stages the response in the
         replay cache. Each call advances ``step_index``.
+
+        This surface bypasses the model facade, so it enforces the token budget
+        itself: an entry check before the cache lookup, and a charge of the
+        decoded total on both branches. The refused call does not advance the
+        cursor -- it is not a step, so the intent IDs an agent mints after
+        swallowing a trip stay where the deterministic walk put them.
         """
+        if self._budget is not None:
+            self._budget.check()
+
         step = self._advance_step()
         cache_key = compute_cache_key(
             request.model_id,
@@ -579,13 +624,14 @@ class ActivationContext:
             # clock is not even read here). Its *trace*, though, decodes the
             # stored response, which is what makes a cache hit's token counts
             # true rather than absent (D4) — still marked unbilled, because no
-            # provider call happened this time.
-            self._stage_llm_trace(
-                step,
-                cache_hit=True,
-                model_id=request.model_id,
-                response=cached.response,
-            )
+            # provider call happened this time. The decode happens once, here,
+            # and the usage is passed down rather than re-derived.
+            usage = self._decoded_usage(cached.response)
+            self._stage_llm_trace(step, cache_hit=True, model_id=request.model_id, usage=usage)
+            # ...and it is charged like any other consumed response. The budget
+            # meters consumption, not spend: provider-reached-ness is exactly
+            # what a bundle retry does not preserve (design D2).
+            self._charge(usage)
             return LlmResponse(cached.response)
 
         started_ns = self._monotonic_ns()
@@ -596,9 +642,9 @@ class ActivationContext:
         # same site, so the sample count always equals `llm_calls`.
         self._tally.llm_calls += 1
         self._tally.llm_ms.append(elapsed_ns // _NS_PER_MS)
-        self._stage_llm_trace(
-            step, cache_hit=False, model_id=request.model_id, response=response.response
-        )
+        usage = self._decoded_usage(response.response)
+        self._stage_llm_trace(step, cache_hit=False, model_id=request.model_id, usage=usage)
+        self._charge(usage)
         return response
 
     async def run_tool(self, tool_name: str, arguments: Mapping[str, object]) -> object:
@@ -733,6 +779,12 @@ class ActivationContext:
         can never drift from the call count.
         """
         self._tally.total_tokens += usage.total_tokens
+        # The input/output split, under the same billed-only rule: it is what a
+        # provider price sheet multiplies, and it is deliberately NOT the token
+        # budget's accounting -- that meter charges cache hits for replay
+        # determinism, so the two are allowed to disagree on a replayed walk.
+        self._tally.prompt_tokens += usage.prompt_tokens
+        self._tally.completion_tokens += usage.completion_tokens
         self._tally.usage_observed = True
 
     # -- loop-driver read-back ------------------------------------------------
@@ -809,16 +861,30 @@ class ActivationContext:
         self._step_index += 1
         return step
 
+    def _charge(self, usage: TokenUsage | None) -> None:
+        """Charge one consumed response against the budget, if there is one.
+
+        ``usage`` is ``None`` only when no ``decode`` is configured, which the
+        constructor already refuses to pair with a budget — so a budgeted
+        activation always has a real number to charge.
+        """
+        if self._budget is None:
+            return
+        assert usage is not None, "a budget without a decoder is refused at construction"
+        self._budget.charge(usage.total_tokens)
+
     def _stage_llm_trace(
-        self, step: int, *, cache_hit: bool, model_id: str, response: bytes
+        self, step: int, *, cache_hit: bool, model_id: str, usage: TokenUsage | None
     ) -> None:
         attributes = {
             OPERATION_NAME: OPERATION_CHAT,
             REQUEST_MODEL: model_id,
             CACHE_HIT: "true" if cache_hit else "false",
             # A hit re-serves tokens already paid for; only a provider call is
-            # billed. Both report their real counts (D4).
-            **usage_attributes(self._decoded_usage(response), billed=not cache_hit),
+            # billed. Both report their real counts (D4). The usage is decoded
+            # once by the caller and handed down, so the hot path never decodes
+            # a response twice.
+            **usage_attributes(usage, billed=not cache_hit),
         }
         self.stage_trace_event(
             TraceEvent(

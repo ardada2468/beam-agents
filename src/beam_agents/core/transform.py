@@ -456,6 +456,13 @@ class AgentConfig:
     max_batch_size: int | None = field(default=None, kw_only=True)
     max_wait_ms: int | None = field(default=None, kw_only=True)
     max_buffered_events: int | None = field(default=None, kw_only=True)
+    # The per-activation-attempt token bound. `None` (the default) is unlimited
+    # and byte-for-byte today's behavior. Requires `decode`: without a decoder a
+    # call's token counts are genuinely unknown, and an unenforceable budget
+    # must fail at the site of the misconfiguration rather than silently meter
+    # nothing (checked below). The meter is worker-local and never persisted, so
+    # there is no wire, state, or `--update` implication.
+    max_tokens_per_activation: int | None = field(default=None, kw_only=True)
 
     def batch_settings(self) -> BatchSettings | None:
         """The resolved batching bounds, or ``None`` under `BatchPolicy.NONE`.
@@ -493,6 +500,16 @@ class AgentConfig:
                 "AgentConfig.on_expire flushes expiring working memory to the long-term "
                 "tier, so it requires AgentConfig.longterm_memory to name a store URI"
             )
+
+        if self.max_tokens_per_activation is not None:
+            _require_positive("max_tokens_per_activation", self.max_tokens_per_activation)
+            if self.decode is None:
+                raise ValueError(
+                    "AgentConfig.max_tokens_per_activation requires AgentConfig.decode: "
+                    "budget enforcement reads the provider's response decoder, and "
+                    "without one a call's token counts are unknown -- which must not "
+                    "silently mean free"
+                )
 
         # Raises for a non-positive bound, a cap below the flush threshold, or a
         # batch knob set without opting in -- at the construction site, like
@@ -559,6 +576,7 @@ class RunAgent(beam.PTransform):
             summarizer=self._config.summarizer,
             on_expire=self._config.on_expire,
             batch=self._config.batch_settings(),
+            max_tokens_per_activation=self._config.max_tokens_per_activation,
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"

@@ -17,6 +17,7 @@ from beam_agents.core.agent import Complete, FallbackContext, Suspend
 from beam_agents.core.context import ActivationContext
 from beam_agents.hitl import Escalate, Route
 from beam_agents.model.client import LlmRequest, ProviderError
+from beam_agents.model.facade import TokenUsage
 from beam_agents.model.fake import FakeLLM, match_any, raise_error, respond_with
 from beam_agents.tools import ToolRegistry, tool
 
@@ -274,6 +275,18 @@ async def suspend_then_fail_agent(ctx: ActivationContext) -> Complete | Suspend:
         ctx.act("http.post", '{"url":"x"}', ttl_ms=_TTL_MS)
         return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=1000)
     raise RuntimeError("resume blew up")
+
+
+async def usage_reporting_agent(ctx: ActivationContext) -> Complete:
+    """Report decoded provider usage through the context's staging sink.
+
+    The runtime's own `ctx.call_model` never decodes the opaque response bytes,
+    so nothing on the plain runtime path reports usage; the framework adapters
+    do (`adapters/pydantic_ai` calls exactly this). Standing in for one of them
+    is what lets a DirectRunner pipeline reach the three usage distributions.
+    """
+    ctx.accumulate_usage(TokenUsage(prompt_tokens=7, completion_tokens=5, total_tokens=12))
+    return Complete(output=b"reported")
 
 
 async def sleep_briefly(ms: int) -> None:  # pragma: no cover - trivial

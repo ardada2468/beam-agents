@@ -70,4 +70,8 @@
 # add-adaptive-batching: 0.9066 (core/batching.py's flush predicates and
 # resolution land fully branch-covered, and the buffer/flush/timer routes
 # through core/dofn.py are driven by the fake-handle and TestStream suites).
-branch_rate = 0.9066
+#
+# add-token-budgets: 0.9083 (the `TokenBudget` meter is fully branch-covered and
+# the new enforcement/routing branches in facade.py, context.py, transform.py
+# and dofn.py are all driven by the offline unit and fake-handle suites).
+branch_rate = 0.9083

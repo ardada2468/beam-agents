@@ -59,6 +59,7 @@ from tests.core._dofn_helpers import (
     outcome_routing_agent,
     seq_agent,
     suspend_then_complete_agent,
+    usage_reporting_agent,
 )
 
 # Large enough that working-memory GC never fires mid-stream in the batching
@@ -225,6 +226,28 @@ def test_runtime_counters_close_over_the_transform_outputs() -> None:
     assert distributions["activation_ms"].min >= 0
     # The `ACT` branch consumed one step; the plain completion consumed none.
     assert distributions["iterations"].sum == 1
+
+
+def test_the_usage_distributions_are_queryable_after_a_pipeline_run() -> None:
+    # Scenario: Every declared metric is queryable after a pipeline run -- the
+    # cost pair included. `tokens` alone samples totals, but input and output
+    # tokens are priced differently by every provider, so the split is what a
+    # price sheet multiplies and it has to reach the runner's dashboard.
+    with BeamTestPipeline() as p:
+        out = keyed(p | beam.Create([_event(b"u", b"go")])) | RunAgent(
+            usage_reporting_agent, config=AgentConfig(provider_factory=make_pong_provider)
+        )
+        assert_that(out.output, equal_to([b"reported"]))
+
+    _, distributions = _runtime_metrics(p.result)
+
+    assert distributions["tokens"].sum == 12
+    assert distributions["prompt_tokens"].sum == 7
+    assert distributions["completion_tokens"].sum == 5
+    # One sample each per committed activation with known usage, so the three
+    # counts move together and a mean is comparable across them.
+    assert distributions["prompt_tokens"].count == 1
+    assert distributions["completion_tokens"].count == 1
 
 
 def test_a_suspension_is_counted_and_never_exceeds_activations() -> None:

@@ -84,6 +84,14 @@ DISTRIBUTION_OVERHEAD_MS = "overhead_ms"
 DISTRIBUTION_LLM_MS = "llm_ms"
 # Total tokens for an activation, sampled only when usage was actually decoded.
 DISTRIBUTION_TOKENS = "tokens"
+# The same activation's input/output split -- what every provider price sheet is
+# quoted in, and what a total alone cannot be multiplied by. Sampled under the
+# identical decoded-usage rule as `tokens`, so all three counts move together.
+# Billed, not consumed: the token *budget* meter deliberately charges cache hits
+# for replay determinism, while these stay provider-reached-only, so a replayed
+# activation may consume tokens here while billing zero.
+DISTRIBUTION_PROMPT_TOKENS = "prompt_tokens"
+DISTRIBUTION_COMPLETION_TOKENS = "completion_tokens"
 # Committed working-memory size for an activation.
 DISTRIBUTION_MEMORY_BYTES = "memory_bytes"
 # Agent steps consumed by an activation (the step cursor's advance).
@@ -113,6 +121,8 @@ DISTRIBUTIONS = (
     DISTRIBUTION_OVERHEAD_MS,
     DISTRIBUTION_LLM_MS,
     DISTRIBUTION_TOKENS,
+    DISTRIBUTION_PROMPT_TOKENS,
+    DISTRIBUTION_COMPLETION_TOKENS,
     DISTRIBUTION_MEMORY_BYTES,
     DISTRIBUTION_ITERATIONS,
     DISTRIBUTION_BATCH_SIZE,
@@ -150,6 +160,11 @@ class ActivationTally:
     iterations: int = 0
     #: Total tokens summed across decoded provider responses.
     total_tokens: int = 0
+    #: The same responses' input/output split, summed. Kept beside the total
+    #: rather than derived from it: the two are priced differently and neither
+    #: is recoverable from the other.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     #: Whether any usage was decoded at all. Distinguishes "nobody decoded
     #: usage" from "the model genuinely reported zero", so the `tokens`
     #: distribution is not padded with zeros from a path that never decodes.

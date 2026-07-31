@@ -36,10 +36,12 @@ from beam_agents.model.fake import FakeLLM
 from beam_agents.observability import trace_id_for
 from beam_agents.observability.metrics import NAMESPACE
 from beam_agents.testing.chaos import fail_first_matching_commit
+from tests.core._context_helpers import decode_len_based
 from tests.core._dofn_helpers import keyed, make_pong_provider
 from tests.semantics._helpers import (
     batch_act_agent,
     batch_suspend_then_recall_agent,
+    budgeted_suspend_then_recall_agent,
     suspend_then_recall_agent,
 )
 
@@ -221,6 +223,65 @@ def test_measurement_does_not_change_what_a_retried_bundle_commits() -> None:
     query = p.result.metrics().query(MetricsFilter().with_namespace(NAMESPACE))
     counters = {m.key.metric.name: m.result for m in query[MetricResults.COUNTERS]}
     assert counters["activations"] >= 1
+
+
+# --- Requirement: the budget charges every consumed response (token-budgets) ---
+#
+# The budget is a DECISION, taken mid-activation and upstream of every intent
+# the activation goes on to mint, so its input has to be a pure function of the
+# deterministic walk. The retried walk here serves its call from the replay
+# cache, where the original missed: a billed-only meter would charge 0 where the
+# original charged N, take a different branch, and break the byte-identical
+# intents this file exists to protect. Charging consumed responses -- cache hits
+# included -- is what makes the two walks agree.
+
+# `make_pong_provider` answers b"pong"; `decode_len_based` reports `2 * len`, so
+# each consumed response charges 8 and the resume's own attempt charges exactly
+# that (its single call, served from the cache the suspension committed).
+_BUDGET_CHARGE_PER_CALL = 8
+_BUDGET_LIMIT = 1_000
+
+
+def _budgeted_config() -> AgentConfig:
+    return AgentConfig(
+        provider_factory=make_pong_provider,
+        decode=decode_len_based,
+        max_tokens_per_activation=_BUDGET_LIMIT,
+    )
+
+
+def _check_the_retry_charged_the_same_total(actual: object) -> None:
+    """One output, carrying the charge the committed attempt made.
+
+    The resume is the chaos-failed bundle, so whichever attempt commits, the
+    number on this output is the budget decision that survived — and it has to
+    be the cache-served walk's, because that is the attempt Beam retried.
+    """
+    items = list(actual)  # type: ignore[call-overload]
+    expected = b"resumed:pong#" + str(_BUDGET_CHARGE_PER_CALL).encode()
+    assert items == [expected], f"unexpected output: {items!r}"
+
+
+def test_a_chaos_forced_bundle_retry_makes_the_identical_budget_decision() -> None:
+    # Scenario: A chaos-forced bundle retry makes the identical budget decision.
+    with fail_first_matching_commit(_is_resume_commit), _streaming_pipeline() as p:
+        stream = (
+            TestStream()
+            .advance_watermark_to(0)
+            .add_elements([_event(_ENTITY_KEY, b"go", 1000)])
+            .add_elements([_tool_result(_ENTITY_KEY, _EXPECTED_INTENT_ID, 2000)])
+            .advance_watermark_to_infinity()
+        )
+        out = keyed(p | stream) | RunAgent(
+            budgeted_suspend_then_recall_agent, config=_budgeted_config()
+        )
+        assert_that(out.output, _check_the_retry_charged_the_same_total, label="output")
+        assert_that(out.errors, _check_no_errors, label="errors")
+        # The rest of the gate, unchanged under a configured budget: the same
+        # byte-identical intent, zero additional provider calls, one trace.
+        assert_that(out.intents, _check_committed_intent, label="intents")
+        assert_that(out.traces, _assert_zero_additional_calls, label="traces")
+        assert_that(out.traces, _check_one_trace_spans_the_suspension, label="trace-id")
 
 
 # ---------------------------------------------------------------------------------

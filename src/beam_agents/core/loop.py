@@ -196,6 +196,7 @@ async def run_activation(
     tool_registry: ToolRegistry | None = None,
     tool_runner: ToolRunner | None = None,
     longterm_store: MemoryStore | None = None,
+    max_tokens_per_activation: int | None = None,
 ) -> ActivationResult:
     """Run one activation to a terminal :class:`ActivationResult`.
 
@@ -211,6 +212,11 @@ async def run_activation(
     the same staged effects, the same commit — because a flush *is* one
     activation (design D4). ``batch_trigger`` names which trigger produced it
     and rides only the trace.
+
+    ``max_tokens_per_activation`` bounds this attempt's token consumption; an
+    uncaught :class:`~beam_agents.model.facade.BudgetExceeded` is an ordinary
+    agent-path raise and rides the failure wrap below like any other, so the
+    DoFn routes it with the position metadata already attached.
     """
     ctx = ActivationContext(
         entity_key=entity_key,
@@ -233,6 +239,7 @@ async def run_activation(
         tool_registry=tool_registry,
         tool_runner=tool_runner,
         longterm_store=longterm_store,
+        max_tokens_per_activation=max_tokens_per_activation,
     )
 
     # Everything after context construction runs inside the failure wrap:

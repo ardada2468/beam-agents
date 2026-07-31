@@ -28,6 +28,7 @@ from beam_agents.model.client import (
     ServerError,
 )
 from beam_agents.model.facade import (
+    BudgetExceeded,
     CircuitBreaker,
     CircuitOpenError,
     CircuitState,
@@ -37,6 +38,7 @@ from beam_agents.model.facade import (
     OutputSchemaError,
     RetryPolicy,
     StagingSink,
+    TokenBudget,
     TokenUsage,
 )
 from beam_agents.model.fake import (
@@ -70,6 +72,7 @@ __all__ = [
     "MAX_ENTRIES",
     "TTL_MS",
     "AnthropicProvider",
+    "BudgetExceeded",
     "CircuitBreaker",
     "CircuitOpenError",
     "CircuitState",
@@ -91,6 +94,7 @@ __all__ = [
     "RetryPolicy",
     "ServerError",
     "StagingSink",
+    "TokenBudget",
     "TokenUsage",
     "UnmatchedRequestError",
     "VllmEndpointProvider",

@@ -275,6 +275,70 @@ def test_on_expire_is_unset_by_default() -> None:
     assert AgentConfig(provider_factory=make_pong_provider).on_expire is None
 
 
+# --- Requirement: `max_tokens_per_activation` is a validated field ------------
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_a_non_positive_budget_fails_at_construction(limit: int) -> None:
+    # Scenario: A non-positive budget fails at construction. The `ValueError`
+    # names the field, at the construction site, before any pipeline exists.
+    with pytest.raises(ValueError, match="max_tokens_per_activation"):
+        AgentConfig(
+            provider_factory=make_pong_provider,
+            decode=decode_len_based,
+            max_tokens_per_activation=limit,
+        )
+
+
+def test_a_budget_without_a_decoder_fails_at_construction() -> None:
+    # Scenario: A budget without a decoder fails at construction. Without a
+    # decoder the token counts are genuinely unknown, and both readings of
+    # unknown are worse than failing here: unknown-is-free meters nothing and is
+    # discovered on an invoice, unknown-is-fatal makes the knob unusable.
+    with pytest.raises(ValueError, match="decode"):
+        AgentConfig(provider_factory=make_pong_provider, max_tokens_per_activation=1_000)
+
+
+def test_the_budget_is_unset_by_default_and_reaches_the_dofn_when_set() -> None:
+    # Scenario: Unset means unlimited -- the config half of it. And when set,
+    # the value rides the same `RunAgent -> _AgentDoFn` thread `decode` does.
+    assert AgentConfig(provider_factory=make_pong_provider).max_tokens_per_activation is None
+
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        decode=decode_len_based,
+        max_tokens_per_activation=5_000,
+    )
+    dofn = _AgentDoFn(
+        seq_agent,
+        provider_factory=config.provider_factory,
+        decode=config.decode,
+        max_tokens_per_activation=config.max_tokens_per_activation,
+    )
+    assert dofn._max_tokens_per_activation == 5_000
+
+
+def test_run_agent_expand_passes_the_budget_through_to_the_dofn() -> None:
+    # The knob is only worth validating if it actually reaches the runtime:
+    # `expand` is the one place that thread is woven, so the real DoFn is built
+    # through a recording wrapper rather than a mock that would break `ParDo`.
+    config = AgentConfig(
+        provider_factory=make_pong_provider, decode=decode_len_based, max_tokens_per_activation=777
+    )
+    built: list[_AgentDoFn] = []
+    real = _AgentDoFn
+
+    def recording(*args: Any, **kwargs: Any) -> _AgentDoFn:
+        dofn = real(*args, **kwargs)
+        built.append(dofn)
+        return dofn
+
+    with mock.patch("beam_agents.core.transform._AgentDoFn", recording), BeamTestPipeline() as p:
+        _keyed(p, _event(b"k", b"go")) | RunAgent(seq_agent, config=config)
+
+    assert [dofn._max_tokens_per_activation for dofn in built] == [777]
+
+
 @pytest.mark.parametrize(
     ("kwargs", "field_name"),
     [
