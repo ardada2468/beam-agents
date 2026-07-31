@@ -207,7 +207,7 @@ def _provider() -> FakeLLM:
 
 async def remembering_agent(ctx: ActivationContext) -> Complete:
     """Appends every event to a per-key ring — exactly what must not be sharded."""
-    ctx.memory.append("seen", ctx.event)
+    ctx.memory.append("seen", ctx.single_event)
     ring = b",".join(ctx.memory.ring("seen"))
     return Complete(output=ctx.entity_key + b"|" + ring)
 

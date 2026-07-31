@@ -35,13 +35,13 @@ def request() -> LlmRequest:
 
 async def echo_agent(ctx: ActivationContext) -> Complete:
     """Complete with the event payload upper-cased — no model call."""
-    return Complete(output=ctx.event.upper())
+    return Complete(output=ctx.single_event.upper())
 
 
 async def model_agent(ctx: ActivationContext) -> Complete:
     """Call the model once and complete with ``<payload>:<response>``."""
     response = await ctx.call_model(request())
-    return Complete(output=ctx.event + b":" + response.response)
+    return Complete(output=ctx.single_event + b":" + response.response)
 
 
 async def triage_agent(ctx: ActivationContext) -> Complete:
@@ -52,13 +52,13 @@ async def triage_agent(ctx: ActivationContext) -> Complete:
     the key that ``key_field`` supplied is only observable if the agent emits it.
     """
     response = await ctx.call_model(request())
-    return Complete(output=ctx.entity_key + b"|" + ctx.event + b":" + response.response)
+    return Complete(output=ctx.entity_key + b"|" + ctx.single_event + b":" + response.response)
 
 
 async def acting_agent(ctx: ActivationContext) -> Complete:
     """Stage one side-effecting intent, then complete — populates ``intents``."""
     ctx.act("notify", '{"channel":"ops"}', ttl_ms=INTENT_TTL_MS)
-    return Complete(output=b"acted:" + ctx.event)
+    return Complete(output=b"acted:" + ctx.single_event)
 
 
 class ActivateOnlyAgent:

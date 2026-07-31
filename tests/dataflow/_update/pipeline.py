@@ -110,7 +110,7 @@ async def compat_agent(ctx: ActivationContext) -> Complete | Suspend:
     if ctx.is_resume:
         return Complete(output=_resume_output(ctx))
 
-    command = ctx.event.decode()
+    command = ctx.single_event.decode()
     # One model call per fresh activation, so the LLM_CACHE cell is populated
     # and carried across the update alongside the cells under assertion.
     await ctx.call_model(

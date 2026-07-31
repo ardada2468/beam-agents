@@ -42,14 +42,14 @@ async def stateless_scorer(ctx: ActivationContext) -> Complete:
     response = await ctx.call_model(
         LlmRequest(
             model_id="fake-model",
-            messages=[ctx.event.decode()],
+            messages=[ctx.single_event.decode()],
             tools_schema=None,
             sampling_params=None,
         )
     )
     # Carry the physical key on the output so the regroup below has something
     # to unshard; a real pipeline would key its sink the same way.
-    return Complete(output=ctx.entity_key + b"|" + ctx.event + b"|" + response.response)
+    return Complete(output=ctx.entity_key + b"|" + ctx.single_event + b"|" + response.response)
 
 
 def split_output(payload: bytes) -> tuple[bytes, bytes]:

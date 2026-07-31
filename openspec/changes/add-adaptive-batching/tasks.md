@@ -74,3 +74,14 @@ The `stateful-agent-runtime` delta says the TTL fire "SHALL clear all six state 
 ### Revision 4 — the metric surface is eleven counters, not ten
 
 The `runtime-metrics` delta enumerated ten counters, omitting `longterm_upserts` — which `add-longterm-memory` added to `observability/metrics.py` without its own `runtime-metrics` delta, so this change's delta was drafted against a stale list. Corrected to eleven, with `longterm_upserts` in its declared position. The distribution count (seven, including the new `batch_size`) was already right.
+
+## 10. Revision: `ctx.single_event` migration for changes merged after this one (integration)
+
+- [x] 10.1 Widening `ctx.event` to `bytes | list[bytes]` (Revision 1) broke four consumers that
+  landed in the same merge window and so were not in this change's worktree: `tests/yaml/_fixtures.py`
+  (C36), `tests/keys/test_shard_keys_transform.py` and `tests/examples/test_shard_fanout.py` (C34),
+  and `tests/dataflow/_update/pipeline.py` (C46) — eight `mypy --strict` errors, all
+  `ctx.event` used where a single event's bytes are meant. Migrated to `ctx.single_event`, the
+  accessor this change added for exactly that case; no behavior change, and each of those agents is
+  single-event by construction. Verified: `make type` clean on 333 files, `make test-unit`
+  1623 passed.

@@ -66,4 +66,8 @@
 #
 # add-yaml-provider: 0.9028 (the YAML provider's reference grammar, config
 # mapping, and row conversion are fully exercised by offline unit tests).
-branch_rate = 0.9028
+#
+# add-adaptive-batching: 0.9066 (core/batching.py's flush predicates and
+# resolution land fully branch-covered, and the buffer/flush/timer routes
+# through core/dofn.py are driven by the fake-handle and TestStream suites).
+branch_rate = 0.9066
