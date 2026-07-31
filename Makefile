@@ -16,7 +16,7 @@ PNPM := pnpm --dir website
 # the SSR and a11y checks reads the same variable, so all three agree.
 SITE_BUILD_ENV := NEXT_DIST_DIR=.next-build
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build proto docs docs-serve build changelog changelog-draft site-dev site-build site-check api-reference
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-flink compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build proto docs docs-serve build changelog changelog-draft site-dev site-build site-check api-reference
 
 BENCH_RESULTS := bench-results
 # Local-iteration knob only. CI pins the modules' own sampling constants by
@@ -169,6 +169,25 @@ compose-up: ## Start the local Redpanda/Redis/Flink stack
 # above is now written to match `test-integration`'s marker expression verbatim.
 compose-up-core: ## Start only the non-Flink services (base integration lane)
 	$(COMPOSE) up -d --wait redpanda redis pubsub-emulator bigtable-emulator firestore-emulator
+
+# The mirror image of compose-up-core, and the other half of the same split:
+# the Flink lane's two selections (`test-semantics`, `test-conformance-flink`)
+# reach exactly Redpanda and Redis (tests/semantics/_flink_stack.py's
+# HOST_BROKERS/REDIS_URL and tests/semantics/_e2e/ledger.py) plus the Flink
+# services and the SDK harness. Neither tree names a GCP emulator anywhere —
+# every emulator-backed test is `integration and not semantics`, which is
+# compose-up-core's lane by construction.
+#
+# Starting them here is not merely wasteful, it is load-bearing against the
+# gate: three idle emulator JVMs share a 4-vCPU/16 GB runner with the
+# JobManager, a 3 GB TaskManager, the job server, and the harness, and the
+# JobManager's blob server is where the pressure surfaces — a submission whose
+# jar upload dies with `Broken pipe` and leaves the source stuck at in=0/out=0.
+# Same rule as the list above: if a Flink-lane test needs another service, grow
+# this list — loudly.
+compose-up-flink: ## Start only the Flink lane's services (semantics + conformance)
+	$(COMPOSE) up -d $(COMPOSE_UP_FLAGS) \
+		redpanda redis flink-jobmanager flink-taskmanager flink-jobserver beam-sdk-harness
 
 # Local-parity equivalent of the flink-minicluster job's cached buildx build
 # (the CI step uses docker/build-push-action with the same tag and file).

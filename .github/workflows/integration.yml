@@ -106,8 +106,13 @@ jobs:
       # on the missing tag rather than silently running a stale image.
       # `--wait` still blocks until every service, including flink-jobserver,
       # reports healthy.
+      #
+      # `compose-up-flink`, not `compose-up`: the three GCP emulators belong to
+      # the base lane's selection and are never reached from `tests/semantics`
+      # or `tests/conformance`. Their JVMs took memory this job's JobManager
+      # needs — see the target's comment in the Makefile.
       - name: Start local stack
-        run: make compose-up COMPOSE_UP_FLAGS=--wait
+        run: make compose-up-flink COMPOSE_UP_FLAGS=--wait
 
       # This step is the ONLY place the docker-backed semantics release gates
       # run (`make test-integration` excludes them so they are not paid for
