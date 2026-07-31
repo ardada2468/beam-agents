@@ -6,6 +6,13 @@ RunAgent(my_agent)`), not an agent-authoring framework. See
 [`openspec/project.md`](openspec/project.md) for the full architecture and
 governing principles.
 
+Documentation site: [`website/`](website/) — run it with `make site-dev`. Its
+content is verified against this repository on every change; see
+[`website/README.md`](website/README.md).
+
+> **Pre-release.** `project.version` is `0.0.0` and nothing is published to
+> PyPI, so every install below is from source at a git ref.
+
 ## Bootstrap
 
 ```sh
@@ -61,8 +68,10 @@ with three changes — no topology edits:
    `beam_agents.adapters.langgraph.BeamToolNode(tools)`.
 3. Wrap the graph: `RunAgent(LangGraphAgent(graph, chat_models=[model]))`.
 
+The adapter lives behind the `langgraph` extra. From a source checkout:
+
 ```sh
-uv pip install 'beam-agents[langgraph]'
+uv sync --extra langgraph
 ```
 
 Checkpoints persist latest-only inside working memory (the 1 MiB cap applies —
@@ -83,8 +92,8 @@ Side effects execute outside the pipeline, in the reference effector service:
 lease/TTL budgets, and what is (and is not) guaranteed.
 
 ```sh
-uv pip install 'beam-agents[effector]'
-beam-agents-effector --registry myapp.agent:TOOLS ...
+uv sync --extra effector
+uv run beam-agents-effector --registry myapp.agent:TOOLS ...
 ```
 
 ## Contributing

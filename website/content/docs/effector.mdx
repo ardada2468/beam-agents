@@ -1,0 +1,151 @@
+---
+title: The effector
+summary: The external service that executes intents — deployment preconditions, lease and TTL budgets, and exactly what is and is not guaranteed.
+status: stable
+order: 4
+verifies:
+  - module: src/beam_agents/effector/service.py
+  - module: src/beam_agents/effector/dedup.py
+  - module: docs/effector.md
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/effector/test_service.py
+  - test: tests/effector/test_dedup.py
+  - test: tests/semantics/test_effector_effectively_once.py
+  - example: intents_and_resume.py
+---
+
+Side effects execute **outside** the pipeline, in a separate service:
+`intents → dedup → execute → results → re-injection`. The effector shipped here
+is a reference implementation, not a hosted product, and it is installed from
+the `effector` extra.
+
+{/*
+  `docs/effector.md` draws this whole architecture as one line of box-drawing
+  characters. The line is accurate, but it flattens the two things that make
+  the design work — that the effector sits on the far side of a process
+  boundary, and that the dedup store is what a redelivery hits *instead of*
+  the tool — into arrows that look like every other arrow.
+
+  So: a horizontal rule for the boundary, crossed exactly twice (out on
+  `.intents`, back on the results topic); the effector's phases stacked in
+  execution order below it; and the redelivery drawn as its own inbound arrow
+  that terminates at the dedup store and never reaches the tool.
+
+  The rule is horizontal rather than vertical because the coordinate space is
+  620 units wide — matching this site's ~630px prose column, so the 11px
+  labels render at 11px instead of being scaled down — and a vertical split
+  would leave neither side wide enough for `UUID5(ENTITY_KEY, SEQ,
+  STEP_INDEX)`, which is the one string in this drawing that has to be exact.
+
+  Conventions are the landing-page pipeline diagram's: `.intents` carries the
+  intents stream colour, and the leg that leaves through the message bus and
+  comes back is dashed.
+*/}
+
+<Diagram
+  title="How an intent leaves the pipeline and its result comes back"
+  desc="A horizontal rule separates the Beam pipeline above from everything outside it below. Above the rule, RunAgent suspends an activation and mints an intent_id that is uuid5-derived from the entity key, the sequence number, and the step index. The .intents output crosses the rule downward into an outbox topic keyed by entity_key. Below the rule, the effector — a separate service that imports no Beam — consumes the outbox, writes a claim on intent_id into a dedup store, invokes your side-effecting tool at most one dispatch per intent_id, and writes the terminal result back into that store before publishing to a results topic, also keyed by entity_key. A redelivery carrying the same intent_id goes to the dedup store rather than to the tool, and is collapsed there once the terminal result is durable. The published result crosses the rule back upward into the pipeline and resumes the suspended activation on the same key."
+  caption="The effector runs on the far side of a process boundary, so the loop closes through the message bus rather than through the DAG. intent_id is uuid5-derived from entity_key, seq, and step_index — a pure function of the activation's position — so a replayed bundle re-mints the byte-identical id and the dedup store collapses the duplicate instead of executing it again."
+  viewBox="0 0 620 604"
+  minWidth={620}
+>
+  {/* --- above the rule: inside the pipeline --- */}
+  <DgText x={20} y={26} variant="faint">IN THE PIPELINE</DgText>
+  <DgNode x={20} y={36} w={140} h={56} label="RunAgent" sub="ACTIVATION SUSPENDS" />
+  <DgEdge d="M160,64 H178" />
+  <DgNode
+    x={182}
+    y={36}
+    w={232}
+    h={56}
+    label="intent_id"
+    sub="UUID5(ENTITY_KEY, SEQ, STEP_INDEX)"
+    soft
+  />
+
+  {/*
+    The process boundary, and the first of its two crossings. Nothing else in
+    the drawing touches this line, which is the claim: the effector is reached
+    only through topics.
+  */}
+  <DgEdge d="M0,120 H616" arrow={false} />
+  <DgEdge d="M298,92 V154" stream="intents" />
+  <DgText x={310} y={112} stream="intents">.intents</DgText>
+  <DgText x={20} y={140} variant="faint">OUTSIDE THE PIPELINE</DgText>
+
+  {/* --- below the rule: the effector's phases, top to bottom in execution order --- */}
+  <DgNode x={210} y={158} w={176} h={52} label="outbox topic" sub="KEYED BY ENTITY_KEY" />
+  <DgEdge d="M298,210 V246" />
+  <DgNode x={210} y={250} w={176} h={64} label="effector" sub="IMPORTS NO BEAM" />
+
+  <DgEdge d="M386,282 H422" />
+  <DgNode x={426} y={256} w={180} h={52} label="your tool" sub="SIDE EFFECT" />
+  <DgText x={516} y={336} anchor="middle">at most one dispatch</DgText>
+  <DgText x={516} y={352} anchor="middle">per intent_id</DgText>
+
+  {/*
+    Two arrows, both pointing at the store, because both phases are writes the
+    effector makes: it claims `intent_id` before invoking the tool and records
+    the terminal result after. Drawing "complete" as a return arrow would read
+    as the store answering, which inverts what actually happens and hides the
+    crash argument that lives between the two writes.
+  */}
+  <DgEdge d="M256,314 V384" label="CLAIM" labelX={226} labelY={352} />
+  <DgEdge d="M340,314 V384" label="COMPLETE" labelX={384} labelY={352} />
+  <DgNode x={210} y={388} w={176} h={52} label="dedup store" sub="KEYED ON INTENT_ID" />
+
+  {/*
+    The redelivery shares the right-hand column with the tool, directly under
+    it, so the eye compares the two: the intent that reaches the tool and the
+    one that does not. Its arrow terminates at the dedup store — that it never
+    reaches the tool is the whole claim.
+  */}
+  <DgNode x={426} y={388} w={180} h={52} label="redelivery" sub="SAME INTENT_ID" soft />
+  <DgEdge d="M422,414 H390" />
+  {/*
+    Deliberately "once the result is durable" and not "never re-run". A
+    redelivery that arrives before the completion record exists — the crash
+    window the guarantees section bounds — does re-execute, and a diagram that
+    said otherwise would be claiming more than the effector delivers.
+  */}
+  <DgText x={516} y={462} anchor="middle">collapsed once the</DgText>
+  <DgText x={516} y={478} anchor="middle">result is durable</DgText>
+
+  {/*
+    Publish takes the outside lane rather than passing through the dedup
+    store: the result is durable in the store before it is published, so
+    drawing the publish as a continuation of the "complete" arrow would put
+    the store on the wire path to the topic, which it is not.
+  */}
+  <DgEdge d="M210,270 H202 Q190,270 190,282 V494 Q190,506 202,506 H208" />
+  <DgText x={182} y={400} anchor="end" variant="faint">PUBLISH</DgText>
+  <DgNode x={210} y={480} w={176} h={52} label="results topic" sub="KEYED BY ENTITY_KEY" />
+
+  {/* The second crossing. Dashed: out through the message bus and back, as on the landing page. */}
+  <DgEdge
+    d="M298,532 V552 Q298,568 282,568 H28 Q8,568 8,552 V80 Q8,64 20,64"
+    dashed
+    stream="intents"
+  />
+  <DgText x={20} y={592}>resumes the suspended activation on the same key</DgText>
+</Diagram>
+
+<Example file="intents_and_resume.py" region="agent" />
+
+Read the guarantees section below carefully. The honest statement is bounded:
+duplicates are bounded to the crash window between a tool's effect and its
+durable completion record, and true exactly-once requires tools that are
+idempotent on `intent_id`. The end-to-end semantics gate exercises exactly that
+— SIGKILLed effector workers, a killed TaskManager, and a full replay over
+10,000 events.
+
+<RepoDoc file="docs/effector.md" />
+
+## Related
+
+- [Intents and resume](/examples/intents-and-resume) — the program embedded
+  above, which names the intent id before the pipeline runs.
+- [Correctness invariant 2](/learn/correctness-invariants) — the deterministic
+  id the dedup store is keyed on.
+- [Human in the loop](/docs/human-in-the-loop) — an approval is the same
+  round trip with a person in it.

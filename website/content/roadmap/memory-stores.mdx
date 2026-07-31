@@ -1,0 +1,28 @@
+---
+title: Long-term memory stores
+summary: A durable MemoryStore behind working memory, intended to back Bigtable, Redis, Firestore, and SQLAlchemy. Not implemented.
+status: planned
+order: 1
+verifies: []
+---
+
+<Callout kind="not-implemented">
+Nothing on this page exists in the current code. `src/beam_agents/memory/` is not present in the
+repository. This is a description of intent, published so the project's direction is
+legible — not documentation of a feature you can use.
+</Callout>
+
+The architecture notes describe a long-term `MemoryStore` behind the working-memory
+facade, with backends for Bigtable, Redis, Firestore, and SQLAlchemy, and a documented
+exception to the side-effect rule for idempotent upserts keyed by `(key, seq)`.
+
+**What exists today:** `src/beam_agents/memory/` contains `facade.py`. That is the entire
+memory subsystem. There is no store, no backend, no retrieval, and no configuration knob
+for one.
+
+**What that means for you now:** working memory is the only memory. It lives in Beam keyed
+state, is bounded to a 1 MiB soft cap per key with 100 KiB blobs, and is wiped by the
+event-time TTL timer. There is no cross-key retrieval and no history beyond the ring
+buffers you maintain yourself.
+
+See [state and memory](/learn/state-and-memory) for what is actually implemented.

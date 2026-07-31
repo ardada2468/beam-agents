@@ -1,0 +1,130 @@
+---
+title: Contributing
+summary: License, repository, the spec-driven workflow every source change must follow, and what CI will hold you to.
+status: stable
+order: 1
+verifies:
+  - module: CONTRIBUTING.md
+  - module: Makefile
+  - module: .pre-commit-config.yaml
+  - spec: openspec/specs/repo-scaffolding/spec.md
+  - test: tests/test_import.py
+---
+
+## The project
+
+| | |
+|---|---|
+| Repository | [github.com/ardada2468/beam-agents](https://github.com/ardada2468/beam-agents) |
+| License | Apache-2.0 |
+| Declared version | `0.0.0` — pre-release, not published to PyPI |
+| Python | `>=3.11,<3.13` |
+| Governance | Independent. **Not** an Apache Software Foundation project. |
+
+## Where to start
+
+- Read [how changes get made here](/specs/spec-driven-development) first. The
+  workflow is unusual enough that skipping it means writing the change twice.
+- Skim [the capability specs](/specs). They are the contract the implementation
+  is written against, and a new capability is a new one of those.
+- Run [the local loop](#the-local-loop) below once on an unmodified checkout,
+  so you know what a passing tree looks like before you change anything.
+- [Testing tiers and CI](/docs/testing-and-ci) explains which tier runs where,
+  and which one is required for every change.
+
+## Before you write code
+
+This repository requires an OpenSpec change for anything under `src/`, and it
+is enforced by a pre-commit hook rather than by review. The order is:
+
+1. Create a change folder describing the capability.
+2. Write requirements as Given/When/Then scenarios.
+3. Derive tests from those scenarios, named after them. Watch them fail for the
+   right reason.
+4. Then implement.
+
+Never weaken a test to make an implementation pass. If the spec is wrong, fix
+the spec first, get it reviewed, then the test, then the code.
+
+See [how changes get made here](/specs/spec-driven-development) for the full
+picture.
+
+## The local loop
+
+```sh
+make bootstrap          # uv sync --all-groups + install git hooks
+make fmt                # ruff check --fix + format
+make lint               # ruff check + format --check
+make type               # mypy --strict
+make test-unit          # offline, no docker — required for every change
+```
+
+With docker:
+
+```sh
+make compose-up
+make test-integration
+make test-semantics
+make compose-down
+```
+
+`make` is the contract between local and CI: every CI step invokes a `make`
+target, so a target passing locally means the same thing in CI.
+
+## What CI will hold you to
+
+- `ruff` clean, `mypy --strict` clean on `src/`, full type hints, no `Any` in
+  public signatures.
+- Async-first internals; never block the bridge event loop (the `ASYNC` lint
+  rules enforce this).
+- Errors route to `.errors` with typed error protos — never swallowed.
+  Misconfiguration raises `ValueError` at pipeline-construction time with an
+  actionable message.
+- No global mutable state beyond documented worker-local singletons.
+- Coverage may not decrease, and a mutation gate runs against touched `core/`
+  files.
+- Generated protobuf bindings must be regenerated and diff-clean.
+
+Squash-merge; one merged commit is one archived OpenSpec change, and the PR
+description links the spec scenarios each new test implements.
+
+## Contributing to this website
+
+The site lives in `website/`, and its content is governed by the same
+mechanical standard as the code:
+
+```sh
+make site-dev           # dev server
+make site-build         # production build (Node only)
+make site-check         # every gate: types, lint, fidelity, build, links, SSR, a11y
+```
+
+Rules worth knowing before you write a page:
+
+- **Every page declares a status** — `stable`, `experimental`, `partial`, or
+  `planned` — and the verifier enforces what each one means. `stable` needs a
+  spec and a test. `planned` fails once the code it describes exists.
+- **Claims are assertions in frontmatter**, resolved against the repository.
+  `symbol:` entries are resolved by importing the package, not by grepping.
+- **Code is never transcribed.** Examples live in `website/examples/`, are
+  executed by the offline test tier, and are embedded by file reference.
+- **Claims about other projects need a dated citation.** Comparison cells with
+  nothing behind them render as "Not established".
+- **No performance figures**, until a benchmark exists in this repository.
+
+If a check blocks you and you believe it is wrong, change the check in the same
+PR and say why — do not add an exemption comment without a reason, because the
+reason is what gets reviewed.
+
+## Reporting problems
+
+Open an issue at
+[github.com/ardada2468/beam-agents/issues](https://github.com/ardada2468/beam-agents/issues).
+For anything about this site specifically — a page that is out of date, a claim
+that does not hold, a broken link, a check that produces a false positive —
+that is a bug in the same sense as a broken test, and worth reporting as one.
+
+The most useful bug report against the documentation names the page and quotes
+the sentence, because every claim on this site is supposed to be traceable to
+something in the repository. If a sentence cannot be traced, either the sentence
+is wrong or a check is missing, and both are worth fixing.

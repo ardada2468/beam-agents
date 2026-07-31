@@ -1,0 +1,68 @@
+---
+title: Wire schemas
+summary: The protobuf messages that define every wire and state format the runtime uses.
+status: stable
+order: 1
+verifies:
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/core/test_wire_schemas.py
+---
+
+Seven protobuf messages, defined once in `protos/beam_agents.proto` under
+package `beam_agents.v1`, describe every byte this runtime persists or puts on a
+wire: `MemoryBlob`, `ToolIntent`, `ToolResult`, `TraceEvent`, `AgentEnvelope`,
+`Continuation`, and `LlmCacheBlob`.
+
+Generated Python bindings are committed under `src/beam_agents/_protos/`, and
+regenerating them with `scripts/gen_proto.sh` must produce no diff. Committing
+generated code and then gating it on a drift check is the trade this repository
+makes repeatedly: the artifact is readable and importable without a build step,
+and it cannot silently disagree with its source.
+
+## Why a schema at all
+
+A stateful agent runtime persists two kinds of thing — state that outlives a
+bundle, and messages that cross a process boundary — and both need a format
+that survives a redeploy. Python pickle survives neither: it is not stable
+across library versions, it is not readable by the effector (a separate
+process), and it is not safe to load from a queue.
+
+Declaring the formats as protobuf makes the state layout an explicit, reviewable
+artifact and makes cross-language consumers possible. It is also what lets
+[the proto coders](/specs/proto-coders) advertise determinism to Beam, which is
+the precondition for using these types as keys.
+
+## What each message is for
+
+- **`AgentEnvelope`** — the single keyed input type. One entry point means the
+  transform's signature does not multiply as event kinds are added.
+- **`MemoryBlob`** — versioned working memory, ordered least-recently-used
+  first, with `total_value_bytes` carried alongside so size accounting does not
+  require a rescan. See [the memory facade](/specs/memory-facade).
+- **`Continuation`** — framework-opaque resume state for a suspended
+  activation. The runtime stores the bytes the agent handed it and gives them
+  back, without interpreting them; that opacity is what lets an adapted
+  LangGraph graph suspend without the runtime knowing anything about graphs.
+- **`ToolIntent`** — a declarative request to perform a side effect, carrying a
+  deterministic `intent_id` and an `expires_at_ms`. Deterministic identity is
+  what makes effectively-once execution possible downstream.
+- **`ToolResult`** — the correlated outcome, with a terminal status.
+- **`TraceEvent`** — shaped to the OpenTelemetry GenAI conventions, so traces
+  are consumable by tooling that has never heard of this project.
+- **`LlmCacheBlob`** — versioned replay-cache entries, also LRU-orderable.
+
+## Evolution
+
+Schema changes are additive, and guarded by golden blobs: a stored blob written
+by an older version must still decode. Field numbers are not reused and fields
+are not repurposed, because the state in a running pipeline is older than the
+code reading it — always.
+
+## Related
+
+- [Proto coders](/specs/proto-coders) — how these messages become Beam coders.
+- [Architecture](/learn/architecture) — where each message travels.
+- [Traces](/docs/traces) — the `TraceEvent` attribute set.
+- [The four outputs](/examples/four-outputs) — `ToolIntent` and `ToolResult` in a pipeline.
+
+<Spec capability="wire-schemas" />

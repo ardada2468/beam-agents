@@ -1,0 +1,48 @@
+---
+title: Repository scaffolding
+summary: The environment, quality gates, service topology, and CI workflow contracts every other capability relies on.
+status: stable
+order: 9
+verifies:
+  - spec: openspec/specs/repo-scaffolding/spec.md
+  - test: tests/test_import.py
+---
+
+This capability delivers no runtime code. It specifies the ground every other
+capability stands on: the reproducible developer environment, the dependency
+groups, the lint and type gates, the local service topology, and the CI
+workflow contracts.
+
+It is written as a specification, with scenarios and tests, for the same reason
+the runtime capabilities are. A project's quality gates are load-bearing
+infrastructure — the moment they are conventions rather than requirements, they
+erode one exception at a time, and the erosion is invisible until something
+that should have been caught is not.
+
+## What it pins down
+
+- **Layout and versions.** A `uv`-managed `src/` layout; Python and Beam floors
+  that match the constraints the runtime actually needs.
+- **Dependency groups.** Dev tooling is partitioned from runtime dependencies,
+  so what a user would install is not what a contributor installs.
+- **Gates.** `ruff` for lint and format across `src/` and `tests/`;
+  `mypy --strict` over the source tree; `pytest` with a closed marker registry
+  in strict mode, so a typo'd marker is an error rather than a silently
+  unselected test.
+- **`pre-commit`.** The gates run locally, before push, rather than only in CI.
+- **Local services.** Docker compose brings up Redpanda, Redis, and Flink for
+  the integration tier.
+- **`Makefile` as the single contract between local and CI.** Every CI step
+  invokes a `make` target, so a target passing on your machine means the same
+  thing in the workflow.
+- **A public API surface that starts empty and typed.** Names become public
+  deliberately, by being added, rather than by accident of module layout.
+
+## Related
+
+- [How changes get made here](/specs/spec-driven-development) — the process these gates enforce.
+- [Testing tiers and CI](/docs/testing-and-ci) — what runs where, and when.
+- [Contributing](/community/contributing) — the local loop in practice.
+- [Install](/learn/install) — the source install this layout produces.
+
+<Spec capability="repo-scaffolding" />

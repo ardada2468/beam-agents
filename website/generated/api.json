@@ -1,0 +1,431 @@
+{
+  "generated_by": "scripts/gen_api_reference.py",
+  "package": "beam_agents",
+  "package_version": "0.0.0",
+  "public_surface": [
+    "AgentConfig",
+    "Deny",
+    "Drop",
+    "Escalate",
+    "FallbackContext",
+    "HitlPolicy",
+    "LangGraphAgent",
+    "RunAgent",
+    "RunAgentOutputs"
+  ],
+  "symbols": [
+    {
+      "name": "AgentConfig",
+      "qualname": "beam_agents.core.transform.AgentConfig",
+      "kind": "dataclass",
+      "signature": "(provider_factory: 'Callable[[], LLMClient]', *, decode: 'Decode | None' = None, activation_timeout_s: 'float' = 30.0, ttl_ms: 'int' = 3600000, cancel_grace_s: 'float' = 5.0, hitl_policy: 'HitlPolicy' = <factory>, tool_registry: 'ToolRegistry' = <factory>, intents_to: 'str | None' = None, traces_to: 'str | None' = None, errors_to: 'str | None' = None, sink_resolver: 'SinkResolver' = <factory>) -> None",
+      "doc": "Immutable, self-validating ``RunAgent`` configuration.\n\nBundles the provider factory, the runtime knobs, and the optional sink\nURIs. Validation runs in ``__post_init__``, so a misconfigured value raises\n``ValueError`` at the construction site \u2014 before any pipeline exists.",
+      "source": {
+        "path": "src/beam_agents/core/transform.py",
+        "line": 394
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "activation_timeout_s",
+          "kind": "field",
+          "signature": "activation_timeout_s: float",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "cancel_grace_s",
+          "kind": "field",
+          "signature": "cancel_grace_s: float",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "decode",
+          "kind": "field",
+          "signature": "decode: Decode | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "errors_to",
+          "kind": "field",
+          "signature": "errors_to: str | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "hitl_policy",
+          "kind": "field",
+          "signature": "hitl_policy: HitlPolicy",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "intents_to",
+          "kind": "field",
+          "signature": "intents_to: str | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "provider_factory",
+          "kind": "field",
+          "signature": "provider_factory: Callable[[], LLMClient]",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "sink_resolver",
+          "kind": "field",
+          "signature": "sink_resolver: SinkResolver",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "tool_registry",
+          "kind": "field",
+          "signature": "tool_registry: ToolRegistry",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "traces_to",
+          "kind": "field",
+          "signature": "traces_to: str | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "ttl_ms",
+          "kind": "field",
+          "signature": "ttl_ms: int",
+          "doc": null,
+          "source": null
+        }
+      ]
+    },
+    {
+      "name": "Deny",
+      "qualname": "beam_agents.hitl.Deny",
+      "kind": "dataclass",
+      "signature": "(output: 'bytes' = b'__hitl_timeout__') -> None",
+      "doc": "Emit deterministic bytes on the main output and end the suspension.",
+      "source": {
+        "path": "src/beam_agents/hitl.py",
+        "line": 97
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "output",
+          "kind": "field",
+          "signature": "output: bytes",
+          "doc": null,
+          "source": null
+        }
+      ]
+    },
+    {
+      "name": "Drop",
+      "qualname": "beam_agents.hitl.Drop",
+      "kind": "dataclass",
+      "signature": "(reason: 'str' = 'hitl_timeout') -> None",
+      "doc": "Emit nothing on the main output; record the timeout on ``.errors``.",
+      "source": {
+        "path": "src/beam_agents/hitl.py",
+        "line": 104
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "reason",
+          "kind": "field",
+          "signature": "reason: str",
+          "doc": null,
+          "source": null
+        }
+      ]
+    },
+    {
+      "name": "Escalate",
+      "qualname": "beam_agents.hitl.Escalate",
+      "kind": "dataclass",
+      "signature": "(tool_name: 'str', args_json: 'str' = '{}', timeout_ms: 'int' = 86400000) -> None",
+      "doc": "Ask again, louder: stage a fresh approval intent and extend the deadline.\n\n``tool_name`` is the escalation channel (a pager, a second approver queue).\n``timeout_ms`` is how much longer to wait, measured from the timer's fire\ntime. Bounded by ``HitlPolicy.max_escalations`` \u2014 an unbounded escalate\nloop would be a fail-*open* hole, since the point of the timer is that the\nwait ends.",
+      "source": {
+        "path": "src/beam_agents/hitl.py",
+        "line": 111
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "args_json",
+          "kind": "field",
+          "signature": "args_json: str",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "timeout_ms",
+          "kind": "field",
+          "signature": "timeout_ms: int",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "tool_name",
+          "kind": "field",
+          "signature": "tool_name: str",
+          "doc": null,
+          "source": null
+        }
+      ]
+    },
+    {
+      "name": "FallbackContext",
+      "qualname": "beam_agents.core.agent.FallbackContext",
+      "kind": "dataclass",
+      "signature": "(entity_key: 'bytes' = b'', seq: 'int' = 0, snapshot: 'bytes' = b'', kind: 'str' = 'timer', deadline_ms: 'int' = 0, fired_at_ms: 'int' = 0, pending_intent_ids: 'tuple[str, ...]' = ()) -> None",
+      "doc": "Passed to the HITL policy when a pending approval/result times out.\n\nCarries the *expired continuation handle* \u2014 the suspended activation's\n``seq``, the ``snapshot`` the agent persisted, the ``deadline_ms`` that\nelapsed, and the ``pending_intent_ids`` nothing ever answered \u2014 plus\n``fired_at_ms``, the timer's fire timestamp. ``kind`` says why the fallback\nran; only ``\"timer\"`` exists today.\n\nEvery time value the policy could need is carried here so the policy never\nreads a clock: it runs inside a timer callback whose bundle can be retried,\nand a retry must reach the same decision.",
+      "source": {
+        "path": "src/beam_agents/core/agent.py",
+        "line": 107
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "deadline_ms",
+          "kind": "field",
+          "signature": "deadline_ms: int",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "entity_key",
+          "kind": "field",
+          "signature": "entity_key: bytes",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "fired_at_ms",
+          "kind": "field",
+          "signature": "fired_at_ms: int",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "kind",
+          "kind": "field",
+          "signature": "kind: str",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "pending_intent_ids",
+          "kind": "field",
+          "signature": "pending_intent_ids: tuple[str, ...]",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "seq",
+          "kind": "field",
+          "signature": "seq: int",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "snapshot",
+          "kind": "field",
+          "signature": "snapshot: bytes",
+          "doc": null,
+          "source": null
+        }
+      ]
+    },
+    {
+      "name": "HitlPolicy",
+      "qualname": "beam_agents.hitl.HitlPolicy",
+      "kind": "dataclass",
+      "signature": "(timeout_ms: 'int' = 86400000, intent_ttl_ms: 'int' = 3600000, approval_channel: 'str' = 'approval', max_escalations: 'int' = 0, on_timeout: 'Callable[[FallbackContext], Route]' = <function deny>) -> None",
+      "doc": "Configuration for suspensions, approvals, and what a timeout does.\n\n``on_timeout`` must be **pure and synchronous** (see the module docstring)\nand picklable \u2014 the DoFn holds the policy and serializes for the runner, so\nit must be a module-level function or another picklable callable, never a\nlambda or a closure.",
+      "source": {
+        "path": "src/beam_agents/hitl.py",
+        "line": 135
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "approval_channel",
+          "kind": "field",
+          "signature": "approval_channel: str",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "intent_ttl_ms",
+          "kind": "field",
+          "signature": "intent_ttl_ms: int",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "max_escalations",
+          "kind": "field",
+          "signature": "max_escalations: int",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "on_timeout",
+          "kind": "field",
+          "signature": "on_timeout: Callable[[FallbackContext], Route]",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "timeout_ms",
+          "kind": "field",
+          "signature": "timeout_ms: int",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "validate",
+          "kind": "method",
+          "signature": "(self) -> 'None'",
+          "doc": "Raise ``ValueError`` naming the offending field, before any pipeline.",
+          "source": {
+            "path": "src/beam_agents/hitl.py",
+            "line": 154
+          }
+        }
+      ]
+    },
+    {
+      "name": "LangGraphAgent",
+      "qualname": "beam_agents.adapters.langgraph.agent.LangGraphAgent",
+      "kind": "class",
+      "signature": "(graph: 'StateGraph | CompiledStateGraph', *, decode_event: 'Callable[[bytes], object]' = <function _default_decode>, encode_output: 'Callable[[object], bytes]' = <function _default_encode>, hitl_timeout_ms: 'int | None' = None, chat_models: 'Sequence[object]' = ()) -> 'None'",
+      "doc": "Wraps a LangGraph graph (a `StateGraph` builder or an already-compiled\ngraph) as a runtime agent. A user-compiled graph is never mutated: the\nper-activation checkpointer is injected into a copy.",
+      "source": {
+        "path": "src/beam_agents/adapters/langgraph/agent.py",
+        "line": 73
+      },
+      "requires_extra": "langgraph",
+      "members": []
+    },
+    {
+      "name": "RunAgent",
+      "qualname": "beam_agents.core.transform.RunAgent",
+      "kind": "class",
+      "signature": "(agent: 'Agent', *, config: 'AgentConfig') -> 'None'",
+      "doc": "Run ``agent`` as a keyed stateful transform over a pre-keyed envelope stream.",
+      "source": {
+        "path": "src/beam_agents/core/transform.py",
+        "line": 471
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "expand",
+          "kind": "method",
+          "signature": "(self, pcoll: 'beam.pvalue.PCollection') -> 'RunAgentOutputs'",
+          "doc": null,
+          "source": {
+            "path": "src/beam_agents/core/transform.py",
+            "line": 479
+          }
+        }
+      ]
+    },
+    {
+      "name": "RunAgentOutputs",
+      "qualname": "beam_agents.core.transform.RunAgentOutputs",
+      "kind": "dataclass",
+      "signature": "(output: 'beam.pvalue.PCollection', intents: 'beam.pvalue.PCollection', traces: 'beam.pvalue.PCollection', errors: 'beam.pvalue.PCollection', dead_letter: 'beam.pvalue.PCollection | None' = None) -> None",
+      "doc": "``RunAgent``'s named outputs: main, the three tagged streams, and the\nintents dead-letter branch.\n\n``dead_letter`` is ``None`` unless ``intents_to`` resolved to a\n``WriteIntents`` outbox writer (a ``kafka://``/``pubsub://`` scheme). It is\nalways exposed here, whether or not ``errors_to`` is also set, so a caller\ncan consume it directly instead of it being silently dropped by Beam as an\nunconsumed ``PCollection`` when ``errors_to`` is unset.",
+      "source": {
+        "path": "src/beam_agents/core/transform.py",
+        "line": 437
+      },
+      "requires_extra": null,
+      "members": [
+        {
+          "name": "dead_letter",
+          "kind": "field",
+          "signature": "dead_letter: beam.pvalue.PCollection | None",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "errors",
+          "kind": "field",
+          "signature": "errors: beam.pvalue.PCollection",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "intents",
+          "kind": "field",
+          "signature": "intents: beam.pvalue.PCollection",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "output",
+          "kind": "field",
+          "signature": "output: beam.pvalue.PCollection",
+          "doc": null,
+          "source": null
+        },
+        {
+          "name": "traces",
+          "kind": "field",
+          "signature": "traces: beam.pvalue.PCollection",
+          "doc": null,
+          "source": null
+        }
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "module": "beam_agents",
+      "visibility": "public",
+      "note": "The declared public surface."
+    },
+    {
+      "module": "beam_agents._protos",
+      "visibility": "documented-internal",
+      "note": "Generated protobuf bindings, including `AgentEnvelope` \u2014 the input element type `RunAgent` requires. Underscore-prefixed, yet unavoidable when constructing pipeline input."
+    },
+    {
+      "module": "beam_agents.core.agent",
+      "visibility": "documented-internal",
+      "note": "Activation outcomes (`Complete`, `Suspend`) and the agent protocols. An agent function cannot be written without these."
+    },
+    {
+      "module": "beam_agents.core.context",
+      "visibility": "documented-internal",
+      "note": "`ActivationContext` \u2014 the object every agent receives. Its methods (`act`, `call_model`, `run_tool`, `emit`, `memory`) are the runtime's real authoring surface."
+    },
+    {
+      "module": "beam_agents.model.client",
+      "visibility": "documented-internal",
+      "note": "`LlmRequest`/`LlmResponse`/`ProviderError`, the model-call types."
+    },
+    {
+      "module": "beam_agents.model.fake",
+      "visibility": "documented-internal",
+      "note": "`FakeLLM` and its matchers \u2014 the model used in tests and examples."
+    },
+    {
+      "module": "beam_agents.tools",
+      "visibility": "documented-internal",
+      "note": "`@tool` and `ToolRegistry`, needed to declare and register tools."
+    }
+  ]
+}

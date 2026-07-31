@@ -1,0 +1,141 @@
+---
+title: The four outputs
+summary: Drive three keys down three paths in one bounded pipeline and assert on .output, .intents, .traces, and .errors — including a dead letter.
+status: stable
+order: 4
+verifies:
+  - symbol: beam_agents.RunAgentOutputs
+  - symbol: beam_agents.AgentConfig
+  - module: src/beam_agents/core/error_records.py
+  - module: src/beam_agents/observability/traces.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/core/test_error_records.py
+  - test: tests/core/test_dofn_commit.py
+  - test: tests/core/test_dofn_failure_traces.py
+  - example: four_outputs.py
+---
+
+`RunAgent` does not return a `PCollection`. It returns a `RunAgentOutputs` carrying four
+of them, and a pipeline that consumes only the first is incomplete in a way nothing will
+tell you about at runtime.
+
+This example drives three keys down three different paths in one bounded pipeline and
+asserts on every stream, so each output is demonstrated rather than described.
+
+## The four streams
+
+- **`.output`** — `bytes`. Terminal agent outputs; what the pipeline is *for*.
+- **`.intents`** — `ToolIntent`. Side-effect requests, bound for the outbox topic and the
+  effector.
+- **`.traces`** — `TraceEvent`. Observability spans for the activation and everything
+  inside it.
+- **`.errors`** — `ActivationError`. Dead letters: element-level failures, never a failed
+  bundle.
+
+There is a fifth field, `dead_letter`, populated only when `intents_to` resolves to a
+`WriteIntents` outbox writer; it carries intents that could not be serialized.
+[Architecture](/learn/architecture) covers where it fits.
+
+**`.errors` is the one people forget.** An element-level failure never fails the
+bundle — it is routed here and the pipeline moves on. Leave the stream unconsumed and
+the failure is not "handled by default", it is invisible.
+
+## One agent, three paths
+
+Rather than three pipelines, the agent branches on the event payload, so a single
+bounded run exercises every output.
+
+<Example file="four_outputs.py" region="agent" />
+
+- `review` takes the ordinary path: a model call, then `Complete`. It produces an
+  `.output` element and a full span set on `.traces`.
+- `NOTIFY` stages an intent with `ctx.act` and completes. It produces both an `.output`
+  and an `.intents` element.
+- `BROKEN` writes to memory and *then* raises. That ordering is the point of the
+  example, and the next section is about what becomes of the write.
+
+## Asserting on every stream
+
+<Example file="four_outputs.py" region="outputs" />
+
+Three assertions, one per stream, each with an explicit `label` — `assert_that` needs
+distinct step names inside a single pipeline.
+
+The `.errors` assertion is worth reading slowly. An `ActivationError` names the key, a
+`reason` drawn from a closed taxonomy — here `activation_error` — and the **element's
+event time**, never a wall clock. That last detail is what makes a dead letter
+replayable, and what makes two runs over the same input produce byte-identical error
+records. The rest of the taxonomy (`activation_timeout`, `orphaned_result`,
+`hitl_timeout`, `intent_dead_letter`) is in [the errors output](/docs/errors).
+
+## What a dead letter means
+
+It means the activation committed **nothing**.
+
+Not "partially applied", not "applied but unreported". The `ctx.memory.set` call on the
+`BROKEN` path is staged in the activation context and discarded with everything else
+when the activation raises: no memory write, no intent, no output, and the key's
+sequence counter does not advance. The record on `.errors` is the only evidence the key
+was touched at all.
+
+That is why consuming this stream is not optional housekeeping. It is how you learn a
+key produced nothing, and no other channel will tell you.
+
+## Traces show the commit boundary from outside
+
+<Example file="four_outputs.py" region="traces" />
+
+Compare the two committed keys with the failed one. `k-model` and `k-notify` each emit
+`ACTIVATION_START`, an event for whatever happened in the middle, and `ACTIVATION_END`.
+`k-broken` emits a single `ERROR`.
+
+It emits one event because traces are staged like every other effect: the
+`ACTIVATION_START` span that activation produced before raising was discarded along with
+its memory write. So `.traces` is not a log written as things happen — it is the
+committed record of what actually took effect, which means
+[correctness invariant 1](/learn/correctness-invariants) can be audited from outside the
+runtime by reading it.
+
+[Traces](/docs/traces) has the attribute conventions and the OTLP and BigQuery sinks.
+
+## Wiring the streams to sinks
+
+The example asserts on the streams in-process because it is a test. A deployed pipeline
+attaches sinks instead, through `AgentConfig`:
+
+```python
+config = AgentConfig(
+    provider_factory=make_provider,
+    intents_to="kafka://broker:9092/agent.intents",
+    traces_to="otlp://collector:4317",
+    errors_to="kafka://broker:9092/agent.errors",
+)
+```
+
+Sink URIs are validated when `AgentConfig` is constructed, before a pipeline exists. The
+`otlp://` scheme is accepted for `traces_to` alone: it is a best-effort tap that drops
+on delivery failure by contract, and intents and errors are correctness-bearing streams
+that need a lossless sink.
+
+## Run it
+
+```sh
+uv run python website/examples/four_outputs.py
+```
+
+## The complete program
+
+<Example file="four_outputs.py" />
+
+## Related
+
+- [The errors output](/docs/errors) — the operational reference for `.errors`, its
+  reason taxonomy, and how to configure a dead-letter sink.
+- [Traces](/docs/traces) — `TraceEvent`, the OpenTelemetry GenAI attribute conventions,
+  and the exporters.
+- [The effector](/docs/effector) — what happens to an element on `.intents` after it
+  leaves the pipeline.
+- [Correctness invariants](/learn/correctness-invariants) — atomic commit, stated and
+  tested.
+- [`RunAgentOutputs`](/api/RunAgentOutputs) in the API reference.

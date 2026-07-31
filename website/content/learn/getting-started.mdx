@@ -1,0 +1,111 @@
+---
+title: Getting started
+summary: Write an agent, wire it into a pipeline, and run it on the DirectRunner with no credentials.
+status: stable
+order: 6
+verifies:
+  - symbol: beam_agents.RunAgent
+  - symbol: beam_agents.AgentConfig
+  - module: src/beam_agents/model/fake.py
+  - spec: openspec/specs/fake-llm/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/core/test_transform.py
+  - example: fast_path.py
+---
+
+This walks through the smallest complete pipeline. It runs offline, with no
+credentials and no docker. Everything below is lifted from a file the test
+suite executes on every change.
+
+Install first — see [install](/learn/install), which is a source install
+because no release exists yet.
+
+## 1. Write the agent
+
+An agent is an async function that takes an activation context and returns an
+outcome. Module-level, because the DoFn holding it is serialized for the runner
+and has to pickle by reference.
+
+<Example file="fast_path.py" region="agent" />
+
+`Complete(output=...)` ends the activation and emits on `.output`. The other
+outcome is `Suspend`, covered in
+[intents and resume](/examples/intents-and-resume).
+
+## 2. Supply a model
+
+`AgentConfig` takes a **factory**, not a client. The factory runs worker-side,
+so connection pools are created where they are used rather than pickled across
+the wire.
+
+<Example file="fast_path.py" region="provider" />
+
+`FakeLLM` matches requests against ordered rules and records every call. It is
+the default model in the repository's own tests, and it is what makes an
+example runnable with no network.
+
+## 3. Key the input
+
+`RunAgent` does not key elements. It requires
+`PCollection[KV[bytes, AgentEnvelope]]` and raises `ValueError` at
+pipeline-construction time otherwise — a stateful DoFn cannot accept unkeyed
+input, and failing at construction beats failing on a worker.
+
+<Example file="fast_path.py" region="pipeline" />
+
+## 4. Run it
+
+```sh
+uv run python website/examples/fast_path.py
+```
+
+It prints `fast_path: ok`. What it asserts on the way there is the interesting
+part:
+
+```py
+assert_that(results, equal_to([b"escalate:1", b"escalate:2", b"escalate:1"]))
+```
+
+Three events, two keys. `acct-1`'s two events see a ring one deep and then two
+deep, because per-key state persists across activations and per-key
+serialization orders them relative to each other. `acct-2` starts fresh at one:
+separate key, separate memory. Nothing in the agent code arranged that — it is
+what the transform is.
+
+The example is executed by the repository's offline test tier on every change,
+so if this page and the code ever disagreed, CI would say so before you did.
+
+## What just happened
+
+One `process()` call per event, each one an **activation**:
+
+1. The runtime read the key's `MemoryBlob` out of Beam state and handed the
+   agent a `Memory` facade over it.
+2. `ctx.memory.append` staged a ring write. Nothing was persisted yet.
+3. `ctx.call_model` consulted the replay cache before the provider, so a
+   retried bundle would not call the provider a second time, and staged a trace
+   event for the call.
+4. `Complete(output=...)` ended the activation, and the runtime committed the
+   staged memory write, the sequence-counter bump, and the emitted element
+   together with the bundle.
+
+Had step 3 raised, step 4 would never have run: no memory write, no `seq`
+advance, and a record on `.errors` instead of on `.output`. That all-or-nothing
+boundary is the property the rest of the documentation keeps referring back to.
+
+## What to read next
+
+Depending on what you are trying to do:
+
+- **Perform an external write** → [intents and resume](/examples/intents-and-resume),
+  then [the effector](/docs/effector).
+- **Ask a human** → [human in the loop](/examples/human-in-the-loop).
+- **Handle failures** → [the errors output](/docs/errors).
+- **Understand the guarantees** →
+  [correctness invariants](/learn/correctness-invariants).
+- **Bring an existing LangGraph graph** →
+  [the LangGraph adapter](/examples/langgraph-adapter).
+- **See all four outputs at once** → [the four outputs](/examples/four-outputs).
+- **Call a tool with no side effect** → [read-only tools](/examples/read-only-tools).
+- **Look up a name** → [the API reference](/api), or
+  [the glossary](/learn/glossary) if it is a word rather than a symbol.

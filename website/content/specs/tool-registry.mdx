@@ -1,0 +1,46 @@
+---
+title: Tool registry
+summary: The @tool decorator, argument schemas, and the side-effect guard that makes ctx.act the only effect path.
+status: stable
+order: 3
+verifies:
+  - spec: openspec/specs/tool-registry/spec.md
+  - test: tests/tools/test_registry.py
+---
+
+`beam_agents.tools` lets agent code declare tools with a `@tool` decorator. Each
+tool's provider-facing JSON schema is derived from its Python signature through
+a generated Pydantic v2 model, and a `ToolRegistry` collects them for name
+resolution and aggregate `tools_schema` lookup. One definition produces both the
+callable and the schema the model is shown, so the two cannot describe different
+arguments.
+
+## The side-effect flag is the whole design
+
+Every tool declares whether it has side effects, and that single flag splits the
+runtime in two:
+
+- **`side_effect=False`** — a read-only tool. `ToolRunner` validates the
+  arguments and calls it inline, inside the activation. Nothing leaves the
+  pipeline; see [read-only tools](/examples/read-only-tools).
+- **`side_effect=True`** — an effectful tool. Calling it directly raises
+  `SideEffectToolError`. The only way to invoke it is `ctx.act(...)`, which
+  stages a [`ToolIntent`](/specs/wire-schemas) that leaves on `.intents` and is
+  executed by [the effector](/docs/effector).
+
+That refusal is [correctness invariant 5](/learn/correctness-invariants) made
+mechanical. A side effect performed inline inside an activation happens again on
+every bundle retry, and it happens on a code path where nothing is staged, so a
+failed activation still leaves the effect behind. Raising on direct invocation
+turns "please always use `ctx.act`" from documentation into an error at the
+moment the mistake is made — including when the mistake is inside an adapted
+third-party agent framework rather than in code anyone here wrote.
+
+## Related
+
+- [Read-only tools](/examples/read-only-tools) — the inline path.
+- [Intents and resume](/examples/intents-and-resume) — the effects path.
+- [The effector](/docs/effector) — what executes an intent, once.
+- [Correctness invariants](/learn/correctness-invariants) — invariant 5 in full.
+
+<Spec capability="tool-registry" />
