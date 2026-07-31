@@ -80,5 +80,6 @@
 # combined tree: 0.9103.
 #
 # add-token-budgets: the budget meter, BudgetExceeded routing, and the two new
-# usage distributions are fully exercised by offline unit tests.
-branch_rate = 0.9103
+# usage distributions are fully exercised by offline unit tests. Measured on
+# the combined tree with add-replay-cli: 0.9118.
+branch_rate = 0.9118
