@@ -47,6 +47,7 @@ nav:
   - Examples:
       - Hello, world: examples/hello-world.md
       - Fraud triage: examples/fraud-triage.md
+      - Fraud triage on Dataflow: examples/fraud-triage-dataflow.md
       - IoT reaction: examples/iot-reaction.md
   - Operating the runtime:
       - Beam YAML provider: yaml.md

@@ -207,9 +207,12 @@ class PubSubIntentSource:
     """
 
     def __init__(self, project: str, subscription: str, *, max_queued: int = 64) -> None:
-        # google.cloud is a namespace package; mypy can't see pubsub_v1 as an
-        # attribute of it (same as actions/write_intents.py).
-        from google.cloud import pubsub_v1  # type: ignore[attr-defined]
+        # `google.cloud` is a namespace package, so mypy resolves `pubsub_v1`
+        # only when google-cloud-pubsub is installed in the typecheck
+        # environment — which it is, transitively via the `test` group (same as
+        # actions/write_intents.py, which carries the full reasoning). If that
+        # edge goes away this line wants its `# type: ignore[attr-defined]` back.
+        from google.cloud import pubsub_v1
 
         self._client = pubsub_v1.SubscriberClient()
         self._path = self._client.subscription_path(project, subscription)

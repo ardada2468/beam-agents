@@ -1,5 +1,14 @@
 # Local integration stack
 
+> **Not the Dataflow image.** `sdk-harness.Dockerfile` here is the *local*
+> Beam-on-Flink worker image, built by compose and used only by the tests in
+> this repo. The image a Dataflow deployment runs is
+> [`examples/fraud_triage_dataflow/Dockerfile`](../examples/fraud_triage_dataflow/Dockerfile)
+> — the fraud-triage Flex Template, built from Google's launcher base and
+> published to Artifact Registry by the nightly `dataflow` job. The two share
+> the protobuf-pinning and bake-the-code-in discipline documented below and
+> nothing else; neither is derived from the other.
+
 `compose.yaml` brings up Redpanda (Kafka-compatible), Redis, and a Flink
 job/task manager pair for integration and semantics tests. Every image is
 pinned by digest so the stack behaves identically across machines and CI

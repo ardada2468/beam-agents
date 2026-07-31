@@ -1,0 +1,73 @@
+{
+  "name": "beam-agents fraud triage",
+  "description": "Runs the beam-agents fraud-triage agent as a streaming Dataflow job: keyed transaction events in, a human-approval suspension flow through the intents outbox, and terminal freeze/release decisions out. Provider API keys are supplied by Secret Manager resource name and are never launch parameters.",
+  "parameters": [
+    {
+      "name": "input_topic",
+      "label": "Transaction events topic",
+      "helpText": "Pub/Sub topic carrying AgentEnvelope-encoded transaction events, in the sink resolver's URI grammar: pubsub://<project>/<topic>.",
+      "paramType": "TEXT",
+      "regexes": ["^pubsub://[^/]+/[^/]+$"]
+    },
+    {
+      "name": "approvals_topic",
+      "label": "Approvals topic",
+      "helpText": "Pub/Sub topic the effector publishes human decisions back onto, keyed by the same entity key the suspension committed under. Format: pubsub://<project>/<topic>.",
+      "paramType": "TEXT",
+      "regexes": ["^pubsub://[^/]+/[^/]+$"]
+    },
+    {
+      "name": "output_topic",
+      "label": "Decisions topic",
+      "helpText": "Pub/Sub topic terminal triage decisions are written to (freeze/release/cleared, and the fail-closed timeout output). Format: pubsub://<project>/<topic>.",
+      "paramType": "TEXT",
+      "regexes": ["^pubsub://[^/]+/[^/]+$"]
+    },
+    {
+      "name": "intents_topic",
+      "label": "Intents outbox topic",
+      "helpText": "Pub/Sub topic the approval intents are written to for the effector to consume. Becomes AgentConfig.intents_to, so the keyed outbox writer handles ordering and dead-lettering. Format: pubsub://<project>/<topic>.",
+      "paramType": "TEXT",
+      "regexes": ["^pubsub://[^/]+/[^/]+$"]
+    },
+    {
+      "name": "model",
+      "label": "Provider reference",
+      "helpText": "The LLM provider, named in the YAML provider's module:object grammar (docs/yaml.md) — for example beam_agents.model.anthropic:AnthropicProvider, or examples.fraud_triage:make_provider for the scripted FakeLLM used by validation runs. A provider that requires an API key also requires model_api_key_secret.",
+      "paramType": "TEXT",
+      "regexes": ["^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"]
+    },
+    {
+      "name": "hitl_timeout_ms",
+      "label": "Human approval deadline (ms)",
+      "helpText": "How long an activation waits for a human decision before failing closed. Maps to HitlPolicy.timeout_ms and to the deadline the suspension itself carries. Defaults to the runtime default (86400000 ms) when omitted.",
+      "paramType": "TEXT",
+      "isOptional": true,
+      "regexes": ["^[1-9][0-9]*$"]
+    },
+    {
+      "name": "errors_to",
+      "label": "Errors sink URI",
+      "helpText": "Optional sink for the errors stream, in the sink resolver's grammar: kafka://<servers>/<topic>, pubsub://<project>/<topic>, or bigquery://<project>/<dataset>/<table>. Unset leaves the stream unconsumed.",
+      "paramType": "TEXT",
+      "isOptional": true,
+      "regexes": ["^(kafka|pubsub|bigquery)://[^/]+/[^/]+(/[^/]+)?$"]
+    },
+    {
+      "name": "traces_to",
+      "label": "Traces sink URI",
+      "helpText": "Optional sink for the traces stream. Same grammar as errors_to, plus otlp://<host>[:<port>] for an OTLP/HTTP collector. Unset leaves the stream unconsumed.",
+      "paramType": "TEXT",
+      "isOptional": true,
+      "regexes": ["^((kafka|pubsub|bigquery)://[^/]+/[^/]+(/[^/]+)?|otlp://[^/?]+(\\?.*)?)$"]
+    },
+    {
+      "name": "model_api_key_secret",
+      "label": "Provider API key secret version",
+      "helpText": "Secret Manager resource name of the version holding the provider's API key: projects/<project>/secrets/<secret>/versions/<version>. The value is read on the worker at provider construction using the job service account's credentials; it never appears in launch parameters, job metadata, or logs. Required when model names a provider that takes an api_key; omit it for the FakeLLM path.",
+      "paramType": "TEXT",
+      "isOptional": true,
+      "regexes": ["^projects/[^/]+/secrets/[^/]+/versions/[^/]+$"]
+    }
+  ]
+}
