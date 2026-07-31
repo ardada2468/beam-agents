@@ -37,6 +37,7 @@ import {
 import { DEFAULT_WINDOW_MS, api, queryKeys } from '@/lib/api';
 import type { ErrorGroup, ErrorRecord } from '@/lib/api-types';
 import { formatCount, formatRelative, formatTimestamp, humanizeReason } from '@/lib/format';
+import { useWindowAnchor } from '@/lib/window-anchor';
 
 import { GroupPanel } from './GroupPanel';
 import { Occurrences, recordKey } from './Occurrences';
@@ -78,10 +79,11 @@ type SortKey = 'count' | 'entities' | 'last_seen';
 export default function Page() {
   const [params, setParams] = useSearchParams();
   const [windowValue, setWindowValue] = useState(DEFAULT_WINDOW);
-  // The window's `since_ms` is anchored when the window is chosen rather than
-  // recomputed every render: a `since_ms` that moved with the clock would change
-  // the query key on every tick and refetch forever.
-  const [anchorMs, setAnchorMs] = useState(() => Date.now());
+  // Anchored on the newest stored record rather than on the clock — see
+  // `useWindowAnchor`. Read once per mount, so the property the frozen
+  // `Date.now()` here was protecting (a `since_ms` that does not move under the
+  // page and refetch forever) still holds.
+  const anchorMs = useWindowAnchor();
   const [sortKey, setSortKey] = useState<SortKey>('count');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [selectedRecordKey, setSelectedRecordKey] = useState<string | null>(null);
@@ -287,7 +289,6 @@ export default function Page() {
             options={WINDOWS.map((entry) => ({ value: entry.value, label: entry.label }))}
             onChange={(event) => {
               setWindowValue(event.target.value);
-              setAnchorMs(Date.now());
               setSelectedRecordKey(null);
             }}
           />

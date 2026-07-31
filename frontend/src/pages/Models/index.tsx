@@ -35,6 +35,7 @@ import {
 import { ApiError, DEFAULT_WINDOW_MS, api, queryKeys } from '@/lib/api';
 import type { ModelSummary } from '@/lib/api-types';
 import { EM_DASH, formatCompact, formatCount, formatRatio } from '@/lib/format';
+import { useWindowAnchor } from '@/lib/window-anchor';
 
 /** Lookback options. `0` means "everything the store still holds". */
 const WINDOWS = [
@@ -281,13 +282,14 @@ const DERIVATION = [
 export default function Page() {
   const [windowValue, setWindowValue] = useState(String(DEFAULT_WINDOW_MS));
 
-  // Anchored to the window choice rather than recomputed each render: a
-  // `Date.now()` in the query key would change on every render and refetch
-  // forever.
+  // Anchored on the newest stored record rather than on the clock — see
+  // `useWindowAnchor`. Still one read per mount, so the query key does not move
+  // under the page and refetch forever.
+  const anchorMs = useWindowAnchor();
   const sinceMs = useMemo(() => {
     const span = Number(windowValue);
-    return span > 0 ? Date.now() - span : undefined;
-  }, [windowValue]);
+    return span > 0 ? anchorMs - span : undefined;
+  }, [windowValue, anchorMs]);
 
   const models = useQuery({
     queryKey: queryKeys.models(sinceMs),

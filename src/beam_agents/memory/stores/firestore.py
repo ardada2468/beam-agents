@@ -99,6 +99,11 @@ class FirestoreMemoryStore(MemoryStore):
 
         # AsyncClient.close is a coroutine in current client versions; the
         # awaitable check keeps this correct across the sync/async variants.
-        result = self._client.close()
+        #
+        # The ignore covers the client's own missing annotation, not this call
+        # site: the Firestore client ships no signature for `close`, so strict
+        # mode refuses to call it at all. The awaitable check below is precisely
+        # the handling that unannotated return would have demanded anyway.
+        result = self._client.close()  # type: ignore[no-untyped-call]
         if inspect.isawaitable(result):
             await result
