@@ -66,8 +66,14 @@ test-conformance-flink: ## Run the adapter conformance matrix's Flink leg (requi
 test-semantics-offline: ## Run offline (no-docker) semantics gates; required in ci
 	uv run pytest -m "semantics and not integration"
 
+# No exit-5 tolerance, same stance as test-semantics/test-conformance-flink
+# above: the `--update` compatibility gate (tests/dataflow/test_update_compat.py)
+# is release-blocking, so an empty `dataflow` collection means it was
+# deselected — renamed module, dropped marker — not that the tier is still
+# pending. Without GCP configuration the gate *skips* (a collected, reported
+# skip; exit 0), which is visible in the report; a deselection is not.
 test-dataflow: ## Run dataflow-marked tests (nightly only, requires real GCP)
-	uv run pytest -m dataflow; test $$? -eq 0 -o $$? -eq 5
+	uv run pytest -m dataflow
 
 test-smoke: ## Run smoke-marked tests against live providers (nightly only, requires credentials)
 	uv run pytest -m smoke; test $$? -eq 0 -o $$? -eq 5

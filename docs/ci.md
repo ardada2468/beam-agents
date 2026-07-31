@@ -10,7 +10,7 @@ plus the docs build:
 | `integration.yml` → `integration` job | push to `main`, pull request | integration minus semantics gates (core services only: Redpanda, Redis, GCP emulators via `make compose-up-core`) | yes |
 | `integration.yml` → `flink-minicluster` job | push to `main`, pull request | docker-backed semantics gates on the Flink mini-cluster (`make test-semantics` + `make test-conformance-flink`, full compose stack) | yes (add to required contexts at merge) |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
-| `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation and the [benchmark suite](benchmarks.md) unconditionally; dataflow and provider smoke tests when credentials exist | no |
+| `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation and the [benchmark suite](benchmarks.md) unconditionally; the [Dataflow `--update` compatibility gate](#the-dataflow-update-compatibility-gate) and provider smoke tests when credentials exist | no (release-blocking) |
 | `docs.yml`          | push to `main`, pull request      | docs (strict `mkdocs` build; Pages deploy from `main`) | no (see the docs-workflow note) |
 
 The two `integration.yml` jobs run in parallel and re-run independently: a
@@ -45,7 +45,62 @@ From the Actions tab, select the `nightly` workflow and use
 **Run workflow**. It no-ops (via the `skip-notice` job) until the repository
 variables `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and
 `GCP_SERVICE_ACCOUNT` are configured — no long-lived service-account key is
-ever used.
+ever used. The `--update` gate needs two more, `GCP_REGION` and
+`GCP_DATAFLOW_TEMP_BUCKET`; without either it skips visibly rather than being
+deselected, so a partially configured project produces a reported skip, not a
+silent pass.
+
+## The Dataflow `--update` compatibility gate
+
+`tests/dataflow/test_update_compat.py` is the only `dataflow`-marked test and
+the executable half of [`docs/state-compat.md`](state-compat.md). It launches a
+streaming job at the **previous released version** of `beam-agents` (installed
+from PyPI into its own venv), drives it to hold live keyed state — a key
+suspended mid-activation with a persisted `Continuation` and a pending
+`APPROVAL` intent, plus a key with populated working memory — then replaces the
+job in place with `--update` at current head (a wheel built from the checkout),
+and asserts from the output topic that the suspension resumes with its
+pre-update snapshot, the memory key echoes its pre-update marker, and a fresh
+key completes. Both job graphs come from one launcher module
+(`tests/dataflow/_update/pipeline.py`) run by two interpreters.
+
+It is **release-blocking, not merge-blocking**: cutting a release requires the
+most recent nightly `dataflow` run to be green (see the release procedure in
+[`docs/state-compat.md`](state-compat.md#release-procedure)). Cost is bounded to
+one Streaming Engine worker per job inside a 35-minute test budget, teardown
+force-cancels both jobs and deletes every provisioned resource on pass, fail
+and timeout alike, and a sweeper cancels labelled jobs
+(`beam-agents-test=update-compat`) a crashed run left behind. `make
+test-dataflow` deliberately does **not** tolerate an empty selection: an empty
+`dataflow` collection means the gate was deselected, not that the tier is
+pending.
+
+### Triaging a red `--update` night
+
+Every failure is classified before it is reported, and the class is the first
+thing to read:
+
+- **`UpdateCompatibilityFailure`** — Dataflow refused the replacement graph
+  (the new job fails while the old one keeps running, or the service names a
+  coder/step mismatch). This is the defect the gate exists to catch: something
+  in the release broke state or graph compatibility. Consult the compatibility
+  table in [`docs/state-compat.md`](state-compat.md) to find which change class
+  it was; do not retry.
+- **`StateLossFailure`** — the update took effect but the state did not survive:
+  the suspension restarted instead of resuming, the memory echo came back
+  `MEMORY-LOST`, or the fresh key never completed. Equally red, equally
+  non-retryable.
+- **`InfraFailure`** — quota, worker-pool startup, PyPI, or credentials. The
+  run says nothing about compatibility; fix the environment and rerun.
+
+Both resolved version strings, both job ids and the service's stated reason are
+embedded in every failure message, and the run's banner (printed first, and
+repeated in every failure) names the mode. A banner reading
+`[SELF-UPDATE (BOOTSTRAP)]` means no release existed on PyPI to update *from*,
+so the run compared head with itself — real evidence about the harness and
+about graph-name stability, but **not** cross-version evidence. Resource names
+and the job name all embed the run id (`ba-update-compat-<date>-<suffix>`),
+which is how you find the run's jobs and topics in the console.
 
 ## Making checks required
 
