@@ -81,3 +81,14 @@ Two of D2's rationales were also stale and are corrected in the doc rather than 
 Design D5 enumerates three evidence items (benchmark report, conformance matrix, design partners) plus the final consistency pass. Drafting §12 surfaced a fourth precondition that D5 does not name and that would otherwise be discovered too late: `benchmark-baseline.toml`'s `[medians_ms]` table is **deliberately unseeded**, and `docs/benchmarks.md` forbids seeding it from developer hardware ("the gate runs on CI hardware; a laptop-derived number either blocks every nightly or is so loose it catches nothing"). So there is at present no CI-measured figure of any kind for this runtime, and the benchmark report of D5's first box cannot be produced before the baseline exists.
 
 Adding it as its own checklist box makes the ordering explicit — seed the baseline on CI hardware, *then* produce the comparison report, *then* quote figures — instead of leaving a reader of the checklist to assume a green benchmark run implies quotable numbers. This strengthens D5's consistency guard rather than relaxing it, so no design edit is required; recorded here so the extra box is not mistaken for scope creep.
+
+## 8. Revision: disposition the module add-effector-security introduced (integration)
+
+- [x] 8.1 `test_decision_record_dispositions_every_top_level_module` discovers modules from disk, so
+  `add-effector-security` landing `src/beam_agents/intent_signing.py` in the same merge window
+  failed this change's own gate — the test working exactly as designed, catching a decision record
+  that had fallen behind the tree. Added its row: signing **moves with the contract**, because it is
+  the authenticity half of the intent/result protobuf contract the `effector/` row proposes Beam
+  standardize; upstreaming the wire fields without the reference sign/verify routines would
+  standardize a format nobody could interoperate on. Key distribution stays out of scope. Verified:
+  `pytest tests/docs` 11 passed.
