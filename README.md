@@ -41,7 +41,23 @@ make mutation           # mutmut against core/ (quality gate)
 ```
 
 `pytest` markers are a closed registry (`integration`, `semantics`,
-`dataflow`, `slow`) — see [`pyproject.toml`](pyproject.toml).
+`dataflow`, `smoke`, `slow`, `spark`) — see [`pyproject.toml`](pyproject.toml).
+
+### Runner verification
+
+The runtime targets DirectRunner, Dataflow, and Flink; **Spark is
+best-effort**. Best-effort is verified, not assumed: the adapter conformance
+matrix has a third `spark` leg that runs against a Beam Spark job server in
+the weekly `spark-weekly` workflow — never on a pull request, and never as a
+required check. Promotion of Spark to supported requires four consecutive
+green scheduled weekly runs with no conformance skip added in that window; the
+process, including the demotion path, is in [`docs/ci.md`](docs/ci.md).
+
+```sh
+make compose-up-spark          # base stack + the Spark job-server overlay
+make test-conformance-spark    # the weekly spark leg, locally
+make compose-down-spark
+```
 
 ## Other useful targets
 

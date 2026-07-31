@@ -631,6 +631,7 @@ markers = [
   "dataflow: nightly-only tests against real Dataflow",
   "smoke: nightly-only real-provider smoke tests against live endpoints",
   "slow: tests that take longer than 5 seconds",
+  "spark: the weekly (never per-PR) Spark job-server leg; requires docker/compose.spark.yaml",
   "conformance_cell(adapter, scenario, leg): one adapter-conformance matrix cell (counted by the meta-test)",
 ]
 
