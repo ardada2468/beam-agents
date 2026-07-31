@@ -1,26 +1,170 @@
 ---
 title: Approvals and timeout fallback
-summary: A runnable pipeline where one key's approval arrives and another's never does.
+summary: A runnable streaming pipeline where one key's approval arrives, another key's never does, and the timeout policy decides what silence means.
 status: stable
 order: 3
 verifies:
-  - example: human_in_the_loop.py
+  - symbol: beam_agents.HitlPolicy
+  - symbol: beam_agents.Deny
+  - symbol: beam_agents.FallbackContext
+  - module: src/beam_agents/hitl.py
+  - module: src/beam_agents/core/dofn.py
   - spec: openspec/specs/wire-schemas/spec.md
   - test: tests/docs/test_website_examples.py
   - test: tests/semantics/test_hitl_fail_closed.py
+  - test: tests/core/test_dofn_hitl_timer.py
+  - test: tests/test_hitl.py
+  - example: human_in_the_loop.py
 ---
 
-Two keys take two paths: one approval arrives, the other never does. The silent key's
-HITL timer fires and the policy routes it to a deterministic denial.
+Asking a person is easy. Deciding what happens when nobody answers is the part that has
+to be designed, and it is the part this example is about.
 
-Processing time is advanced by the test stream rather than by sleeping, so both clocks
-are scripted and the outcome is deterministic — the same technique the repository's own
-timer tests use.
+Two keys request the same approval. One gets an answer at 1.2 seconds. The other is
+never answered at all, its timer fires, and the policy converts the silence into a
+deterministic denial. Both outcomes are asserted in one bounded run.
 
-Run it:
+## Two keys, two outcomes
+
+- **`acct-answered`** — an `Approval` matching the staged intent id arrives. The
+  activation resumes and emits `b"approved"`.
+- **`acct-silent`** — nothing arrives. The `HITL_TIMER` fires, the policy returns `Deny`,
+  and the denial bytes are emitted instead.
+
+The second case is the interesting one. An approval that never arrives cannot be allowed
+to leave a key suspended forever, and it cannot be allowed to take effect later either.
+
+## Asking: request_approval, then Suspend
+
+<Example file="human_in_the_loop.py" region="agent" />
+
+The agent is invoked twice for one logical unit of work, and `ctx.is_resume` is how it
+tells the two invocations apart.
+
+`ctx.request_approval` stages an approval intent and returns its deterministic id.
+`Suspend` persists a continuation in keyed state and arms the real-time deadline;
+`timeout_ms` overrides `HitlPolicy.timeout_ms` for this suspension. When the first
+invocation returns, nothing has reached the outside world — the intent is a request, and
+the activation is simply over. The worker moves on to other keys.
+
+On resume, `ctx.resume_approval` carries the answer. The snapshot the agent persisted
+comes back as `ctx.snapshot`, which is where a real agent would keep whatever it needs
+to finish the job.
+
+## Deciding what silence means
+
+<Example file="human_in_the_loop.py" region="policy" />
+
+`on_timeout` returns one of three routes:
+
+- **`Deny(output=...)`** — emit deterministic bytes on `.output` and end the suspension.
+  This example's choice.
+- **`Drop(reason=...)`** — emit nothing, and record the timeout on `.errors` as
+  `hitl_timeout`.
+- **`Escalate(tool_name=..., timeout_ms=...)`** — stage a fresh approval on another
+  channel and extend the deadline, bounded by `HitlPolicy.max_escalations` (default
+  `0`). An unbounded escalate loop would be a fail-*open* hole; the whole point of the
+  timer is that the wait ends.
+
+**The function must be pure, synchronous, and picklable.** That is a correctness
+requirement rather than a style rule. It runs inside a timer callback, and a timer
+callback re-executes when its bundle is retried — a policy that read a clock, called the
+model, or drew unseeded randomness would reach a different decision the second time and
+the retry would diverge from the original.
+
+So everything the policy could need is handed to it on the `FallbackContext`: the
+suspended `seq`, the persisted snapshot, the `deadline_ms` that elapsed, the timer's
+`fired_at_ms`, and the `pending_intent_ids` nothing ever answered. Note what the example
+does with `fallback.seq` — the denial bytes are derived from the context, so the output
+is a function of the suspension rather than of when the timer happened to fire.
+
+Picklable means a module-level function, never a lambda or a closure: the `DoFn` holds
+the policy and serializes it for the runner.
+
+## Attaching the policy
+
+<Example file="human_in_the_loop.py" region="policy-config" />
+
+`HitlPolicy` validates itself on construction, so a non-positive `timeout_ms` or an
+empty `approval_channel` raises at this line rather than on a worker.
+
+## Shaping an approval
+
+<Example file="human_in_the_loop.py" region="approval" />
+
+An approval re-enters the pipeline as an ordinary `AgentEnvelope` on the same key as the
+event that asked for it. It is not a callback and not a side channel — the architecture
+diagram in [architecture](/learn/architecture) shows the approvals topic flattened in
+alongside the events topic, and the runner cannot tell the two apart.
+
+Two fields do the routing. The **envelope's** `entity_key` selects the key, and
+therefore the suspended continuation. The **approval's** `intent_id` selects which
+pending intent on that key is being answered. The `Approval` message carries no
+`entity_key` of its own, which is why the example sets it on the envelope.
+
+The id the test uses is computed before the pipeline runs:
+
+<Example file="human_in_the_loop.py" region="intent-id" />
+
+Because the id is `uuid5` over exactly those coordinates it can be named in advance —
+the same property [intents and resume](/examples/intents-and-resume) leans on, and the
+basis of the effectively-once argument.
+
+## Scripting both clocks
+
+<Example file="human_in_the_loop.py" region="stream" />
+
+The suspension timeout lives in **processing time**, so this pipeline needs a processing
+clock to move. `TestStream.advance_processing_time` moves it, deliberately, by a scripted
+amount — the example never sleeps.
+
+That matters for more than speed. A `sleep` would make the test's outcome depend on how
+loaded the machine is, which is the definition of a flaky gate. Advancing both the
+watermark and the processing clock by hand makes the timer fire at a point the test
+chose, so the assertion below is the only result the pipeline can produce. It is the
+same technique the repository's own timer tests use.
+
+## The assertion
+
+<Example file="human_in_the_loop.py" region="wiring" />
+
+`ttl_ms` is set very high on purpose: working-memory TTL collection would otherwise be
+free to wipe the suspended continuation during a long scripted run, and the example is
+not trying to demonstrate that.
+
+## Failing closed at both layers
+
+The timer above is layer 1, inside the pipeline. There is a second, independent guard
+outside it: the effector refuses any intent whose `expires_at_ms` has passed, treating a
+non-positive expiry as *expired* rather than as unbounded.
+
+Both layers are needed. Layer 1 alone would end the wait but still leave a late approval
+able to cause an effect afterwards; layer 2 alone would leave the key suspended forever.
+Together they mean the runtime's decision to give up is final. Results and approvals
+that arrive with no live continuation are dropped to `.errors` as `orphaned_result`,
+with a detail naming why.
+
+This is [correctness invariant 6](/learn/correctness-invariants), and
+`tests/semantics/test_hitl_fail_closed.py` is the gate that holds it.
+
+## Run it
 
 ```sh
 uv run python website/examples/human_in_the_loop.py
 ```
 
+## The complete program
+
 <Example file="human_in_the_loop.py" />
+
+## Related
+
+- [Human in the loop](/docs/human-in-the-loop) — the operational reference: channels,
+  the route table, escalation bounds, and the orphan details.
+- [Intents and resume](/examples/intents-and-resume) — the same suspend/resume
+  machinery, driven by an effector result instead of a person.
+- [The effector](/docs/effector) — layer 2 of the fail-closed rule.
+- [The errors output](/docs/errors) — where `hitl_timeout` and `orphaned_result` land.
+- [`HitlPolicy`](/api/HitlPolicy), [`Deny`](/api/Deny), [`Drop`](/api/Drop),
+  [`Escalate`](/api/Escalate), and [`FallbackContext`](/api/FallbackContext) in the API
+  reference.

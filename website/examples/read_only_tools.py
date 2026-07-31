@@ -104,6 +104,11 @@ def main() -> None:
             | "Key"
             >> beam.WithKeys(lambda e: e.entity_key).with_output_types(tuple[bytes, AgentEnvelope])
         )
+        # region: wiring
+        # The registry carries only the read-only tool, because the registry is
+        # what `ctx.run_tool` resolves against. `ctx.act` stages an intent by
+        # name for the effector to route, so the side-effecting tool never
+        # needs to be resolvable inside the pipeline at all.
         outputs = keyed | "Agent" >> RunAgent(
             assess,
             config=AgentConfig(provider_factory=make_provider, tool_registry=make_registry()),
@@ -111,8 +116,11 @@ def main() -> None:
 
         assert_that(outputs.output, equal_to([b"freeze-requested", b"cleared"]), label="output")
 
+        # Exactly one intent, from the one key whose band came back "high".
+        # The cleared key executed a tool inline and staged nothing.
         names = outputs.intents | "Names" >> beam.Map(lambda intent: intent.tool_name)
         assert_that(names, equal_to(["freeze_account"]), label="intents")
+        # endregion: wiring
 
     print("read_only_tools: ok")
 

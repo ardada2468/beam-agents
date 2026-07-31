@@ -91,10 +91,12 @@ def build_pipeline(pipeline: beam.Pipeline) -> beam.pvalue.PCollection:
 def main() -> None:
     with beam.Pipeline() as pipeline:
         results = build_pipeline(pipeline)
+        # region: assertion
         # Per-key serialization means acct-1's two events are ordered relative
         # to each other; the ring is 1 then 2 deep. acct-2 is a separate key
         # with its own memory, so it starts at 1.
         assert_that(results, equal_to([b"escalate:1", b"escalate:2", b"escalate:1"]))
+        # endregion: assertion
     print("fast_path: ok")
 
 

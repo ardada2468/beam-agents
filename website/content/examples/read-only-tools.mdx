@@ -1,26 +1,147 @@
 ---
 title: Read-only tools and side effects
-summary: Inline execution for reads, staged intents for writes, and the guard that enforces the split.
+summary: Inline execution for reads, staged intents for writes, and a program that asserts on the guard refusing a direct side-effecting call.
 status: stable
 order: 5
 verifies:
-  - example: read_only_tools.py
-  - spec: openspec/specs/wire-schemas/spec.md
+  - symbol: beam_agents.AgentConfig
+  - module: src/beam_agents/tools/registry.py
+  - module: src/beam_agents/tools/runner.py
+  - module: src/beam_agents/tools/errors.py
+  - spec: openspec/specs/tool-registry/spec.md
   - test: tests/docs/test_website_examples.py
   - test: tests/tools/test_side_effect_guard.py
+  - test: tests/tools/test_runner.py
+  - test: tests/tools/test_registry.py
+  - example: read_only_tools.py
 ---
 
-Tools split in two by their `side_effect` flag, and the split is enforced rather than
-advised: a read-only tool runs inline via `ctx.run_tool`, and a `side_effect=True` tool
-raises if called directly.
+Every tool an agent can reach is on one side of a single line: does calling it change
+anything outside this pipeline?
 
-The example asserts on the refusal itself, so the guarantee is demonstrated rather than
-asserted in prose.
+A read-only tool — a lookup, a cache probe, an enrichment read — executes inline, right
+there in the activation, because re-running it on a bundle retry is harmless. A
+side-effecting tool does not execute in the pipeline at all. It is requested as an
+intent and performed by the effector, which deduplicates on the intent id.
 
-Run it:
+The split is **enforced, not advised**: calling a `side_effect=True` tool directly
+raises. This example shows both halves, and asserts on the refusal so the guarantee is
+demonstrated rather than claimed.
+
+## Two kinds of tool
+
+<Example file="read_only_tools.py" region="tools" />
+
+`@tool` derives the tool's provider-facing JSON schema from the Python signature via a
+generated Pydantic model, so the argument contract and the implementation cannot drift.
+`side_effect=True` is the entire declaration of the second kind — there is no separate
+registration path, no wrapper, and no configuration flag to forget.
+
+Two structural choices in that snippet are worth copying.
+
+**The tools are module-level.** They pickle by reference into the `DoFn`, exactly like
+the agent function itself.
+
+**The registry is built per call, not kept as a module global.** The project's
+convention is no global mutable state, and a registry is mutable. `make_registry()`
+returns a fresh one each time it is invoked, which also means a test can build a
+different registry without unpicking a global.
+
+Note what the registry contains: only `risk_band`. The registry is what `ctx.run_tool`
+resolves against, and — as the wiring section below shows — a side-effecting tool never
+needs to be resolvable inside the pipeline.
+
+## Using both in one activation
+
+<Example file="read_only_tools.py" region="agent" />
+
+`ctx.run_tool` validates the arguments against the tool's schema, executes it inline, and
+returns the value. It is traced as a `TOOL_CALL` child event, but it deliberately does
+**not** advance the step cursor: the cursor mints intent ids and orders replay-cache
+entries, and an inline read must not perturb either.
+
+`ctx.act` does the opposite. Nothing executes; a `ToolIntent` is staged with a
+deterministic id and leaves on `.intents` when the activation commits. The agent has
+requested a freeze, not performed one, and it can complete without waiting.
+
+This agent completes immediately after `ctx.act` rather than suspending, which is a
+legitimate choice: it does not need the effector's answer to decide what to emit. When
+the agent *does* need the result, it returns `Suspend` instead —
+[intents and resume](/examples/intents-and-resume).
+
+## The refusal is asserted, not described
+
+<Example file="read_only_tools.py" region="refusal" />
+
+The `else` branch is the one doing the work. If `freeze_account` ever executed on a
+direct call, the `except` would not run, the `else` would fire, and the example would
+fail — so the guarantee is checked by the same offline test tier that runs every other
+example, on every change.
+
+`SideEffectToolError` names the offending tool and points at `ctx.act(...)`, the path
+that does work. The program prints the message it caught, so the refusal is visible in
+the run output rather than only in a traceback.
+
+The guard is enforced in two places, because there are two ways to reach a tool.
+`Tool.__call__` refuses a direct call — that is the branch above. `ToolRunner.run`
+refuses again before validating arguments, which covers `ctx.run_tool`. Either way the
+tool is not counted as an execution and not traced as one, so a refusal cannot
+masquerade as work that happened.
+
+There is exactly one sanctioned bypass, `Tool.unwrap()`, and it exists for the
+effector's own runner: side-effecting tools have to execute *somewhere*, and that
+somewhere is outside the pipeline. Keeping it a named, documented accessor rather than a
+private-attribute poke is deliberate — the one permitted exception to
+[invariant 5](/learn/correctness-invariants) should be greppable. Nothing inside the
+pipeline may call it.
+
+## Wiring the registry
+
+<Example file="read_only_tools.py" region="wiring" />
+
+`AgentConfig.tool_registry` defaults to an **empty** registry. An unconfigured pipeline
+therefore refuses every inline call by name rather than executing something that
+happened to be importable — the safe default, and the one that fails loudly.
+
+## Why the line is drawn here
+
+The reason is retries, not taste.
+
+A Beam bundle can be retried, and a retried activation walks the same code again. A
+read-only tool re-executing is invisible: the lookup returns the same answer and nothing
+outside the pipeline notices. A side-effecting tool re-executing is a duplicate refund,
+a second page to the on-call engineer, a frozen account frozen twice.
+
+`ctx.act` is the only effect path because the intent id
+`uuid5(namespace, key|seq|step_index)` is a pure function of the activation's position.
+A replayed bundle that walks the same path mints byte-identical intents, and the effector
+suppresses duplicates by looking the id up. That is the whole effectively-once argument,
+and it only holds if nothing can slip around it — which is precisely why the direct call
+raises instead of working.
+
+There is one documented exception: idempotent upserts to the long-term `MemoryStore`,
+keyed by `(key, seq)`.
+
+## Run it
 
 ```sh
 uv run python website/examples/read_only_tools.py
 ```
 
+The program prints the refusal message before running the pipeline, so a successful run
+shows both halves of the split.
+
+## The complete program
+
 <Example file="read_only_tools.py" />
+
+## Related
+
+- [Tool registry](/specs/tool-registry) — the capability specification behind `@tool`,
+  the schema derivation, and the guard.
+- [Correctness invariants](/learn/correctness-invariants) — invariant 5, side effects
+  only via intents.
+- [Intents and resume](/examples/intents-and-resume) — what happens after an intent
+  leaves, and how the result comes back.
+- [The effector](/docs/effector) — the service that executes intents, and the honest
+  bound on its guarantees.

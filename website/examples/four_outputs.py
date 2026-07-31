@@ -105,6 +105,7 @@ def main() -> None:
         assert_that(errors, equal_to([(b"k-broken", "activation_error", 1_000)]), label="errors")
         # endregion: outputs
 
+        # region: traces
         # Traces show the atomic-commit rule from the outside. A committed
         # activation emits its whole span set — START, whatever happened in the
         # middle, END. The failed one emits a single ERROR event: the traces it
@@ -128,6 +129,7 @@ def main() -> None:
             ),
             label="traces",
         )
+        # endregion: traces
 
     print("four_outputs: ok")
 

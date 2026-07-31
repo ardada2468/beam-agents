@@ -82,6 +82,7 @@ def _event(key: bytes, payload: bytes, t_ms: int) -> TimestampedValue[AgentEnvel
     return TimestampedValue(env, t_ms / 1000)
 
 
+# region: approval
 def _approval(
     key: bytes, intent_id: str, *, approved: bool, t_ms: int
 ) -> TimestampedValue[AgentEnvelope]:
@@ -94,10 +95,19 @@ def _approval(
     return TimestampedValue(env, t_ms / 1000)
 
 
-def main() -> None:
-    # Two keys: one gets an answer, one never does.
-    answered = intent_id_for(b"acct-answered", 0, 0)
+# endregion: approval
 
+
+def main() -> None:
+    # region: intent-id
+    # Two keys: one gets an answer, one never does. The answered key's approval
+    # can be addressed before the pipeline exists, because the intent id is a
+    # pure function of (key, seq, step_index): first activation of the key is
+    # seq 0, and the approval it stages is step 0.
+    answered = intent_id_for(b"acct-answered", 0, 0)
+    # endregion: intent-id
+
+    # region: stream
     stream = (
         TestStream()
         .advance_watermark_to(0)
@@ -110,16 +120,24 @@ def main() -> None:
         .advance_processing_time(60)
         .advance_watermark_to_infinity()
     )
+    # endregion: stream
 
     options = PipelineOptions()
     options.view_as(StandardOptions).streaming = True
 
+    # region: policy-config
+    # `approval_channel` names where the effector routes the request — a queue,
+    # a pager — not a registered tool, so nothing is resolved or executed for
+    # it in-pipeline. `intent_ttl_ms` is the default expiry stamped onto staged
+    # intents, and it is layer 2 of the fail-closed rule: past `expires_at_ms`
+    # the effector refuses the intent rather than acting on it.
     policy = HitlPolicy(
         timeout_ms=SUSPENSION_TIMEOUT_MS,
         intent_ttl_ms=APPROVAL_TTL_MS,
         approval_channel="approval",
         on_timeout=deny_on_timeout,
     )
+    # endregion: policy-config
 
     with beam.Pipeline(options=options) as pipeline:
         keyed = (
@@ -128,6 +146,7 @@ def main() -> None:
             | "Key"
             >> beam.WithKeys(lambda e: e.entity_key).with_output_types(tuple[bytes, AgentEnvelope])
         )
+        # region: wiring
         outputs = keyed | "Agent" >> RunAgent(
             large_transfer,
             config=AgentConfig(
@@ -137,11 +156,15 @@ def main() -> None:
             ),
         )
 
+        # One assertion covers both keys: the answered one resumes and
+        # completes, the silent one is routed by the policy. Neither outcome is
+        # a timing accident — both are the only value the pipeline can produce.
         assert_that(
             outputs.output,
             equal_to([b"approved", b"denied:no-approval:0"]),
             label="approved-and-denied",
         )
+        # endregion: wiring
 
     print("human_in_the_loop: ok")
 
