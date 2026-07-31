@@ -210,7 +210,17 @@ console-build: ## Build the console image (UI bundle included)
 # current `src/beam_agents` AND the current `frontend/`, so a stale image shows
 # yesterday's console. Both are cheap to rebuild — the Dockerfile's layer order
 # keeps a source-only change off the dependency-install layers.
-CONSOLE_UP_FLAGS ?= --wait --build
+#
+# No `--wait`, deliberately, and it is not needed. `console-demo` disables the
+# healthcheck it would otherwise inherit from the shared image (it is a
+# producer, and the inherited probe would fail forever) — but compose refuses to
+# wait on a service with no healthcheck and fails the whole command with
+# "container ... has no healthcheck configured", so `--wait` here exits 1 on a
+# stack that came up perfectly. The guarantee `--wait` was carrying is already
+# in `compose.console.yaml`: `console-demo` declares
+# `depends_on: console: condition: service_healthy`, so `up -d` blocks until the
+# console reports healthy before it starts the demo, and returns 0.
+CONSOLE_UP_FLAGS ?= --build
 console-up: ## Start the console at http://localhost:8787 with the demo pipeline
 	$(COMPOSE_CONSOLE) up -d $(CONSOLE_UP_FLAGS)
 
