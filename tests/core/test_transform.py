@@ -45,6 +45,8 @@ from beam_agents.core.transform import (
     _WriteTraces,
 )
 from beam_agents.hitl import HitlPolicy
+from beam_agents.memory import DropOldestCompactor, FlushToLongterm
+from beam_agents.memory.facade import HARD_CAP_BYTES
 from beam_agents.observability import trace_event_to_row, trace_id_for
 from beam_agents.observability.exporters import TRACE_TABLE_SCHEMA
 from beam_agents.observability.otlp import WriteTracesToOtlp
@@ -221,6 +223,56 @@ def test_config_carries_an_empty_default_tool_registry_or_the_supplied_one() -> 
     registry = ToolRegistry()
     config = AgentConfig(provider_factory=make_pong_provider, tool_registry=registry)
     assert config.tool_registry is registry
+
+
+def test_config_carries_the_default_drop_oldest_compactor() -> None:
+    # Requirement: the default compactor is wired through AgentConfig into every
+    # activation. Before this, the compactor parameter was dead and the hard
+    # cap's only behavior was MemoryOverflow -> dead letter, forever.
+    config = AgentConfig(provider_factory=make_pong_provider)
+    assert isinstance(config.compactor, DropOldestCompactor)
+    assert config.compactor.target_bytes == HARD_CAP_BYTES // 2
+    assert config.compactor.protected_prefixes == ("__langgraph__/",)
+
+    # ...and opting out is expressible, restoring strict-overflow semantics.
+    assert AgentConfig(provider_factory=make_pong_provider, compactor=None).compactor is None
+
+
+def test_the_compactor_and_summarizer_reach_the_dofn() -> None:
+    compactor = DropOldestCompactor(target_bytes=99)
+    config = AgentConfig(provider_factory=make_pong_provider, compactor=compactor)
+    dofn = _AgentDoFn(
+        seq_agent,
+        provider_factory=config.provider_factory,
+        compactor=config.compactor,
+        summarizer=config.summarizer,
+    )
+    assert dofn._compactor is compactor
+    assert dofn._summarizer is None
+
+
+def test_the_summarizer_is_opt_in() -> None:
+    assert AgentConfig(provider_factory=make_pong_provider).summarizer is None
+
+
+def test_on_expire_without_a_long_term_store_is_rejected_at_construction() -> None:
+    # The hook writes through the long-term tier; configuring one without the
+    # other is a misconfiguration, and it fails at the site of the typo rather
+    # than at the first TTL fire in production.
+    with pytest.raises(ValueError, match="longterm_memory"):
+        AgentConfig(provider_factory=make_pong_provider, on_expire=FlushToLongterm())
+
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        on_expire=FlushToLongterm(),
+        longterm_memory="memory://",
+    )
+    assert config.on_expire is not None
+
+
+def test_on_expire_is_unset_by_default() -> None:
+    # Unset means today's wipe-only behavior, unchanged.
+    assert AgentConfig(provider_factory=make_pong_provider).on_expire is None
 
 
 @pytest.mark.parametrize(

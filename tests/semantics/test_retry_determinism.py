@@ -25,9 +25,13 @@ from apache_beam.testing.util import assert_that
 from apache_beam.transforms.window import TimestampedValue
 
 from beam_agents._protos import AgentEnvelope, ToolIntent, ToolResult, TraceEvent
-from beam_agents.core.agent import intent_id_for
+from beam_agents.core.agent import Complete, Suspend, intent_id_for
+from beam_agents.core.context import ActivationContext
 from beam_agents.core.loop import ActivationResult
 from beam_agents.core.transform import AgentConfig, RunAgent
+from beam_agents.memory import SummarizationView, SummarizeCompactor
+from beam_agents.model.client import LlmRequest
+from beam_agents.model.fake import FakeLLM
 from beam_agents.observability import trace_id_for
 from beam_agents.observability.metrics import NAMESPACE
 from beam_agents.testing.chaos import fail_first_matching_commit
@@ -212,6 +216,146 @@ def test_measurement_does_not_change_what_a_retried_bundle_commits() -> None:
     query = p.result.metrics().query(MetricsFilter().with_namespace(NAMESPACE))
     counters = {m.key.metric.name: m.result for m in query[MetricResults.COUNTERS]}
     assert counters["activations"] >= 1
+
+
+# ---------------------------------------------------------------------------------
+# The same gate, with a summarizing agent (memory-compaction, design D2)
+# ---------------------------------------------------------------------------------
+#
+# `SummarizeCompactor` runs INSIDE the activation and calls the model only
+# through `ctx.call_model`, so its request is keyed by `(content, key, seq)`,
+# staged in the replay cache, and committed with the bundle. This is where that
+# placement is proven rather than asserted in prose: the suspend commits the
+# summarization's cache entry, the resume's identical summarization request is
+# served from it, and the chaos-forced retry of the resume re-derives the same
+# request from the same rolled-back state and is served from it again — so the
+# whole run reaches the provider exactly once, on the suspending activation.
+#
+# The provider is a single shared `FakeLLM` (the factory hands out one instance
+# to every DoFn setup in the run, as `test_longterm_retry_determinism` does with
+# its store), so the count below spans the DISCARDED attempt too — the trace
+# assertions cannot see it, and it is exactly the walk a regression would
+# re-call the provider on.
+
+_SUMMARY_KEY = "summary"
+# Equal to the FakeLLM's scripted response, which makes the fold a fixed point:
+# summarizing twice yields the same summary, so the resume's summarization has
+# the same `(items, prior_summary)` inputs as the suspend's and therefore the
+# same cache key. Without a stable prior, the resume would issue a genuinely
+# novel request and a retry would legitimately repeat it.
+_SEED_SUMMARY = b"pong"
+_LOG_KEY = "log"
+_LOG_ITEMS = tuple(f"entry-{index:02d}".encode() for index in range(12))
+# Small enough that the 12 items cross it, large enough that a folded key
+# (summary alone) does not.
+_TRIGGER_BYTES = 100
+_SUMMARIZE_INTENT_ID = intent_id_for(_ENTITY_KEY, _SEQ, 0)
+
+#: Every post-fold `MemoryBlob`, recorded per attempt (module-global, so the
+#: pickled summarizer copy inside the DoFn appends to this list in-process).
+_FOLDED_BLOBS: list[bytes] = []
+_SHARED_PROVIDER: list[FakeLLM] = [make_pong_provider()]
+
+
+def shared_provider() -> FakeLLM:
+    """Hand every DoFn setup the one provider instance the test can count."""
+    return _SHARED_PROVIDER[0]
+
+
+def summary_request(items: tuple[bytes, ...], prior_summary: bytes | None) -> LlmRequest:
+    """Pure function of its inputs — the caller-side determinism obligation."""
+    return LlmRequest(
+        model_id="m",
+        messages=["summarize", [item.decode() for item in items], (prior_summary or b"").decode()],
+        tools_schema=None,
+        sampling_params=None,
+    )
+
+
+def extract_summary(response: bytes) -> bytes:
+    return response
+
+
+class _RecordingSummarizer(SummarizeCompactor):
+    """`SummarizeCompactor` that records the blob each fold produced.
+
+    `_FOLDED_BLOBS` is a module global, so the pickled copy of this object
+    living inside the DoFn appends to the list this test reads — the same
+    in-process observation `test_longterm_retry_determinism` makes of its store.
+    """
+
+    async def compact(self, view: SummarizationView) -> None:
+        await super().compact(view)
+        _FOLDED_BLOBS.append(view.memory.to_blob().SerializeToString(deterministic=True))
+
+
+async def summarizing_suspend_then_resume_agent(
+    ctx: ActivationContext,
+) -> Complete | Suspend:
+    """Seed a stable summary, refill the log ring, suspend once, then complete.
+
+    The seed write is what makes the two activations' summarization inputs
+    identical; everything the agent stages is a pure function of committed
+    state, so both attempts of the resume walk the same path.
+    """
+    ctx.memory.set(_SUMMARY_KEY, _SEED_SUMMARY)
+    for item in _LOG_ITEMS:
+        ctx.memory.append(_LOG_KEY, item, max_items=64)
+    if not ctx.is_resume:
+        ctx.act("http.post", '{"url":"x"}', ttl_ms=60_000)
+        return Suspend(snapshot=b"waiting", adapter="test", timeout_ms=60_000)
+    return Complete(output=b"resumed")
+
+
+def _check_summarized_output(actual: object) -> None:
+    items = list(actual)  # type: ignore[call-overload]
+    assert items == [b"resumed"], f"unexpected output: {items!r}"
+
+
+def test_the_summarization_llm_call_replays_from_cache_on_bundle_retry() -> None:
+    # Scenario: The summarization LLM call replays from cache on bundle retry.
+    _FOLDED_BLOBS.clear()
+    _SHARED_PROVIDER[0] = make_pong_provider()
+    provider = _SHARED_PROVIDER[0]
+    summarizer = _RecordingSummarizer(
+        build_request=summary_request,
+        extract_summary=extract_summary,
+        source_keys=(_LOG_KEY,),
+        summary_key=_SUMMARY_KEY,
+        keep_recent=0,
+        trigger_bytes=_TRIGGER_BYTES,
+    )
+
+    with fail_first_matching_commit(_is_resume_commit), _streaming_pipeline() as p:
+        stream = (
+            TestStream()
+            .advance_watermark_to(0)
+            .add_elements([_event(_ENTITY_KEY, b"go", 1000)])
+            .add_elements([_tool_result(_ENTITY_KEY, _SUMMARIZE_INTENT_ID, 2000)])
+            .advance_watermark_to_infinity()
+        )
+        out = keyed(p | stream) | RunAgent(
+            summarizing_suspend_then_resume_agent,
+            config=AgentConfig(provider_factory=shared_provider, summarizer=summarizer),
+        )
+        assert_that(out.output, _check_summarized_output, label="output")
+        assert_that(out.errors, _check_no_errors, label="errors")
+
+    # Three summarization passes ran — the suspend, the discarded resume
+    # attempt, and Beam's retry of it — and exactly ONE of them reached the
+    # provider. The two resume attempts were served from the replay cache the
+    # suspend committed, which is the invariant-3 claim for tier-2 compaction.
+    assert len(_FOLDED_BLOBS) >= 3, (
+        f"expected the retry to re-run the summarizer, got {len(_FOLDED_BLOBS)} passes"
+    )
+    assert provider.call_count == 1, (
+        f"the retried summarization re-hit the provider: {provider.call_count} calls, "
+        f"requests={provider.requests!r}"
+    )
+
+    # ...and the discarded attempt and the retry folded to byte-identical
+    # `MemoryBlob`s, so which attempt commits cannot change what is committed.
+    assert _FOLDED_BLOBS[-1] == _FOLDED_BLOBS[-2], "the retry committed a different blob"
 
 
 def test_assertion_helper_catches_a_broken_cache_first_path() -> None:

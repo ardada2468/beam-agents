@@ -48,6 +48,7 @@ from beam_agents.core.error_records import (
     serialize_error_envelope,
 )
 from beam_agents.hitl import HitlPolicy
+from beam_agents.memory.compaction import DropOldestCompactor
 from beam_agents.memory.stores import parse_memory_store_uri
 from beam_agents.observability import serialize_trace_event, trace_event_to_row
 from beam_agents.tools import ToolRegistry
@@ -56,6 +57,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from beam_agents.core.agent import Agent
+    from beam_agents.memory.compaction import ExpireHook, Summarizer
+    from beam_agents.memory.facade import Compactor
     from beam_agents.model.client import LLMClient
     from beam_agents.model.facade import Decode
 
@@ -424,6 +427,23 @@ class AgentConfig:
     # unconfigured pipeline behaves exactly as before. Validated below by the
     # import-free grammar check, like the sink URIs.
     longterm_memory: str | None = field(default=None, kw_only=True)
+    # Tier-1 compaction, invoked by the memory facade itself at the soft-cap
+    # crossing and before hard-cap rejection. Defaults to LRU eviction with the
+    # LangGraph checkpoint namespace protected: an unconfigured pipeline now
+    # survives hard-cap pressure instead of dead-lettering the activation
+    # forever. `compactor=None` restores the strict-overflow semantics
+    # (`MemoryOverflow` -> `.errors`) pipelines had before this default existed.
+    compactor: Compactor | None = field(default_factory=DropOldestCompactor, kw_only=True)
+    # Tier-2 compaction, invoked by the loop driver inside the activation so its
+    # model calls go through the replay cache. `None` (the default) is purely
+    # opt-out-by-absence: no summarization pass, no provider call, no change.
+    summarizer: Summarizer | None = field(default=None, kw_only=True)
+    # Demotion hook run at `TTL_TIMER` fire, before the wipe. `None` (the
+    # default) leaves expiry exactly as it was: wipe-only, no store interaction.
+    # Setting it requires `longterm_memory`, since the hook writes through that
+    # tier -- checked below so the misconfiguration surfaces at the config's
+    # construction site rather than at the first expiry in production.
+    on_expire: ExpireHook | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _require_positive("activation_timeout_s", self.activation_timeout_s)
@@ -442,6 +462,11 @@ class AgentConfig:
             # Grammar only, and deliberately import-free: no backend client is
             # imported until the DoFn's `setup()` builds the store.
             parse_memory_store_uri(self.longterm_memory, field="longterm_memory")
+        elif self.on_expire is not None:
+            raise ValueError(
+                "AgentConfig.on_expire flushes expiring working memory to the long-term "
+                "tier, so it requires AgentConfig.longterm_memory to name a store URI"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,6 +524,9 @@ class RunAgent(beam.PTransform):
             decode=self._config.decode,
             tool_registry=self._config.tool_registry,
             longterm_memory=self._config.longterm_memory,
+            compactor=self._config.compactor,
+            summarizer=self._config.summarizer,
+            on_expire=self._config.on_expire,
         )
         tagged = pcoll | "Activate" >> beam.ParDo(dofn).with_outputs(
             INTENTS_TAG, TRACES_TAG, ERRORS_TAG, main="output"
