@@ -1,0 +1,110 @@
+---
+title: Compared with running a framework yourself
+summary: What the runtime provides that an agent framework plus a job scheduler does not — and where the honest answer is "you may not need this".
+status: stable
+order: 2
+verifies:
+  - symbol: beam_agents.RunAgent
+  - module: src/beam_agents/core/dofn.py
+  - module: src/beam_agents/model/replay_cache.py
+  - spec: openspec/specs/llm-replay-cache/spec.md
+  - test: tests/semantics/test_retry_determinism.py
+  - test: tests/core/test_dofn_commit.py
+  - example: intents_and_resume.py
+sources:
+  - claim: LangGraph is an agent-authoring framework maintained by LangChain, used here only as a stand-in for "the framework you already run".
+    url: https://github.com/langchain-ai/langgraph
+    retrieved: 2026-07-30
+  - claim: Apache Flink Agents is a separate comparable project, covered on its own page.
+    url: https://github.com/apache/flink-agents
+    retrieved: 2026-07-30
+---
+
+The realistic alternative to this project is not another runtime. It is a
+LangGraph app in a container, consuming from a queue, with state in Redis. That
+works, and for a lot of workloads it keeps working. This page is about the
+specific failures it has, and when they matter enough to justify a pipeline.
+
+## The four problems this exists to solve
+
+### 1. A retried unit of work re-executes its effects
+
+A worker crashes after calling the payments API but before acknowledging the
+message. The message is redelivered. The refund goes out twice.
+
+The usual mitigations are an idempotency key you generate and store, or an
+inbox table. Both work; both are yours to build and to get right.
+
+Here, the identity is structural rather than generated: the intent id is
+`uuid5(namespace, key|seq|step_index)`, a pure function of the activation's
+position. A replayed bundle walking the same path mints the same id, and the
+effector deduplicates on it.
+
+<Example file="intents_and_resume.py" region="agent" />
+
+The guarantee is bounded and stated as such: duplicates are confined to the
+crash window between a tool's effect and its durable completion record, and
+true exactly-once still requires the tool to be idempotent on `intent_id`.
+
+### 2. A retried unit of work re-bills its model calls
+
+Fewer people think about this one. If the crash above happened after three
+model calls, the retry pays for three more — and if the model answers
+differently the second time, the retry takes a *different path*, which can
+undo the reasoning that led to the effect you already performed.
+
+The replay cache keys every call on the request content plus `(key, seq)` and
+stores it in keyed state. A bundle retry costs zero additional provider calls
+on the cached path, and takes the same path.
+
+### 3. Partial state after a failure
+
+The framework wrote to memory, then failed. Now the agent's state reflects half
+of a decision that never completed.
+
+Every effect an activation produces is staged and applied only on success.
+A failed activation mutates nothing — no memory write, no intent, not even the
+sequence counter. You can see it from outside: a failed activation's staged
+traces are discarded with everything else, leaving a single `ERROR` event where
+a committed one emits a full span set.
+
+### 4. Concurrency on the same entity
+
+Two events for the same account arrive at once and two workers process them
+concurrently against shared state. The usual fix is a distributed lock.
+
+Beam serializes elements per key. There is no lock because there is no
+concurrency to guard — parallelism comes from having many keys, not many
+workers per key.
+
+## When you do not need this
+
+Directly and without hedging:
+
+- **A human is waiting.** This is designed for system-triggered agents, not
+  sub-second interactive chat. If someone is watching a text box, use something
+  else.
+- **Your effects are already idempotent.** If every write is an upsert keyed on
+  something stable, problem 1 is already solved and problem 2 is a cost
+  question rather than a correctness one.
+- **Your volume is small.** A pipeline is real operational weight — a runner, a
+  message bus, an effector service. Below some throughput, a container and a
+  queue is the right engineering call.
+- **You need it in production now.** This project is unreleased. That is a
+  serious argument against it, and it should be weighed as one.
+
+## What you give up
+
+- **Python only**, for v0.x.
+- **A runtime dependency on Beam**, including its Python SDK's constraints — no
+  `MapState`, no portable async DoFn, stateful DoFns require KV input.
+- **The effector is a separate service you deploy and operate.** Effects
+  happening outside the pipeline is what makes the guarantee possible, and also
+  what makes it another thing to run.
+- **A young API.** Writing an agent currently requires importing from modules
+  the project documents as private. See [the API reference](/api).
+
+## Related
+
+- [Correctness invariants](/learn/correctness-invariants)
+- [Compared with Apache Flink Agents](/comparison/flink-agents)

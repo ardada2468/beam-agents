@@ -1,0 +1,26 @@
+---
+title: The four outputs
+summary: Consume .output, .intents, .traces, and .errors — including a dead letter.
+status: stable
+order: 4
+verifies:
+  - example: four_outputs.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/core/test_error_records.py
+---
+
+Three keys down three paths in one bounded pipeline, with assertions on every stream.
+
+The trace assertion is worth reading closely. A committed activation emits its whole
+span set; the failed one emits a single `ERROR` event, because the spans it staged
+before raising were discarded along with its memory write. Atomic commit, visible from
+outside the runtime.
+
+Run it:
+
+```sh
+uv run python website/examples/four_outputs.py
+```
+
+<Example file="four_outputs.py" />

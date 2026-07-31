@@ -1,0 +1,18 @@
+---
+title: Tool registry
+summary: The @tool decorator, argument schemas, and the side-effect guard that makes ctx.act the only effect path.
+status: stable
+order: 3
+verifies:
+  - spec: openspec/specs/tool-registry/spec.md
+  - test: tests/tools/test_registry.py
+---
+
+`beam_agents.tools` lets agent code declare tools via the `@tool` decorator, deriving each tool's provider-facing JSON schema from its Python signature through a generated Pydantic v2 model, and collects them in a `ToolRegistry` for name resolution and aggregate `tools_schema` lookup. The `side_effect` flag on every tool separates the fast path — `side_effect=False` tools run inline through `ToolRunner` with argument validation — from the effects path: a `side_effect=True` tool raises `SideEffectToolError` on any direct invocation, enforcing correctness invariant 5 that side effects only ever execute through `ctx.act(...)` and the intents/effector pipeline.
+
+This capability carries **5 requirements** and
+**12 scenarios**. Scenarios are not illustrations —
+each is the source a test is derived from and named after, which is the
+traceability chain this project requires: scenario, then test, then code.
+
+<Spec capability="tool-registry" />

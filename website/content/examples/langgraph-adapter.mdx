@@ -1,0 +1,29 @@
+---
+title: LangGraph adapter
+summary: Adopt an existing LangGraph graph without editing its topology.
+status: stable
+order: 6
+verifies:
+  - example: langgraph_adapter.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/adapters/test_e2e_pipeline.py
+---
+
+Three changes, none to the graph's shape: re-tag side-effecting tools, swap `ToolNode`
+for `BeamToolNode`, and wrap the graph in `LangGraphAgent`.
+
+This example requires the `langgraph` extra. Without it installed, the repository's test
+suite skips it with a stated reason rather than failing.
+
+<Callout>
+This example needs the `langgraph` extra: `uv sync --extra langgraph`.
+</Callout>
+
+Run it:
+
+```sh
+uv run python website/examples/langgraph_adapter.py
+```
+
+<Example file="langgraph_adapter.py" />

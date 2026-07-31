@@ -1,0 +1,18 @@
+---
+title: Repository scaffolding
+summary: The environment, quality gates, service topology, and CI workflow contracts every other capability relies on.
+status: stable
+order: 9
+verifies:
+  - spec: openspec/specs/repo-scaffolding/spec.md
+  - test: tests/test_import.py
+---
+
+Provides the reproducible developer environment, dependency management, code-quality gates, local service topology, and CI workflow contracts that every future `beam-agents` capability relies on. This capability delivers scaffolding only — no runtime application code.
+
+This capability carries **11 requirements** and
+**25 scenarios**. Scenarios are not illustrations —
+each is the source a test is derived from and named after, which is the
+traceability chain this project requires: scenario, then test, then code.
+
+<Spec capability="repo-scaffolding" />

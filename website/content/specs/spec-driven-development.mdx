@@ -1,0 +1,71 @@
+---
+title: How changes get made here
+summary: The spec-driven workflow — scenario to test to code — and why the archived change history is the evidence for it.
+status: stable
+order: 0
+verifies:
+  - module: CONTRIBUTING.md
+  - module: openspec/project.md
+  - module: .pre-commit-config.yaml
+  - spec: openspec/specs/repo-scaffolding/spec.md
+  - test: tests/core/test_mutation_gate.py
+---
+
+Most projects describe a process. This one enforces it, which is why the
+process is worth knowing before you read the specs themselves.
+
+## The chain
+
+**Scenario → test → code.** In that order, and the order is not advisory:
+
+1. Every change starts as an OpenSpec change folder. There are no commits under
+   `src/` without a referenced change — a pre-commit hook rejects them. (An
+   escape hatch, `BEAM_AGENTS_ALLOW_NO_CHANGE=1`, exists and bypasses only that
+   hook.)
+2. Requirements are written as Given/When/Then behavioral scenarios.
+3. Tests are **derived from scenarios and named after them**, written first,
+   and must fail for the right reason before implementation.
+4. Only then is the code written.
+
+The rule that gives this teeth: *never weaken a test to make an implementation
+pass*. If the spec is wrong, the spec is updated first, reviewed, then the
+test, then the code.
+
+## Why the specs on this site are published verbatim
+
+Because they are the contract. A summarized specification is a different
+document that happens to share a title — it can be accurate today and wrong
+after one edit to the original. Every page in this section renders
+`openspec/specs/<capability>/spec.md` directly from the repository. There is
+one copy of each spec and it is the one in the checkout.
+
+## What is enforced mechanically
+
+The pattern throughout this repository is that guarantees are checks, not
+conventions:
+
+| Guarantee | Enforced by |
+|---|---|
+| No `src/` change without a spec change | A pre-commit hook |
+| Generated protobuf matches its `.proto` | A drift check in CI |
+| The semantics tier actually runs | `scripts/check_semantics_partition.py`, a required step |
+| The conformance matrix does not shrink | A meta-test auditing registry × scenario × leg |
+| Coverage never decreases | A coverage ratchet, required |
+| Core logic is meaningfully tested | A `mutmut` mutation gate on `core/` |
+
+This site is built the same way. Its own claims are verified against the
+repository by `scripts/verify_docs_claims.py`, its examples are executed by the
+repository's offline test tier, and its API reference is generated from the
+installed package and drift-checked — the same trade the protobuf gate makes.
+
+## The change history
+
+`openspec/changes/` holds the archive: one merged commit, one archived change.
+Reading it is the most direct way to see whether the process above is actually
+followed, since every implemented capability left a proposal, a design with its
+rejected alternatives, and a task list behind it.
+
+## Related
+
+- [Testing tiers and CI](/docs/testing-and-ci) — what runs where.
+- [Community](/community/contributing) — how to participate.

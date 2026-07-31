@@ -1,0 +1,85 @@
+---
+title: Glossary
+summary: The terms this project uses precisely — activation, continuation, intent, effector, re-injection, replay cache, seq, fast path.
+status: stable
+order: 9
+verifies:
+  - symbol: beam_agents.RunAgent
+  - module: src/beam_agents/core/context.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/core/test_context.py
+---
+
+These words carry specific meanings here. Where the same word means something
+looser elsewhere in the ecosystem, that is noted.
+
+## Activation
+
+One execution of the agent, for one key, inside one `process()` call. Not "a
+conversation" and not "a session" — a single invocation with a single outcome.
+An agent that suspends and resumes has had **two** activations, sharing one
+`seq`.
+
+## Continuation
+
+The persisted resume-state for a suspended activation awaiting a `ToolResult`
+or `Approval`. Framework-opaque: the runtime stores the snapshot bytes the
+agent handed it and gives them back on resume, without interpreting them.
+
+## Intent (`ToolIntent`)
+
+A declarative request to perform a side effect. Not the effect itself — a
+description of one, carrying a deterministic `intent_id`, the tool name,
+JSON-encoded arguments, and an `expires_at_ms`. Intents leave the pipeline on
+`.intents`; the effector executes them.
+
+## Effector
+
+The external reference service that consumes intents, deduplicates on
+`intent_id`, executes the tool exactly once per intent, and publishes
+`ToolResult`s. It runs **outside** the pipeline, as a separate process. It is a
+reference implementation, not a hosted service.
+
+## Re-injection
+
+Results and approvals re-entering the pipeline as new elements on the same key.
+This is how the agent loop closes: not as a cycle in the Beam DAG (which is
+acyclic), but as a round trip through the message bus.
+
+## Replay cache
+
+Keyed-state memoization of model calls, making bundle retries cheap and
+path-stable. Keyed on the request content plus the activation's `(key, seq)`,
+so a retried bundle both costs nothing extra and takes the same path.
+
+## `seq`
+
+The per-key monotonic activation counter. It scopes cache keys and intent ids.
+A suspended activation that resumes keeps its `seq` — the resume is the same
+logical activation continuing, not a new one.
+
+## Fast path
+
+An activation that completes in a single element with no suspension. Contrast
+with the **re-injection path**, which suspends and resumes.
+
+## Step index
+
+The position of a staged effect within an activation. Combined with the key and
+`seq`, it produces the intent id. A resumed activation continues its step index
+rather than restarting at zero, so a second intent in the same logical
+activation cannot collide with the first.
+
+## Dead letter
+
+An `.errors` record. It means the activation committed **nothing** — no memory
+write, no intent, no output. The record is the only evidence the key was
+touched. See [the errors reference](/docs/errors) for the reason taxonomy.
+
+## Runtime, not framework
+
+Used throughout this site as a specific claim: the project provides execution
+guarantees (durable memory, effectively-once effects, event-time semantics,
+scale-out) and deliberately provides no agent-authoring surface (no prompt
+templating, no orchestration DSL). Authoring belongs to LangGraph and its
+peers, integrated via [adapters](/comparison/adapters).

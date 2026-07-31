@@ -4,7 +4,9 @@ COMPOSE := docker compose -f docker/compose.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto
+PNPM := pnpm --dir website
+
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto site-dev site-build site-check api-reference
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "%-18s %s\n", $$1, $$2}'
@@ -83,3 +85,39 @@ compose-down: ## Tear down the local stack
 
 proto: ## Regenerate protobuf Python bindings from protos/*.proto
 	scripts/gen_proto.sh
+
+# -- documentation site --------------------------------------------------------
+#
+# The `site-*` targets are the ONLY targets requiring a Node toolchain, and
+# `site-check` is the only one that also needs the uv environment (the claim
+# verifier imports beam_agents; the API generator introspects it). Keeping that
+# split is load-bearing: a contributor with no Node can still run bootstrap,
+# lint, type, and test-unit, and a contributor with no .venv can still build
+# the site.
+
+site-dev: ## Run the documentation site's dev server
+	$(PNPM) install --frozen-lockfile
+	$(PNPM) dev
+
+site-build: ## Build the documentation site (Node only, no Python needed)
+	$(PNPM) install --frozen-lockfile
+	$(PNPM) build
+
+api-reference: ## Regenerate website/generated/api.json from the installed package
+	uv run python scripts/gen_api_reference.py
+
+# Ordering is deliberate: the cheap static gates run before the build, and the
+# build runs before the checks that need its output. `--check` on the API
+# generator fails on drift instead of rewriting, mirroring the protobuf gate.
+site-check: ## Run every site gate: types, lint, fidelity, build, links, SSR, a11y
+	$(PNPM) install --frozen-lockfile
+	$(PNPM) typecheck
+	$(PNPM) lint
+	$(PNPM) test
+	uv run python scripts/gen_api_reference.py --check
+	uv run python scripts/verify_docs_claims.py
+	uv run python scripts/check_docs_prose.py
+	$(PNPM) build
+	$(PNPM) check:links
+	$(PNPM) check:ssr
+	$(PNPM) check:a11y

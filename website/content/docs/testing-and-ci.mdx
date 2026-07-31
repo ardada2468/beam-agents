@@ -1,0 +1,69 @@
+---
+title: Testing tiers and CI
+summary: Four test tiers, what each gates, the closed marker registry, and the adapter conformance matrix.
+status: stable
+order: 5
+verifies:
+  - module: docs/ci.md
+  - module: pyproject.toml
+  - module: scripts/check_semantics_partition.py
+  - spec: openspec/specs/repo-scaffolding/spec.md
+  - test: tests/conformance/test_matrix.py
+  - test: tests/semantics/test_retry_determinism.py
+---
+
+The testing arrangement here is worth understanding before you trust anything
+else on this site, because it is what the rest of the claims rest on.
+
+## The tiers
+
+| Tier | Needs | Runs |
+|---|---|---|
+| Unit (default) | Nothing — offline, no docker | Every PR |
+| `integration` | Redpanda, Redis, Flink via testcontainers | Every PR |
+| `semantics` | Split: offline gates on every PR, docker-backed gates in the integration workflow | Every PR |
+| `dataflow` | Real Dataflow, FakeLLM over HTTP | Nightly |
+| `smoke` | Real Anthropic / OpenAI-compatible endpoints | Nightly |
+
+Markers are a **closed registry**. Using an unregistered marker fails the
+session, so a typo cannot silently deselect a test.
+
+## The semantics tier is partitioned, and the partition is checked
+
+The correctness gates — retry determinism, effectively-once end to end, HITL
+fail-closed, state compatibility — are split across two lanes: offline gates
+run as a required check on every PR, docker-backed gates run in the integration
+workflow. Running them in both lanes would double a ten-minute gate; running
+them in neither would silently remove a release gate.
+
+So the partition itself is a required CI step.
+`scripts/check_semantics_partition.py` fails the build if any semantics test
+escapes both selections, or if either selection goes empty. An empty selection
+is treated as a deselected gate, not a pending one.
+
+That check is the reason to believe the semantics tier is actually running.
+
+## The adapter conformance matrix
+
+Seven lifecycle scenarios × every registered adapter × two runners. The
+DirectRunner leg rides the offline semantics selection; the Flink leg runs in
+the integration workflow as its own step, kept separate so an end-to-end
+timeout and a conformance failure stay distinguishable.
+
+A meta-test audits registry × scenario × leg against the collected cells,
+counting declared per-leg skips, so the matrix cannot silently shrink. An
+importable adapter subpackage without a registration fails collection.
+
+## Quality gates
+
+Beyond correctness: mutation testing with `mutmut` on `core/`, and a coverage
+ratchet that fails if coverage decreases. Both are required checks.
+
+## This site is in the loop
+
+The examples published on this site are executed by the offline unit tier
+(`tests/docs/test_website_examples.py`), so a change under `src/` that breaks
+published code fails the required `ci` check — not the website build, the
+actual gate.
+
+<RepoDoc file="docs/ci.md" />

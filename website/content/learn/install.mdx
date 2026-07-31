@@ -1,0 +1,97 @@
+---
+title: Install
+summary: How to get beam-agents today — from source, at a git ref, because no release has been published.
+status: partial
+order: 2
+verifies:
+  - symbol: beam_agents.RunAgent
+  - module: pyproject.toml
+  - test: tests/test_import.py
+---
+
+<Callout kind="warning" title="No release exists yet">
+`pyproject.toml` declares version `0.0.0`, and there is no `beam-agents`
+package on PyPI — `https://pypi.org/pypi/beam-agents/json` returns 404.
+Installing from a package registry is not possible today. Install from source.
+</Callout>
+
+## Requirements
+
+- Python `>=3.11,<3.13`. The repository pins `3.11` via `.python-version`, and
+  the resolver rejects 3.10 and 3.13 outright.
+- [`uv`](https://docs.astral.sh/uv/) for environment and dependency management.
+- Docker, only if you intend to run the integration or docker-backed semantics
+  test tiers. Unit tests must pass with no docker.
+
+## From source
+
+```sh
+git clone https://github.com/ardada2468/beam-agents
+cd beam-agents
+uv sync --all-groups
+uv run pre-commit install
+```
+
+Or equivalently, `make bootstrap`.
+
+Verify the install:
+
+```sh
+uv run python -c "import beam_agents; print(sorted(beam_agents.__all__))"
+```
+
+Importing the package performs no I/O, spawns no threads, and imports no
+optional dependency.
+
+## Optional extras
+
+Three extras exist, and each is genuinely optional — the core install works
+without any of them.
+
+| Extra | Provides | Pulls in |
+|---|---|---|
+| `langgraph` | The `beam_agents.adapters.langgraph` adapter and `LangGraphAgent` | `langgraph>=1.0,<2`, `langchain-core>=1.0,<2` |
+| `effector` | The reference effector service and its IO clients | `aiokafka`, `google-cloud-pubsub`, `redis`, `google-cloud-bigtable` |
+| `otlp` | The `otlp://` trace sink | `opentelemetry-proto>=1.20` |
+
+From a source checkout:
+
+```sh
+uv sync --extra langgraph
+```
+
+`LangGraphAgent` is exported lazily. Without the extra, accessing it raises an
+`ImportError` naming the extra to install rather than a bare
+`ModuleNotFoundError`.
+
+## Not yet implemented
+
+This page is marked **partial** because the install story is genuinely
+incomplete, not because the documentation is:
+
+- **No published package.** There is no `pip install beam-agents`, no version
+  to pin, and no changelog. Anything you build against this today is built
+  against a git ref.
+- **No versioned API.** The declared version is `0.0.0` and the project makes
+  no stability promise. The names in `beam_agents.__all__` are the intended
+  public surface, but writing an agent currently also requires importing from
+  modules the project documents as private — see
+  [the API reference](/api) for the exact list and why each is needed.
+- **No release process.** Nothing in the repository publishes an artifact.
+
+## When released
+
+Once a release is published, the install becomes the ordinary one, and this
+section replaces the source instructions above:
+
+```sh
+uv pip install 'beam-agents[langgraph]'
+```
+
+Until then, the site's own verifier fails the build if any page presents that
+command as something that works today.
+
+## Next
+
+- [What beam-agents is](/learn/what-is-beam-agents) — the concepts.
+- [Examples](/examples) — runnable programs you can copy.

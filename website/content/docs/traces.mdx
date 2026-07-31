@@ -1,0 +1,31 @@
+---
+title: Traces
+summary: The TraceEvent stream, OTel GenAI attribute conventions, and the BigQuery and OTLP sinks.
+status: stable
+order: 3
+verifies:
+  - module: src/beam_agents/observability/traces.py
+  - module: src/beam_agents/observability/otlp.py
+  - module: docs/traces.md
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/observability/test_activation_trace.py
+  - test: tests/observability/test_otlp.py
+  - example: four_outputs.py
+---
+
+`.traces` carries `TraceEvent` records — spans for the activation and for each
+model call, tool call, and staged intent inside it. Attributes follow the
+OpenTelemetry GenAI semantic conventions, and `trace_id`/`span_id` use the W3C
+trace-context wire sizes so an exporter passes them through untranslated.
+
+Traces show the atomic-commit rule from the outside: a committed activation
+emits its whole span set, while a failed one emits a single `ERROR` event,
+because the spans it staged are discarded along with its other effects.
+
+<Example file="four_outputs.py" region="agent" />
+
+The `otlp://` sink is valid only for `traces_to`. It is a best-effort tap that
+drops on delivery failure by contract, and intents and errors are
+correctness-bearing streams that need a lossless sink.
+
+<RepoDoc file="docs/traces.md" />

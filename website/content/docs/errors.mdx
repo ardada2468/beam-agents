@@ -1,0 +1,24 @@
+---
+title: The errors output
+summary: How element-level failures are routed to .errors, the reason taxonomy, and how to configure a sink.
+status: stable
+order: 1
+verifies:
+  - symbol: beam_agents.RunAgentOutputs
+  - module: src/beam_agents/core/error_records.py
+  - module: docs/errors.md
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/core/test_error_records.py
+  - test: tests/examples/test_failure_streak_alarm.py
+  - example: four_outputs.py
+---
+
+`RunAgent` never fails a bundle for an element-level problem. It routes the
+failure to `.errors` and moves on. A record there means the activation
+committed nothing at all — so consuming this stream is not optional
+housekeeping, it is how you find out that a key was touched and produced
+nothing.
+
+<Example file="four_outputs.py" region="outputs" />
+
+<RepoDoc file="docs/errors.md" />

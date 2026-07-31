@@ -1,0 +1,26 @@
+---
+title: Intents and resume
+summary: Emit a ToolIntent, suspend, and resume when the effector's result re-enters on the same key.
+status: stable
+order: 2
+verifies:
+  - example: intents_and_resume.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/core/test_dofn_streaming.py
+---
+
+Two activations, one logical unit of work. `ctx.act` stages the intent and returns its
+deterministic id; `Suspend` persists the continuation and arms the fail-closed timeout.
+
+The example can name the intent id *before* the pipeline runs, because the id is
+`uuid5(namespace, key|seq|step_index)` — a pure function of the activation's position.
+That is what makes deduplication a lookup rather than a guess.
+
+Run it:
+
+```sh
+uv run python website/examples/intents_and_resume.py
+```
+
+<Example file="intents_and_resume.py" />

@@ -1,0 +1,26 @@
+---
+title: Approvals and timeout fallback
+summary: A runnable pipeline where one key's approval arrives and another's never does.
+status: stable
+order: 3
+verifies:
+  - example: human_in_the_loop.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/semantics/test_hitl_fail_closed.py
+---
+
+Two keys take two paths: one approval arrives, the other never does. The silent key's
+HITL timer fires and the policy routes it to a deterministic denial.
+
+Processing time is advanced by the test stream rather than by sleeping, so both clocks
+are scripted and the outcome is deterministic — the same technique the repository's own
+timer tests use.
+
+Run it:
+
+```sh
+uv run python website/examples/human_in_the_loop.py
+```
+
+<Example file="human_in_the_loop.py" />

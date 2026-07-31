@@ -1,0 +1,26 @@
+---
+title: Fast path
+summary: One event in, one decision out, inside a single activation.
+status: stable
+order: 1
+verifies:
+  - example: fast_path.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/docs/test_website_examples.py
+---
+
+The simplest complete pipeline. The agent reads the event, consults durable per-key
+working memory, calls the model, and completes — no suspension, no external effect.
+
+The assertion at the bottom is the interesting part: `acct-1`'s two events see a ring
+one then two deep, while `acct-2` starts fresh. Separate keys, separate memory, and
+Beam serializes each key's elements so the ordering is not a race.
+
+Run it:
+
+```sh
+uv run python website/examples/fast_path.py
+```
+
+<Example file="fast_path.py" />

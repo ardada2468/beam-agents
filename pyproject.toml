@@ -83,6 +83,8 @@ lint = [
 typecheck = [
   "mypy",
   "types-protobuf",
+  # `scripts/_docs_content.py` parses page frontmatter with PyYAML.
+  "types-PyYAML",
 ]
 integration = [
   "testcontainers[kafka,redis]",
@@ -195,6 +197,10 @@ indent-style = "space"
 strict = true
 python_version = "3.11"
 files = ["src", "tests"]
+# The documentation-site fidelity checks live in `scripts/` (they import
+# `beam_agents`, so they cannot live under `website/`). `tests/docs/` imports
+# them, so mypy has to be able to resolve them.
+mypy_path = "scripts"
 enable_error_code = ["ignore-without-code"]
 warn_unreachable = true
 

@@ -1,0 +1,31 @@
+---
+title: The effector
+summary: The external service that executes intents — deployment preconditions, lease and TTL budgets, and exactly what is and is not guaranteed.
+status: stable
+order: 4
+verifies:
+  - module: src/beam_agents/effector/service.py
+  - module: src/beam_agents/effector/dedup.py
+  - module: docs/effector.md
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/effector/test_service.py
+  - test: tests/effector/test_dedup.py
+  - test: tests/semantics/test_effector_effectively_once.py
+  - example: intents_and_resume.py
+---
+
+Side effects execute **outside** the pipeline, in a separate service:
+`intents → dedup → execute → results → re-injection`. The effector shipped here
+is a reference implementation, not a hosted product, and it is installed from
+the `effector` extra.
+
+<Example file="intents_and_resume.py" region="agent" />
+
+Read the guarantees section below carefully. The honest statement is bounded:
+duplicates are bounded to the crash window between a tool's effect and its
+durable completion record, and true exactly-once requires tools that are
+idempotent on `intent_id`. The end-to-end semantics gate exercises exactly that
+— SIGKILLed effector workers, a killed TaskManager, and a full replay over
+10,000 events.
+
+<RepoDoc file="docs/effector.md" />

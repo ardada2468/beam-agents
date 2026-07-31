@@ -1,0 +1,148 @@
+---
+title: Correctness invariants
+summary: The seven rules the implementation is held to, what each one buys, and where each is tested.
+status: stable
+order: 4
+verifies:
+  - symbol: beam_agents.RunAgent
+  - module: src/beam_agents/core/dofn.py
+  - module: src/beam_agents/core/agent.py
+  - module: src/beam_agents/model/replay_cache.py
+  - module: src/beam_agents/hitl.py
+  - spec: openspec/specs/llm-replay-cache/spec.md
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/semantics/test_retry_determinism.py
+  - test: tests/semantics/test_effectively_once_e2e.py
+  - test: tests/semantics/test_hitl_fail_closed.py
+  - test: tests/core/test_dofn_commit.py
+  - test: tests/core/test_schema_compat.py
+  - example: four_outputs.py
+---
+
+These seven rules are treated as blocking defects when violated, not as design
+preferences. Each one is stated here with what it buys you and where it is
+tested, so you can check the claim rather than take it.
+
+## 1. Atomic commit
+
+State mutations and emitted outputs commit atomically with the Beam bundle.
+Every effect an agent produces — memory writes, cache inserts, intents, traces,
+outputs — is **staged** in the activation context and applied only on success.
+A failed or timed-out activation mutates nothing.
+
+You can watch this from outside. In the four-outputs example one key raises
+after writing memory; that write never lands, and the activation's staged
+traces are discarded with it, leaving a single `ERROR` trace where a successful
+activation emits a full span set:
+
+<Example file="four_outputs.py" region="agent" />
+
+*Tested by* `tests/core/test_dofn_commit.py`.
+
+## 2. Deterministic intent IDs
+
+```
+intent_id = uuid5(NAMESPACE, f"{entity_key.hex()}|{seq}|{step_index}")
+```
+
+A pure function of the activation's position. Never a clock, never a counter,
+never randomness. A replayed bundle that walks the same path produces
+byte-identical intents, and the effector deduplicates on `intent_id`.
+
+**This is the entire effectively-once argument.** Not an at-least-once delivery
+guarantee plus hope — a deterministic identity that makes duplicate suppression
+a lookup.
+
+The id is computable ahead of time, which is how the re-injection example can
+name the intent it is about to receive a result for:
+
+<Example file="intents_and_resume.py" region="result" />
+
+*Tested by* `tests/semantics/test_retry_determinism.py` and
+`tests/semantics/test_effectively_once_e2e.py`.
+
+## 3. Replay cache
+
+Every model call is keyed by
+`sha256(model_id, canonical_json(messages), tools_schema, sampling_params, key, seq)`
+and cached in keyed state — LRU, 64 entries maximum, 6-hour TTL, 100 KiB blob
+cap.
+
+The property that matters: **a bundle retry incurs zero additional provider
+calls on the cached path.** Without it, a retried bundle would re-bill every
+model call in the activation and — worse — could take a different path if the
+model answered differently the second time.
+
+*Tested by* `tests/model/test_replay_cache_hits.py` and the retry-determinism
+gate, which asserts zero extra `FakeLLM` calls under forced bundle retries.
+
+## 4. Per-key serialization
+
+Beam stateful DoFns process one element at a time per key. Memory is race-free
+by construction — not by locking, and not by careful ordering in the agent
+code. Cross-key parallelism comes from the runner.
+
+The consequence for you: never introduce cross-key shared mutable state. The
+only sanctioned exceptions are documented worker-local singletons (circuit
+breakers, the vLLM sidecar via `beam.utils.shared.Shared`).
+
+## 5. Side effects only via intents
+
+Calling a `side_effect=True` tool directly raises. `ctx.act(...)` is the only
+effect path. External writes never execute inside the pipeline.
+
+<Example file="read_only_tools.py" region="refusal" />
+
+There is one documented exception: idempotent upserts to the long-term
+`MemoryStore`, keyed by `(key, seq)`.
+
+*Tested by* `tests/tools/test_side_effect_guard.py`.
+
+## 6. Timeouts fail closed at both layers
+
+A pending approval that never arrives has to end, and it has to end without
+letting a late answer cause an effect afterwards. Two independent guards:
+
+- **Layer 1, in-pipeline.** The `HITL_TIMER` fires and the policy's route runs
+  — `Deny`, `Drop`, or `Escalate`.
+- **Layer 2, in the effector.** An intent past its `expires_at_ms` is refused
+  rather than executed. A non-positive expiry reads as *expired*, never as
+  unbounded: the safe reading of "no expiry recorded" is "do not execute".
+
+Late results that find no live continuation are dropped to `.errors` as
+`orphaned_result`.
+
+<Example file="human_in_the_loop.py" region="policy" />
+
+The routing function must be pure, synchronous, and picklable. That is a
+correctness requirement: a timer callback re-executes when its bundle is
+retried, and a fallback that read a clock or called the model would make the
+retry diverge from the original. Every value the policy could need is carried
+on the `FallbackContext`.
+
+*Tested by* `tests/semantics/test_hitl_fail_closed.py`.
+
+## 7. State is protobuf, never pickle
+
+All keyed state is protobuf with deterministic encoding. Pickle would make
+pipeline `--update` compatibility impossible to reason about and would tie the
+wire format to a Python version.
+
+The upgrade rule follows from it: **additive proto changes only**. A breaking
+change requires a `state_schema_version` bump, lazy migration, and a
+golden-blob compatibility test.
+
+*Tested by* `tests/core/test_schema_compat.py` and
+`tests/core/test_coders.py`.
+
+## How these are gated
+
+The invariants are not checked by review alone. The repository runs a
+`semantics` test tier specifically for them — retry determinism under a chaos
+wrapper that forces bundle retries, effectively-once end to end against real
+Kafka/Redis/Flink with SIGKILLed effector workers and a killed TaskManager, and
+state compatibility against golden blobs. That tier gates every release and is
+never skipped or marked flaky.
+
+See [testing and CI](/docs/testing-and-ci) for how the tiers are split and what
+runs where.

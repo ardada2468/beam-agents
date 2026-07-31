@@ -1,0 +1,419 @@
+@import 'tailwindcss';
+@import './pipeline.css';
+
+/*
+ * Design tokens.
+ *
+ * Monochrome first. The only saturated colours on this site name the four
+ * outputs of `RunAgent` — `.output`, `.intents`, `.traces`, `.errors` — and
+ * they mean the same thing everywhere they appear: in the pipeline diagram, in
+ * the legend, and on the docs page for each stream. Colour here is a key, not
+ * decoration, which is why there is no accent for accent's sake.
+ *
+ * Every foreground/background pair is checked for WCAG 2.1 AA contrast by
+ * `scripts/check_a11y.mjs`, in both themes, from these values.
+ */
+
+@theme {
+  --font-sans:
+    'Instrument Sans Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: light;
+
+  --paper: #ffffff;
+  --paper-2: #f6f6f4;
+  --paper-3: #edede9;
+  --ink: #0b0c0e;
+  --ink-2: #4a4e54;
+  --ink-3: #63676d;
+  --rule: #e2e2dd;
+  --rule-2: #8e8e87;
+  --link: #14448f;
+  --focus: #0f62d6;
+
+  /* Stream key. Used only where the stream is the subject. */
+  --s-output: #0b0c0e;
+  --s-intents: #8a5205;
+  --s-traces: #3c5c78;
+  --s-errors: #9e2a18;
+
+  --measure: 72ch;
+
+  /* Aliases kept so existing content components need no rewrite. */
+  --bg: var(--paper);
+  --bg-subtle: var(--paper-2);
+  --bg-inset: var(--paper-3);
+  --fg: var(--ink);
+  --fg-muted: var(--ink-2);
+  --fg-faint: var(--ink-3);
+  --border: var(--rule);
+  --border-strong: var(--rule-2);
+  --accent: var(--link);
+  --accent-fg: #ffffff;
+  --accent-subtle: var(--paper-2);
+  --status-stable: #1f5c38;
+  --status-experimental: #8a5205;
+  --status-partial: #8a5205;
+  --status-planned: #5c5f66;
+  --warn-bg: #fbf6ea;
+  --warn-border: #cbab63;
+  --warn-fg: #5f4508;
+  --note-bg: #f0f3f8;
+  --note-border: #9aafc9;
+  --note-fg: #143a6b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --paper: #0c0d0f;
+    --paper-2: #141618;
+    --paper-3: #1c1f22;
+    --ink: #ededea;
+    --ink-2: #a7abb0;
+    --ink-3: #8f949a;
+    --rule: #262a2e;
+    --rule-2: #5f666d;
+    --link: #9dbef2;
+    --focus: #6ea4f5;
+
+    --s-output: #ededea;
+    --s-intents: #e0a458;
+    --s-traces: #9bbcdd;
+    --s-errors: #ee9683;
+
+    --accent-fg: #0c0d0f;
+    --status-stable: #74d49f;
+    --status-experimental: #e0a458;
+    --status-partial: #e0a458;
+    --status-planned: #a0a7b4;
+    --warn-bg: #1f1a0d;
+    --warn-border: #6b5520;
+    --warn-fg: #e6c98d;
+    --note-bg: #101820;
+    --note-border: #2f4a66;
+    --note-fg: #a9c8ee;
+  }
+}
+
+/* The explicit toggle must beat the media query in both directions. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --paper: #ffffff;
+  --paper-2: #f6f6f4;
+  --paper-3: #edede9;
+  --ink: #0b0c0e;
+  --ink-2: #4a4e54;
+  --ink-3: #63676d;
+  --rule: #e2e2dd;
+  --rule-2: #8e8e87;
+  --link: #14448f;
+  --focus: #0f62d6;
+  --s-output: #0b0c0e;
+  --s-intents: #8a5205;
+  --s-traces: #3c5c78;
+  --s-errors: #9e2a18;
+  --accent-fg: #ffffff;
+  --status-stable: #1f5c38;
+  --status-experimental: #8a5205;
+  --status-partial: #8a5205;
+  --status-planned: #5c5f66;
+  --warn-bg: #fbf6ea;
+  --warn-border: #cbab63;
+  --warn-fg: #5f4508;
+  --note-bg: #f0f3f8;
+  --note-border: #9aafc9;
+  --note-fg: #143a6b;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --paper: #0c0d0f;
+  --paper-2: #141618;
+  --paper-3: #1c1f22;
+  --ink: #ededea;
+  --ink-2: #a7abb0;
+  --ink-3: #8f949a;
+  --rule: #262a2e;
+  --rule-2: #5f666d;
+  --link: #9dbef2;
+  --focus: #6ea4f5;
+  --s-output: #ededea;
+  --s-intents: #e0a458;
+  --s-traces: #9bbcdd;
+  --s-errors: #ee9683;
+  --accent-fg: #0c0d0f;
+  --status-stable: #74d49f;
+  --status-experimental: #e0a458;
+  --status-partial: #e0a458;
+  --status-planned: #a0a7b4;
+  --warn-bg: #1f1a0d;
+  --warn-border: #6b5520;
+  --warn-fg: #e6c98d;
+  --note-bg: #101820;
+  --note-border: #2f4a66;
+  --note-fg: #a9c8ee;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+  -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16.5px;
+  line-height: 1.6;
+  font-feature-settings: 'cv05' 1;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* --- Structural type ------------------------------------------------------- */
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.display {
+  font-size: clamp(2.6rem, 6.6vw, 4.9rem);
+  line-height: 0.98;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.h-section {
+  font-size: clamp(1.35rem, 2.2vw, 1.7rem);
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  font-size: clamp(1.02rem, 1.35vw, 1.16rem);
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 56ch;
+  text-wrap: pretty;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+/* Hairline rules do the dividing. No cards, no shadows. */
+.rule-top {
+  border-top: 1px solid var(--rule);
+}
+
+.shell {
+  max-width: 78rem;
+  margin-inline: auto;
+  padding-inline: clamp(1.15rem, 4vw, 3rem);
+}
+
+/* --- Shiki dual-theme ------------------------------------------------------ */
+
+.shiki {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+.shiki span {
+  color: var(--shiki-light);
+}
+
+@media (prefers-color-scheme: dark) {
+  .shiki {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg);
+  }
+
+  .shiki span {
+    color: var(--shiki-dark);
+  }
+}
+
+:root[data-theme='dark'] .shiki {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+
+:root[data-theme='dark'] .shiki span {
+  color: var(--shiki-dark);
+}
+
+:root[data-theme='light'] .shiki {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+:root[data-theme='light'] .shiki span {
+  color: var(--shiki-light);
+}
+
+/* --- Prose ----------------------------------------------------------------- */
+
+.prose {
+  max-width: var(--measure);
+}
+
+.prose > * + * {
+  margin-top: 1.05em;
+}
+
+.prose h2 {
+  font-size: 1.42rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin-top: 2.6rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--rule);
+}
+
+.prose h3 {
+  font-size: 1.12rem;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  margin-top: 1.9rem;
+}
+
+.prose h4 {
+  font-size: 0.97rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  color: var(--ink-2);
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.3rem;
+}
+
+.prose ul {
+  list-style: disc;
+}
+
+.prose ol {
+  list-style: decimal;
+}
+
+.prose li + li {
+  margin-top: 0.32rem;
+}
+
+.prose a {
+  text-decoration: underline;
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.855em;
+  background: var(--paper-3);
+  padding: 0.1em 0.32em;
+  border-radius: 2px;
+  overflow-wrap: break-word;
+}
+
+.prose pre {
+  font-family: var(--font-mono);
+  font-size: 0.83rem;
+  line-height: 1.6;
+  padding: 0.95rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow-x: auto;
+}
+
+.prose pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.prose blockquote {
+  border-left: 2px solid var(--rule-2);
+  padding-left: 1rem;
+  color: var(--ink-2);
+}
+
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 2rem 0;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+.prose th,
+.prose td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+.prose th {
+  background: var(--paper-2);
+  font-weight: 600;
+}
+
+.prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.prose table :where(code) {
+  white-space: nowrap;
+}

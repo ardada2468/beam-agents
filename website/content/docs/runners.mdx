@@ -1,0 +1,63 @@
+---
+title: Runners
+summary: Which runners are exercised by which test tier — stated as test coverage, not as a support matrix.
+status: partial
+order: 7
+verifies:
+  - module: src/beam_agents/core/dofn.py
+  - module: docker/compose.yaml
+  - spec: openspec/specs/repo-scaffolding/spec.md
+  - test: tests/conformance/test_direct.py
+  - test: tests/conformance/test_flink.py
+---
+
+Support claims are cheap to make and hard to check, so this page states only
+what the repository actually exercises, and where.
+
+## What runs where today
+
+| Runner | Exercised by | Tier |
+|---|---|---|
+| DirectRunner | The whole unit tier, plus the conformance matrix's DirectRunner leg | Offline, every PR |
+| Flink | Mini-cluster via testcontainers; the conformance matrix's Flink leg and the effectively-once end-to-end gate | Docker-backed, every PR |
+| Dataflow | `-m dataflow` tests against real Dataflow with FakeLLM over HTTP | Nightly only |
+| Spark | Nothing in this repository | Not exercised |
+
+The project's stated v1.0 target is DirectRunner, Dataflow, and Flink, with
+Spark best-effort. That is a goal, and the table above is the current evidence
+for it.
+
+## What the runner has to provide
+
+The requirements come from Beam's Python SDK realities rather than from
+preference:
+
+- **Stateful DoFn support with KV input.** `RunAgent` validates its input is
+  KV-shaped at pipeline-construction time and raises `ValueError` otherwise.
+- **Watermark and real-time timers.** `TTL_TIMER` is event-time; `HITL_TIMER`
+  and `FLUSH_TIMER` are processing-time. A runner without both cannot provide
+  memory GC and fail-closed approvals.
+- **Bundle retry semantics.** The atomic-commit and replay-cache guarantees are
+  stated in terms of bundle retries; a runner that retries differently changes
+  what those guarantees mean.
+
+There is no `MapState` or `OrderedListState` in Beam Python user state, which
+is why bounded maps live inside protobuf blobs, and no portable async DoFn,
+which is why the runtime runs a bridge thread per DoFn instance.
+
+## Not yet implemented
+
+- **Spark is not exercised at all.** No test in this repository runs against
+  Spark. Treat "best-effort" as "unverified".
+- **No published benchmark.** The project states a design budget for runtime
+  overhead — p50 under 15 ms and p99 under 60 ms per activation, excluding
+  model and tool time. There is no benchmark harness in this repository, so
+  that budget is an unmeasured target and no measured figure is published
+  anywhere on this site.
+- **No deployment guide.** Running this on Dataflow or a production Flink
+  cluster is exercised by tests, not documented as an operational procedure.
+
+## Related
+
+- [Testing tiers and CI](/docs/testing-and-ci) — how the legs are split.
+- [The effector](/docs/effector) — the piece that runs outside any runner.

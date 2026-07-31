@@ -1,0 +1,23 @@
+---
+title: Runtime metrics
+summary: The counters and distributions RunAgent publishes, the two identities worth alerting on, and why there are no percentiles.
+status: stable
+order: 2
+verifies:
+  - module: src/beam_agents/observability/metrics.py
+  - module: docs/metrics.md
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/observability/test_metrics.py
+  - test: tests/core/test_dofn_metrics.py
+---
+
+Metrics are published unconditionally — there is no knob to enable them — under
+the Beam user-metrics namespace `beam_agents.runtime`. They surface wherever
+your runner surfaces user metrics.
+
+One thing to know before reading the tables: **Beam distributions carry no
+percentiles.** They report sum, count, min, and max, and Beam's histogram cell
+is marked internal-use-only, so a portable percentile is not available from
+this surface. Percentile work belongs to the trace sink.
+
+<RepoDoc file="docs/metrics.md" />

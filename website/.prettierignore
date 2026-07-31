@@ -1,0 +1,10 @@
+.next
+node_modules
+generated
+pnpm-lock.yaml
+examples
+# MDX content is authored prose. Prettier reflows it (and rewrites tables and
+# JSX inside it), which makes content diffs unreadable and risks changing what
+# a page says. Content correctness is the fidelity checks' job, not a
+# formatter's.
+content

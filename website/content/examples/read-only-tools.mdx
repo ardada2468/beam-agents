@@ -1,0 +1,26 @@
+---
+title: Read-only tools and side effects
+summary: Inline execution for reads, staged intents for writes, and the guard that enforces the split.
+status: stable
+order: 5
+verifies:
+  - example: read_only_tools.py
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/tools/test_side_effect_guard.py
+---
+
+Tools split in two by their `side_effect` flag, and the split is enforced rather than
+advised: a read-only tool runs inline via `ctx.run_tool`, and a `side_effect=True` tool
+raises if called directly.
+
+The example asserts on the refusal itself, so the guarantee is demonstrated rather than
+asserted in prose.
+
+Run it:
+
+```sh
+uv run python website/examples/read_only_tools.py
+```
+
+<Example file="read_only_tools.py" />

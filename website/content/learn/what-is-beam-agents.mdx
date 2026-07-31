@@ -1,0 +1,105 @@
+---
+title: What beam-agents is
+summary: A runtime that turns an agent into a keyed, stateful, fault-tolerant Beam transform — not a framework for writing agents.
+status: stable
+order: 1
+verifies:
+  - symbol: beam_agents.RunAgent
+  - symbol: beam_agents.AgentConfig
+  - module: src/beam_agents/core/transform.py
+  - spec: openspec/specs/tool-registry/spec.md
+  - test: tests/core/test_transform.py
+  - example: fast_path.py
+---
+
+`beam-agents` makes an AI agent a first-class step in an Apache Beam pipeline:
+
+```python
+outputs = keyed_events | RunAgent(my_agent, config=AgentConfig(...))
+```
+
+That single line is the whole proposition. Everything else on this site is
+about what the runtime does around your agent so that the line is safe to run
+in production.
+
+## Runtime, not framework
+
+The governing principle of this project is that **agent authoring belongs
+somewhere else**. LangGraph, Google ADK, Pydantic AI, or a plain async function
+already know how to express a decision loop. What they do not provide is what a
+streaming system needs:
+
+- durable per-key memory that survives worker loss
+- event-time and processing-time semantics
+- side effects that happen effectively once, not "probably once"
+- backpressure-aware scale-out
+- portability across DirectRunner, Dataflow, Flink, and Spark
+
+That list is the product. Any proposal to add prompt templating, an
+orchestration DSL, or agent-authoring abstractions is out of scope by
+construction — the project's own contribution rules reject it.
+
+## What it is for
+
+The target workload is **system-triggered agents**: an event arrives, an agent
+decides, and the decision must be durable, replayable, and horizontally
+scalable. Fraud triage. Anomaly response. Personalization. IoT reaction. Ops
+automation.
+
+It is explicitly **not** for sub-second interactive chat. The runtime's design
+budget for its own overhead is measured in tens of milliseconds per activation,
+and its recovery model assumes a streaming pipeline, not a request/response
+handler. If a human is waiting on a text box, this is the wrong tool.
+
+## The shape of an activation
+
+An activation is one execution of the agent, for one key, inside one
+`process()` call. The agent receives a context and returns an outcome.
+
+<Example file="fast_path.py" region="agent" />
+
+Three things in that function are runtime guarantees rather than conveniences:
+
+1. `ctx.memory` is durable, per-key state. The next event for `acct-1` sees
+   this write; an event for `acct-2` never does.
+2. `ctx.call_model` goes through a replay cache keyed on the request and the
+   activation's position, so a retried bundle costs zero additional provider
+   calls.
+3. If this function raised on line three, **nothing** it did would persist —
+   not the memory write, not the sequence increment. Effects commit atomically
+   with the Beam bundle or not at all.
+
+## Wiring it up
+
+`RunAgent` does not key your elements. It requires a pre-keyed
+`PCollection[KV[bytes, AgentEnvelope]]` and raises `ValueError` at
+pipeline-construction time if it gets anything else — a stateful DoFn cannot
+accept unkeyed input, and failing at construction beats failing on a worker
+twenty minutes into a job.
+
+<Example file="fast_path.py" region="pipeline" />
+
+## What you get back
+
+`RunAgent` returns four named outputs, and a complete pipeline consumes all of
+them:
+
+| Output     | Carries                                                        |
+| ---------- | -------------------------------------------------------------- |
+| `.output`  | Terminal agent outputs, as bytes.                              |
+| `.intents` | `ToolIntent` side-effect requests, bound for the outbox topic. |
+| `.traces`  | `TraceEvent` observability records.                            |
+| `.errors`  | `ActivationError` dead letters.                                |
+
+`.errors` is the one that matters most and gets ignored most. Element-level
+failures never fail the bundle — they land here — and a dead letter means the
+activation committed nothing at all.
+
+## Where to go next
+
+- [Architecture](/learn/architecture) — the dataflow shape and the two paths
+  through `RunAgent`.
+- [Correctness invariants](/learn/correctness-invariants) — the seven rules the
+  implementation is held to.
+- [Install](/learn/install) — how to get it today, given that it is not
+  released.
