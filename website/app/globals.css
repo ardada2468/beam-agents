@@ -44,6 +44,13 @@
 
   --measure: 72ch;
 
+  /*
+   * The page gutter, named because two things need to agree on it: `.shell`,
+   * which spends it as padding, and `.rule-grid`, which spends it in reverse to
+   * pull its cell padding back out to the shell's content edge.
+   */
+  --gutter: clamp(1.15rem, 4vw, 3rem);
+
   /* Aliases kept so existing content components need no rewrite. */
   --bg: var(--paper);
   --bg-subtle: var(--paper-2);
@@ -194,6 +201,18 @@ a:hover {
   text-decoration: underline;
 }
 
+/*
+ * ...except a button, which is a box, not a run of text.
+ *
+ * The rule above is unlayered, so it beats the Tailwind `no-underline` utility
+ * a call site would otherwise reach for, and it was drawing a line through the
+ * filled button in the hero. `.btn` itself lives in `chrome.css`; the exception
+ * lives here, next to the rule it has to beat.
+ */
+.btn:hover {
+  text-decoration: none;
+}
+
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
@@ -252,7 +271,165 @@ a:hover {
 .shell {
   max-width: 78rem;
   margin-inline: auto;
-  padding-inline: clamp(1.15rem, 4vw, 3rem);
+  padding-inline: var(--gutter);
+}
+
+/* --- Vertical rhythm ------------------------------------------------------- */
+
+/*
+ * Section bands.
+ *
+ * Two weights, not one. A page where every section is padded identically reads
+ * as a list of equal claims; this one has an argument, and the hero and the
+ * pipeline diagram are the two parts of it that have to land. They get
+ * `.band--lead`; the sections that support them share the narrower `.band`, so
+ * the difference in air is what tells a reader which is which.
+ */
+.band {
+  padding-block: 3.25rem;
+}
+
+.band--lead {
+  padding-block: 4.25rem;
+}
+
+@media (min-width: 40rem) {
+  .band {
+    padding-block: 4.5rem;
+  }
+
+  .band--lead {
+    padding-block: 6rem;
+  }
+}
+
+/* --- Hairline layouts ------------------------------------------------------ */
+
+/*
+ * Cells divided by hairlines instead of boxed as cards.
+ *
+ * The grid paints itself `--rule` and every cell paints itself `--paper`, so
+ * the 1px gaps are the only rule colour that shows through — one declaration
+ * instead of a border per edge, and no doubled lines where cells meet.
+ *
+ * Two things this depends on. The item count must fill every row at every
+ * column count, or the empty cell shows as a solid block of rule colour rather
+ * than as a line; the four outputs divide exactly by 1, 2, and 4. And the cell
+ * padding is pulled back out with a negative inline margin, so the first cell's
+ * label starts on the same vertical as the heading above it instead of being
+ * indented by a card's worth of padding. That pull-back is capped at the page
+ * gutter with `min()`, so it can never drag the grid off the side of a narrow
+ * screen.
+ */
+.rule-grid {
+  --cell-pad-x: min(1.25rem, var(--gutter));
+  display: grid;
+  gap: 1px;
+  background: var(--rule);
+}
+
+.rule-grid > * {
+  background: var(--paper);
+  padding-block: 1.25rem;
+}
+
+@media (min-width: 40rem) {
+  .rule-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-inline: calc(var(--cell-pad-x) * -1);
+  }
+
+  .rule-grid > * {
+    padding-inline: var(--cell-pad-x);
+  }
+}
+
+@media (min-width: 64rem) {
+  .rule-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/*
+ * Two lists that have to stay level with each other.
+ *
+ * The built and not-built columns are read across as much as down, so their
+ * hairlines have to line up. Two independent lists cannot manage that: one item
+ * that wraps to a second line in either column pushes every rule below it out
+ * of step with its neighbour, which is what happened to the right-hand column
+ * everywhere between the two-column breakpoint and about 1100px. A subgrid
+ * makes both columns share the parent's rows, so a wrapped item grows the row
+ * on both sides at once and the rules stay level.
+ *
+ * `--ledger-rows` is the item count, set by the call site: a subgrid can only
+ * borrow rows the parent has declared explicitly.
+ */
+.ledger {
+  /*
+   * The call site overrides this with the real item count. The fallback is here
+   * because `repeat(var(--ledger-rows), auto)` with the variable unset makes
+   * the whole `grid-template-rows` declaration invalid, which would leave the
+   * subgrids with no rows to borrow and collapse both columns into one.
+   */
+  --ledger-rows: 6;
+  display: grid;
+  row-gap: 2.5rem;
+}
+
+.ledger__list {
+  display: grid;
+  row-gap: 0.65rem;
+}
+
+.ledger__head {
+  margin-bottom: 1rem;
+}
+
+.ledger__note {
+  margin-top: 1rem;
+}
+
+@media (min-width: 40rem) {
+  .ledger {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 3rem;
+    row-gap: 0;
+  }
+
+  /*
+   * Everything that declares rows is behind the support query, including the
+   * rows themselves: without subgrid the two columns are the only grid items,
+   * and a row track per item would leave six empty rows of gutter hanging under
+   * them. A browser that cannot do this falls back to two plain columns, which
+   * is what the page looked like before.
+   */
+  @supports (grid-template-rows: subgrid) {
+    .ledger {
+      /* The heading, one row per item, then the trailing link. */
+      grid-template-rows: auto repeat(var(--ledger-rows), auto) auto;
+      row-gap: 0.65rem;
+    }
+
+    .ledger > * {
+      display: grid;
+      grid-row: 1 / -1;
+      grid-template-rows: subgrid;
+    }
+
+    .ledger__list {
+      grid-row: 2 / span var(--ledger-rows);
+      grid-template-rows: subgrid;
+    }
+
+    /* The shared row gap already supplies 0.65rem of the step below each. */
+    .ledger__head {
+      margin-bottom: 0.35rem;
+    }
+
+    .ledger__note {
+      margin-top: 0.35rem;
+    }
+  }
 }
 
 /* --- Shiki dual-theme ------------------------------------------------------ */
@@ -387,6 +564,15 @@ a:hover {
   margin: 2rem 0;
 }
 
+/*
+ * Tables.
+ *
+ * Two shapes arrive here. A component-built table (`ClaimTable`, the API index)
+ * comes wrapped in `.table-scroll`, which owns the frame and the scrolling. A
+ * pipe table written in markdown arrives bare, as a direct child of `.prose`,
+ * so `.prose > table` has to carry both itself — hence the `display: block`,
+ * which is what lets a table scroll at all.
+ */
 .table-scroll {
   overflow-x: auto;
   border: 1px solid var(--rule);
@@ -397,22 +583,43 @@ a:hover {
   border-collapse: collapse;
   width: 100%;
   font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.prose > table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
 }
 
 .prose th,
 .prose td {
   text-align: left;
-  padding: 0.5rem 0.75rem;
+  padding: 0.55rem 0.85rem;
   border-bottom: 1px solid var(--rule);
   vertical-align: top;
+  /* Keeps a many-column table scrolling rather than crushing every column to a
+     word per line. Narrow enough that a two- or three-column table still fits a
+     390px screen without a scrollbar. */
+  min-width: 6.5rem;
 }
 
 .prose th {
   background: var(--paper-2);
   font-weight: 600;
+  text-wrap: balance;
 }
 
-.prose tbody tr:last-child td {
+/* The header is a different kind of row, so it gets the stronger rule. */
+.prose thead th {
+  border-bottom-color: var(--rule-2);
+}
+
+/* Row headers are cells too: `td` alone left a stub of rule under column one. */
+.prose tbody tr:last-child > * {
   border-bottom: 0;
 }
 
