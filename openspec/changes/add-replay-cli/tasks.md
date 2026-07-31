@@ -17,7 +17,7 @@
 
 - [x] 3.1 Route the `export_request` payload variant in `core/dofn.py::process` to a read-only handler: read `MEMORY`, `CONTINUATION`, `LLM_CACHE`, `PENDING`, `SEQ`; build `StateSnapshot` with `snapshot_at_ms = envelope.event_time_ms` and the echoed `request_id`; yield on the `.snapshots` tag; touch no state, timer, or counter. — the branch is five reads and one yield; assembly lives in the new pure `core/snapshot.py::build_snapshot`, which copies blobs verbatim (no migration at export).
 - [x] 3.2 Expose `.snapshots` as a tagged output on the transform and add `snapshots_to` to `AgentConfig`, resolved through `DefaultSinkResolver` with a deterministic-serialization step keyed by `entity_key`, mirroring `traces_to`. — `SNAPSHOTS_TAG`, `_WriteSnapshots`, `RunAgentOutputs.snapshots`; `bigquery://` refused for this field (see Revision 3).
-- [ ] 3.3 Re-check `mutation-baseline.toml` ceilings for `core/dofn.py` / `core/transform.py` after the new branches land. (deferred: mutation gate runs in CI)
+- [x] 3.3 Re-check `mutation-baseline.toml` ceilings for `core/dofn.py` / `core/transform.py` after the new branches land. — re-checked under close-core-mutation-gaps. `dofn.py` holds at 3. `transform.py` rises 409 → 474, and the measured attribution (recorded in `mutation-baseline.toml`) puts the whole +68 of new mutants on the `snapshots_to` sink this change added: `_WriteSnapshots`, the `snapshots_to` arms of `DefaultSinkResolver.validate`/`resolve`, the `.snapshots` wiring in `RunAgent.expand`, and the `_encoded_transform` extraction. All of it is deselected-suite-only territory, per that file's standing reason. `snapshot.py` regressed 0 → 2 and is NOT ceilinged: `serialize_snapshot` is a pure function, now driven directly from `tests/core/test_dofn_export.py`, and its two remaining survivors are declared-equivalent `deterministic=` flips.
 
 ## 4. Replay package
 
@@ -41,7 +41,7 @@
 - [x] 6.4 Coverage ratchet: branch coverage does not decrease; update `coverage-baseline.toml` only to lock in a gain. — 0.9028 → 0.9070, locked in with a one-line note.
 - [x] 6.5 `uv run pre-commit run --all-files` (deferred: the `precommit` dependency group is outside the mandated `lint`/`typecheck`/`test` sync for this worktree, and its protobuf-drift hook needs `grpcio-tools`; the same drift check was performed directly — `scripts/gen_proto.sh` was re-run with the locked toolchain and the regenerated bindings are committed) <!-- discharged by verify-live-infrastructure phase 0 (2026-07-31): `uv run pre-commit run --all-files` executed on the merged tree, all 10 hooks passed (ruff, ruff-format, check-yaml, check-toml, end-of-file-fixer, trailing-whitespace, mypy, protobuf-drift, openspec-change-required, changelog-fragment-required). See verification-report.md. -->
 - [x] 6.6 `openspec validate add-replay-cli --strict` — green after the artifact revisions below.
-- [ ] 6.7 `make mutation` (deferred: mutation gate runs in CI)
+- [x] 6.7 `make mutation` — discharged by close-core-mutation-gaps: `make mutation` was run on the combined tree (2475 core mutants -- killed 1975, no tests 477, survived 23) and the gate passes; every survivor is a declared equivalent with a written reason in `mutation-exclusions.toml`; see 3.3 for this change's ceiling movement.
 
 ## Revisions
 

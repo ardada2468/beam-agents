@@ -6,7 +6,7 @@ named `RunAgentOutputs`, and sink-URI attachment.
 from __future__ import annotations
 
 import sys
-from dataclasses import FrozenInstanceError, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 from unittest import mock
 
@@ -190,23 +190,13 @@ class _RejectingSinkResolver:
 
 
 # --- Requirement: AgentConfig bundles runtime configuration and validates ------
-
-
-def test_valid_config_constructs_and_is_immutable() -> None:
-    config = AgentConfig(provider_factory=make_pong_provider)
-    assert config.activation_timeout_s == 30.0
-    assert config.ttl_ms == 3_600_000
-    assert config.cancel_grace_s == 5.0
-    with pytest.raises(FrozenInstanceError):
-        config.ttl_ms = 1  # type: ignore[misc]
-
-
-@pytest.mark.parametrize("knob", ["activation_timeout_s", "ttl_ms", "cancel_grace_s"])
-@pytest.mark.parametrize("bad_value", [0, -1])
-def test_non_positive_knob_is_rejected(knob: str, bad_value: float) -> None:
-    kwargs: dict[str, Any] = {knob: bad_value}
-    with pytest.raises(ValueError, match=knob):
-        AgentConfig(provider_factory=make_pong_provider, **kwargs)
+#
+# The runner-free half of this requirement — the numeric knobs' positivity
+# boundary and immutability — lives in `test_config_validation.py`, which the
+# mutation selection reaches; this suite drives TestPipeline/TestStream and is
+# deselected under mutmut, so a mutant in the shared `_require_positive`
+# validator could never be killed from here. The sink-URI half stays put: see
+# that module's docstring.
 
 
 def test_config_carries_a_default_hitl_policy() -> None:

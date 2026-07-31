@@ -14,6 +14,7 @@ idempotent upsert keyed by `(entity_key, seq)`, bounded on the async bridge.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -21,10 +22,11 @@ from apache_beam.utils.timestamp import Timestamp
 
 from beam_agents._protos import Continuation, LlmCacheBlob, MemoryBlob, ToolIntent
 from beam_agents.core.agent import Complete
+from beam_agents.core.bridge import ActivationTimeout
 from beam_agents.core.context import ActivationContext
 from beam_agents.core.dofn import REASON_TTL_WIPED_SUSPENSION, _AgentDoFn
-from beam_agents.memory import FlushToLongterm, Memory
-from beam_agents.memory.stores import InMemoryMemoryStore, MemoryRecord
+from beam_agents.memory import ExpiringMemory, FlushToLongterm, Memory
+from beam_agents.memory.stores import InMemoryMemoryStore, MemoryRecord, MemoryStore
 from beam_agents.memory.stores.base import _encode_envelope
 from beam_agents.model.fake import FakeLLM
 from tests.core._dofn_fakes import FakeBag, FakeSum, FakeValue
@@ -73,6 +75,7 @@ class _Expiry:
         memory_blob: MemoryBlob | None = None,
         continuation: Continuation | None = None,
         monkeypatch: pytest.MonkeyPatch,
+        activation_timeout_s: float = 30.0,
     ) -> None:
         if store is not None:
             monkeypatch.setattr(
@@ -84,6 +87,8 @@ class _Expiry:
             provider_factory=FakeLLM,
             longterm_memory="memory://" if store is not None else None,
             on_expire=on_expire,
+            activation_timeout_s=activation_timeout_s,
+            cancel_grace_s=0.5,
         )
         self.memory = FakeValue(memory_blob)
         self.continuation = FakeValue(continuation)
@@ -211,6 +216,62 @@ def test_empty_working_memory_is_wiped_without_a_store_call(
 
     assert store.saved == []
     assert all(state.cleared for state in expiry.states)
+
+
+def test_a_hook_without_a_store_refuses_before_touching_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `AgentConfig` refuses `on_expire` without `longterm_memory`, so a DoFn in
+    # this state was wired past the config -- and the hook has nowhere to flush
+    # to. Refusing names the field to set; the alternatives are a wipe that
+    # silently discards exactly the memory the hook exists to preserve, or an
+    # `AttributeError` on `None` that names nothing. The guard checks *both*
+    # handles because either one missing makes the flush impossible, so a
+    # store-less bridge-having DoFn -- which is every DoFn that reached
+    # `setup()` -- must still be refused.
+    expiry = _Expiry(
+        None, on_expire=FlushToLongterm(), memory_blob=_memory_blob(), monkeypatch=monkeypatch
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        expiry.fire()
+
+    assert str(exc_info.value) == (
+        "AgentConfig.on_expire is set but no long-term store is available; "
+        "set AgentConfig.longterm_memory to a store URI"
+    )
+    # Fail-closed, like the flush-failure route: nothing wiped.
+    assert not any(state.cleared for state in expiry.states)
+
+
+def test_the_hook_is_bounded_by_the_activation_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The hook is the one place the TTL callback performs a real side effect,
+    # and it runs against an external store on the shared bridge. Unbounded, a
+    # wedged store stalls the worker with no timer bundle ever failing; bounded,
+    # it surfaces as a failed bundle the runner retries. The hook here outlasts
+    # the 50ms budget but finishes in ~300ms, so a submission that dropped its
+    # timeout would *complete* rather than hang -- an assertion failure, not a
+    # test that never returns.
+    store = _RecordingStore()
+
+    async def slow_flush(store: MemoryStore, expiring: ExpiringMemory) -> None:
+        await asyncio.sleep(0.3)
+
+    expiry = _Expiry(
+        store,
+        on_expire=slow_flush,
+        memory_blob=_memory_blob(),
+        monkeypatch=monkeypatch,
+        activation_timeout_s=0.05,
+    )
+
+    with pytest.raises(ActivationTimeout):
+        expiry.fire()
+
+    assert store.saved == []
+    assert not any(state.cleared for state in expiry.states)
 
 
 def test_the_flush_runs_before_the_wipe(monkeypatch: pytest.MonkeyPatch) -> None:

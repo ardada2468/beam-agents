@@ -1000,6 +1000,29 @@ async def test_a_batch_activation_stamps_its_size_and_trigger_on_the_trace() -> 
     assert start.attributes[TRACE_BATCH_TRIGGER] == TRIGGER_SIZE
 
 
+async def test_a_batch_activation_with_no_named_trigger_records_an_empty_one() -> None:
+    # The trigger attribute is whatever the caller named, and nothing else. The
+    # DoFn always names one, so the parameter's default is what a *new* flush
+    # caller that forgets would produce -- and it has to be empty, meaning
+    # "unnamed", rather than a placeholder a trace query would count as a real
+    # trigger alongside `size` and `timer`. Same rule the rest of the runtime
+    # follows: unknown is absent or empty, never invented.
+    result = await run_activation(
+        batch_join_agent,
+        entity_key=b"k",
+        seq=0,
+        now_ms=3000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        events=[b"a"],
+    )
+
+    start = result.traces[0]
+    assert start.attributes[TRACE_BATCH_SIZE] == "1"
+    assert start.attributes[TRACE_BATCH_TRIGGER] == ""
+
+
 async def test_a_per_event_activation_carries_no_batch_attributes() -> None:
     # Under `NONE` nothing about batching appears anywhere: no attribute, no
     # empty string, nothing for a trace consumer to have to ignore.

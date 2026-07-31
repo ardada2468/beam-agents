@@ -108,4 +108,11 @@
 # come from the full lane, which is a workflow change: the quality job would need
 # the compose services the integration lane depends on. Until that happens, this
 # baseline stays offline-scoped and 0.9358 is recorded here as informational.
-branch_rate = 0.9164
+#
+# close-core-mutation-gaps: 0.9180, still offline-scoped. The change adds no
+# `src/`, so the gain is purely reached branches: the flush path's three failure
+# exits, the store-lifecycle and summarizer wiring in `_activate`, `migrate_to_
+# current`'s multi-step chain walk, and the construction-time rejections in
+# `ActivationContext` were all previously reachable only from suites this lane
+# deselects, or from no test at all.
+branch_rate = 0.9180

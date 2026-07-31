@@ -40,11 +40,13 @@ from beam_agents.core.dofn import (
 from beam_agents.core.loop import ActivationResult
 from beam_agents.core.transform import AgentConfig
 from beam_agents.hitl import HitlPolicy
-from beam_agents.memory import Memory
+from beam_agents.memory import Memory, SummarizeCompactor
 from beam_agents.memory.facade import HARD_CAP_BYTES
+from beam_agents.memory.stores import InMemoryMemoryStore
+from beam_agents.model.client import LlmRequest
 from beam_agents.model.fake import FakeLLM, match_any, respond_with
 from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
-from beam_agents.observability.metrics import ActivationTally
+from beam_agents.observability.metrics import COUNTER_LONGTERM_UPSERTS, ActivationTally
 from tests.core._dofn_fakes import (
     FakeBag,
     FakeSum,
@@ -121,6 +123,8 @@ class _Driver:
         seq: int = 0,
         monotonic_ns: Any = None,
         compactor: Any = None,
+        summarizer: Any = None,
+        longterm_memory: str | None = None,
     ) -> None:
         self.metrics = RecordingMetrics()
         self.dofn = _AgentDoFn(
@@ -132,6 +136,8 @@ class _Driver:
             metrics=self.metrics,
             monotonic_ns=monotonic_ns if monotonic_ns is not None else scripted_clock(),
             compactor=compactor,
+            summarizer=summarizer,
+            longterm_memory=longterm_memory,
         )
         self.memory = FakeValue(memory_blob if memory_blob is not None else MemoryBlob())
         self.continuation = FakeValue(continuation)
@@ -723,6 +729,113 @@ def test_opting_out_restores_strict_overflow() -> None:
         f"old-{index}" for index in range(6)
     }
     assert driver.seq.value == 0
+
+
+# --- Requirement: the DoFn's configuration reaches the activation ------------
+#
+# `_activate` is the seam between the DoFn's per-instance configuration and the
+# loop driver. Each knob below is forwarded across it and used only *inside* the
+# activation, so a knob dropped in transit produces an activation that runs to a
+# perfectly ordinary-looking completion with the feature silently off — which
+# `test_dofn_pipeline` cannot catch either, since it configures the same knobs
+# through the same seam.
+
+
+def _summarizer(*, trigger_bytes: int) -> SummarizeCompactor:
+    """Tier-2 compactor folding the `log` ring into a `summary` entry."""
+    return SummarizeCompactor(
+        build_request=lambda items, prior: LlmRequest(
+            model_id="summarizer",
+            messages=[[item.decode() for item in items], (prior or b"").decode()],
+            tools_schema=None,
+            sampling_params=None,
+        ),
+        extract_summary=lambda response: b"summary:" + response,
+        source_keys=("log",),
+        keep_recent=2,
+        trigger_bytes=trigger_bytes,
+    )
+
+
+async def appending_agent(ctx: ActivationContext) -> Complete:
+    """Append eight items to the `log` ring — enough to cross a small trigger."""
+    for index in range(8):
+        ctx.memory.append("log", f"item-{index}".encode(), max_items=64)
+    return Complete(output=b"appended")
+
+
+def test_a_configured_summarizer_reaches_the_activation() -> None:
+    # Tier-2 compaction runs inside the activation, so the DoFn's only part in
+    # it is handing the summarizer across. Everything else about the committed
+    # element — the output, the seq increment, the working-tier writes — is
+    # identical whether or not it arrives, and the summary entry is the one
+    # thing that is not.
+    driver = _Driver(appending_agent, summarizer=_summarizer(trigger_bytes=1))
+
+    emitted = driver.process(_event())
+
+    assert _main(emitted) == [b"appended"]
+    committed = Memory(driver.memory.value, now_ms=_NOW_MS)
+    assert committed.get("summary") == b"summary:pong"
+    assert committed.ring("log") == (b"item-6", b"item-7")
+
+
+def test_an_unconfigured_summarizer_leaves_the_ring_whole() -> None:
+    # The opt-out shape, so the assertion above is a statement about the
+    # summarizer rather than about `appending_agent`.
+    driver = _Driver(appending_agent)
+
+    driver.process(_event())
+
+    committed = Memory(driver.memory.value, now_ms=_NOW_MS)
+    assert committed.get("summary") is None
+    assert len(committed.ring("log")) == 8
+
+
+async def longterm_saving_agent(ctx: ActivationContext) -> Complete:
+    """Stage three long-term upserts, then complete.
+
+    Three rather than one so the upsert counter is a count: `incr(name)`
+    defaults to a step of 1, which a single-upsert activation cannot tell from
+    `incr(name, len(upserts))`.
+    """
+    for index in range(3):
+        ctx.memory.longterm.save(f"profile-{index}", b"v1")
+    return Complete(output=b"saved")
+
+
+def test_the_configured_long_term_store_reaches_the_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The store the DoFn built in `setup()` is what makes `ctx.memory.longterm`
+    # exist at all; without it the accessor raises and the element dead-letters
+    # instead of committing. The commit-tail flush runs inside the activation,
+    # so the store's own record is the proof it arrived, and the counter is the
+    # DoFn's own accounting of what that flush wrote.
+    store = InMemoryMemoryStore()
+    monkeypatch.setattr("beam_agents.core.dofn.build_memory_store", lambda scheme, parts: store)
+    driver = _Driver(longterm_saving_agent, longterm_memory="memory://")
+
+    emitted = driver.process(_event())
+
+    assert _main(emitted) == [b"saved"]
+    assert _tagged(emitted, "errors") == []
+    # One count per upsert the commit-tail flush wrote, not one per activation.
+    assert driver.metrics.counters[COUNTER_LONGTERM_UPSERTS] == 3
+
+
+def test_without_a_configured_store_the_same_agent_dead_letters() -> None:
+    # The opt-out shape of the same wiring: no URI, no store, and the accessor
+    # raises actionably rather than silently dropping the save.
+    driver = _Driver(longterm_saving_agent)
+
+    emitted = driver.process(_event())
+
+    assert _main(emitted) == []
+    (error,) = _tagged(emitted, "errors")
+    assert error.reason == REASON_ERROR
+    assert "AgentConfig.longterm_memory" in error.detail
+    assert COUNTER_LONGTERM_UPSERTS not in driver.metrics.counters
 
 
 if __name__ == "__main__":  # pragma: no cover

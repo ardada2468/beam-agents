@@ -70,3 +70,46 @@
 "beam_agents.core.error_records.x_serialize_error_envelope__mutmut_10" = "`record.SerializeToString(deterministic=False)` is byte-identical to `deterministic=True`: the flag only orders `map<>` fields and ActivationErrorRecord has none."
 "beam_agents.core.error_records.x_serialize_error_envelope__mutmut_11" = "`envelope.SerializeToString(deterministic=None)` is byte-identical to `deterministic=True`: the flag only orders `map<>` fields and AgentEnvelope has none."
 "beam_agents.core.error_records.x_serialize_error_envelope__mutmut_12" = "`envelope.SerializeToString(deterministic=False)` is byte-identical to `deterministic=True`: the flag only orders `map<>` fields and AgentEnvelope has none."
+# `typing.cast(typ, val)` returns `val` untouched and never inspects `typ` --
+# it exists for the type checker and is erased at runtime. Every mutation of a
+# `cast` call's FIRST argument is therefore equivalent by construction, and the
+# type checker (which is the only consumer that could tell them apart) does not
+# see the generated mutant tree at all. The seven below are exactly the `cast`
+# first-argument mutants in migration.py; `mypy --strict` remains the gate on
+# the real annotations.
+"beam_agents.core.migration.x_migrate_to_current__mutmut_28" = "`cast(None, step(migrated))` returns the same object as `cast(\"_M\", ...)`: `typing.cast` ignores its type argument at runtime."
+"beam_agents.core.migration.x_migrate_to_current__mutmut_32" = "`cast(\"XX_MXX\", ...)` returns the same object as `cast(\"_M\", ...)`: the type argument is a string the runtime never resolves."
+"beam_agents.core.migration.x_migrate_to_current__mutmut_33" = "`cast(\"_m\", ...)` returns the same object as `cast(\"_M\", ...)`: the type argument is a string the runtime never resolves."
+"beam_agents.core.migration.x_migration__mutmut_7" = "`cast(None, step)` stores the same callable in `_REGISTRY` as `cast(\"Callable[[Message], Message]\", step)`: `typing.cast` ignores its type argument at runtime."
+"beam_agents.core.migration.x_migration__mutmut_11" = "`cast(\"XXCallable[[Message], Message]XX\", step)` stores the identical callable: the type argument is a string the runtime never resolves."
+"beam_agents.core.migration.x_migration__mutmut_12" = "`cast(\"callable[[message], message]\", step)` stores the identical callable: the type argument is a string the runtime never resolves."
+"beam_agents.core.migration.x_migration__mutmut_13" = "`cast(\"CALLABLE[[MESSAGE], MESSAGE]\", step)` stores the identical callable: the type argument is a string the runtime never resolves."
+# `if version > current: raise` is guarded by the `if version == current:
+# return` immediately above it, so the comparison is only ever evaluated when
+# `version != current` -- the one input that distinguishes `>` from `>=` cannot
+# reach this line. The strict operator stays in the source because it is what
+# the line means on its own terms; the equality fast path is an optimization
+# (identity, no copy), not the raise's precondition.
+"beam_agents.core.migration.x_migrate_to_current__mutmut_6" = "`version >= current` is identical to `version > current` here: the preceding `if version == current: return message` makes equality unreachable at this line."
+# `flush_trigger`'s default, in the two methods that carry it. Its only consumer
+# is `_record_commit`'s `flush_trigger == TRIGGER_SIZE`, which selects the size
+# counter or the timer one. The default is reached only when a caller omits the
+# argument -- and every omitted value that is not the literal `"size"` selects
+# the same counter, so no input distinguishes `""` from any other non-`"size"`
+# string. (The forwarded value itself is asserted: a size flush counts
+# `batch_flushes_size` and a timer flush `batch_flushes_timer`, in
+# test_dofn_batching.py.)
+"beam_agents.core.dofn.xǁ_AgentDoFnǁ_commit__mutmut_1" = "Changing the `flush_trigger=\"\"` default is unobservable: `_commit` only forwards it to `_record_commit`, whose sole use is `== TRIGGER_SIZE`, false for every non-`\"size\"` default alike."
+"beam_agents.core.dofn.xǁ_AgentDoFnǁ_record_commit__mutmut_1" = "Changing the `flush_trigger=\"\"` default is unobservable: its sole use is `flush_trigger == TRIGGER_SIZE`, which is false for every non-`\"size\"` default alike, so both select the timer counter."
+# The same `SerializeToString(deterministic=...)` shape as the four
+# error_records entries above, for the snapshots sink encoding. The flag orders
+# `map<>` fields and nothing else; the ONLY map in the whole schema is
+# `TraceEvent.attributes` (protos/beam_agents.proto), and `StateSnapshot`
+# embeds `MemoryBlob`, `LlmCacheBlob`, `Continuation` and `ToolIntent` -- none
+# of which reaches a `TraceEvent`. All three values therefore produce
+# byte-identical output today, and the byte-stability tests in
+# test_dofn_export.py cannot distinguish them. The flag stays in the source as
+# a guard for additive schema evolution: the day any embedded message gains a
+# map, these become killable by those same tests.
+"beam_agents.core.snapshot.x_serialize_snapshot__mutmut_1" = "`snapshot.SerializeToString(deterministic=None)` is byte-identical to `deterministic=True`: the flag only orders `map<>` fields and no message reachable from StateSnapshot has one."
+"beam_agents.core.snapshot.x_serialize_snapshot__mutmut_2" = "`snapshot.SerializeToString(deterministic=False)` is byte-identical to `deterministic=True`: the flag only orders `map<>` fields and no message reachable from StateSnapshot has one."

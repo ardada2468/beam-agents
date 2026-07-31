@@ -128,6 +128,48 @@ async def test_below_the_trigger_no_model_call_happens() -> None:
     assert result.tally.llm_calls == 0
 
 
+def _staged_size_bytes() -> int:
+    """The exact `memory.size_bytes` `appending_agent` leaves staged.
+
+    Recomputed here through the same facade the driver reads rather than
+    hard-coded: the encoding is `Memory`'s business, and a literal would go
+    stale the first time it changed.
+    """
+    memory = Memory(MemoryBlob(), now_ms=_NOW_MS)
+    for index in range(_ITEMS):
+        memory.append("log", f"item-{index:02d}".encode(), max_items=64)
+    return memory.size_bytes
+
+
+@pytest.mark.parametrize(
+    ("offset", "expect_compaction"),
+    [(0, True), (1, False)],
+)
+async def test_the_trigger_fires_at_the_threshold_and_not_one_byte_above(
+    offset: int, expect_compaction: bool
+) -> None:
+    # "the driver runs `compact` if and only if the staged `memory.size_bytes`
+    # has *reached*" the trigger -- so the threshold itself is inside the range.
+    # Pinned at exactly `size_bytes` and at `size_bytes + 1`: those are the two
+    # adjacent values that tell `>=` from `>`, and every other trigger in the
+    # suite sits far enough away that both comparisons agree.
+    provider = _provider()
+
+    result = await run_activation(
+        appending_agent,
+        entity_key=_KEY,
+        seq=0,
+        now_ms=_NOW_MS,
+        provider=provider,
+        memory_blob=None,
+        cache_blob=None,
+        summarizer=_summarizer(trigger_bytes=_staged_size_bytes() + offset),
+    )
+
+    assert provider.call_count == (1 if expect_compaction else 0)
+    assert (_committed(result.memory_blob).get("summary") is not None) is expect_compaction
+
+
 async def test_an_unconfigured_summarizer_leaves_the_activation_untouched() -> None:
     # Opt-in by construction: `AgentConfig.summarizer` defaults to None and the
     # driver then behaves exactly as before this change.
