@@ -56,4 +56,5 @@ nav:
       - Adaptive batching: batching.md
       - Runtime metrics: metrics.md
       - Trace delivery: traces.md
+      - State export and replay: replay.md
       - Releasing: releasing.md

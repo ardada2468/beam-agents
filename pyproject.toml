@@ -86,11 +86,14 @@ memory-stores = [
   "sqlalchemy[asyncio]",
 ]
 
-# The effector is a service, so it gets a console entry point. It is the only
-# executable this package ships; the runtime itself is a library embedded in a
-# Beam pipeline.
+# The two executables this package ships; the runtime itself is a library
+# embedded in a Beam pipeline. The effector is a service that runs outside Beam;
+# the replay CLI is an operator tool that reconstructs one activation from an
+# exported StateSnapshot plus its trace and re-runs it locally. Neither is part
+# of the public API surface (`beam_agents/__init__.py` re-exports neither).
 [project.scripts]
 beam-agents-effector = "beam_agents.effector.__main__:main"
+beam-agents-replay = "beam_agents.replay.__main__:main"
 
 [dependency-groups]
 dev = [
@@ -629,6 +632,13 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 [[tool.mypy.overrides]]
 module = "tests.semantics.test_hitl_fail_closed"
+disable_error_code = ["no-untyped-call"]
+
+# Same Beam-untyped-API relaxation for the replay reproduction gate, which
+# drives TestPipeline/TestStream to produce the activation it then replays
+# offline. Everything non-Beam in the module stays strictly typed.
+[[tool.mypy.overrides]]
+module = "tests.semantics.test_replay_reproduction"
 disable_error_code = ["no-untyped-call"]
 
 # Same Beam-untyped-API relaxation: this module drives `on_hitl` with fake

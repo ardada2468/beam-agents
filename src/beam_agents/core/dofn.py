@@ -22,7 +22,8 @@ free by construction. The DoFn:
 - routes each element by payload variant (event → start, or → the ``BATCH``
   buffer under ``ADAPTIVE``, where a size or ``FLUSH_TIMER`` trigger later runs
   the whole buffer as one activation; tool_result/approval → resume, never
-  buffered; unmatched → ``orphaned_result`` on ``.errors``);
+  buffered; export_request → a read-only ``StateSnapshot`` on ``.snapshots``,
+  mutating nothing; unmatched → ``orphaned_result`` on ``.errors``);
 - runs the activation on the async bridge bounded by ``activation_timeout``,
   cancelling and routing to ``.errors`` with zero state mutation on timeout;
 - stages all effects and commits them in a fixed order only on success,
@@ -82,6 +83,7 @@ from beam_agents.core.loop import (
     run_activation,
 )
 from beam_agents.core.migration import migrate_to_current
+from beam_agents.core.snapshot import build_snapshot
 from beam_agents.hitl import (
     HITL_TIMEOUT_OUTPUT,
     REASON_HITL_TIMEOUT,
@@ -389,6 +391,31 @@ class _AgentDoFn(beam.DoFn):
         key, envelope = element
         now_ms = envelope.event_time_ms
         variant = envelope.WhichOneof("payload")
+
+        if variant == "export_request":
+            # Read-only, ahead of every other route: no activation, no state
+            # write, no SEQ increment, no timer. Beam serializes elements per
+            # key, so the five reads below observe a consistent point in this
+            # key's history — after every activation committed before the
+            # request, before every one that follows.
+            yield beam.pvalue.TaggedOutput(
+                "snapshots",
+                build_snapshot(
+                    entity_key=key,
+                    seq=seq.read(),
+                    snapshot_at_ms=now_ms,
+                    request_id=envelope.export_request.request_id,
+                    # Deliberately NOT migrated: a snapshot records what is
+                    # committed, and interpreting older bytes belongs to the
+                    # loader (`beam_agents.replay`), which runs the same
+                    # migrations this DoFn applies lazily.
+                    memory_blob=memory.read(),
+                    cache_blob=llm_cache.read(),
+                    continuation=continuation.read(),
+                    pending=pending.read(),
+                ),
+            )
+            return
 
         if variant == "tool_result":
             resume = envelope.tool_result

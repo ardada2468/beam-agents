@@ -30,7 +30,7 @@ Handling an `export_request` MUST NOT mutate any state cell, set or clear any ti
 
 ### Requirement: The snapshots output resolves a sink like traces
 
-`RunAgent` SHALL expose `.snapshots` as a tagged output of `PCollection[StateSnapshot]`, and `AgentConfig` SHALL accept a `snapshots_to` URI resolved by the default sink resolver with a serialization step, mirroring `traces_to`: message-bus schemes SHALL receive `(entity_key, deterministic proto bytes)` pairs keyed by `entity_key`. When no `snapshots_to` is configured, the tagged output SHALL remain exposed and unconsumed; configuring a sink SHALL NOT be required for pipeline construction.
+`RunAgent` SHALL expose `.snapshots` as a tagged output of `PCollection[StateSnapshot]`, and `AgentConfig` SHALL accept a `snapshots_to` URI resolved by the default sink resolver with a serialization step, mirroring `traces_to`: message-bus schemes SHALL receive `(entity_key, deterministic proto bytes)` pairs keyed by `entity_key`. A snapshot is an opaque per-key state image with no row encoding, so the default resolver SHALL refuse a `bigquery://` `snapshots_to` at `AgentConfig` construction with an actionable error naming the schemes that do carry it. When no `snapshots_to` is configured, the tagged output SHALL remain exposed and unconsumed; configuring a sink SHALL NOT be required for pipeline construction.
 
 #### Scenario: A configured snapshots sink receives serialized snapshots keyed by entity
 

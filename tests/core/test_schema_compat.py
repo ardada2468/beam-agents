@@ -85,9 +85,9 @@ def test_the_corpus_cannot_silently_shrink() -> None:
         assert committed == set(fixtures), f"v{version} fixtures out of sync with builders"
     # No fixture sits outside a version directory.
     assert list(GOLDEN_DIR.glob("*.bin")) == []
-    # The v1 baseline covers all seven message types (the versioned three plus
-    # the additive-only wire messages).
-    assert len({type(message) for message in CORPUS[1].values()}) == 7
+    # The v1 baseline covers all eight message types (the versioned three plus
+    # the additive-only wire messages, `StateSnapshot` among them).
+    assert len({type(message) for message in CORPUS[1].values()}) == 8
 
 
 @pytest.mark.semantics
