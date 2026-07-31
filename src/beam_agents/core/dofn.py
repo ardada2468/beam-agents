@@ -78,6 +78,7 @@ from beam_agents.hitl import (
     Route,
     intent_expired,
 )
+from beam_agents.memory.compaction import ExpiringMemory
 from beam_agents.memory.stores import MemoryStore, build_memory_store, parse_memory_store_uri
 from beam_agents.observability import ROLE_TIMER, ActivationTrace
 from beam_agents.observability.metrics import (
@@ -104,6 +105,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from beam_agents.core.agent import Agent
+    from beam_agents.memory.compaction import ExpireHook, Summarizer
+    from beam_agents.memory.facade import Compactor
     from beam_agents.model.client import LLMClient
     from beam_agents.model.facade import Decode
 
@@ -239,6 +242,9 @@ class _AgentDoFn(beam.DoFn):
         metrics: MetricsSink | None = None,
         monotonic_ns: MonotonicNs | None = None,
         longterm_memory: str | None = None,
+        compactor: Compactor | None = None,
+        summarizer: Summarizer | None = None,
+        on_expire: ExpireHook | None = None,
     ) -> None:
         self._agent = agent
         self._provider_factory = provider_factory
@@ -265,6 +271,20 @@ class _AgentDoFn(beam.DoFn):
         # `None` means the tier is off: no store is constructed and
         # `ctx.memory.longterm` raises actionably.
         self._longterm_memory = longterm_memory
+        # Tier-1 compaction: handed to the activation's `Memory`, which invokes
+        # it at the soft-cap crossing and before hard-cap rejection. `None`
+        # (only reachable by explicit `AgentConfig.compactor=None`, since the
+        # config defaults to `DropOldestCompactor`) restores strict-overflow
+        # semantics: an over-cap write raises `MemoryOverflow` and dead-letters.
+        self._compactor = compactor
+        # Tier-2 compaction: invoked by the loop driver inside the activation,
+        # so its model calls are replay-cached. Opt-in; `None` means no
+        # summarization pass and no behavior change at all.
+        self._summarizer = summarizer
+        # The TTL demotion hook. `None` (the default) is today's wipe-only
+        # behavior, byte for byte. `AgentConfig` refuses to set it without a
+        # configured long-term store, so a non-None hook here implies one.
+        self._on_expire = on_expire
         self._bridge: AsyncBridge | None = None
         self._provider: LLMClient | None = None
         self._longterm_store: MemoryStore | None = None
@@ -539,6 +559,8 @@ class _AgentDoFn(beam.DoFn):
                     resume_approval=resume_approval,
                     snapshot=snapshot,
                     step_index=step_index,
+                    compactor=self._compactor,
+                    summarizer=self._summarizer,
                     default_hitl_timeout_ms=policy.timeout_ms,
                     intent_ttl_ms=policy.intent_ttl_ms,
                     approval_channel=policy.approval_channel,
@@ -710,6 +732,16 @@ class _AgentDoFn(beam.DoFn):
                 role=ROLE_TIMER,
             )
 
+        # Demote before destroying, when the hook is configured. Expiry is the
+        # one moment where the runtime performs an external write outside an
+        # activation -- the idempotent `(entity_key, seq)`-keyed upsert
+        # correctness invariant 5 carves out -- because a watermark timer has no
+        # activation context to stage through (design D4). A flush failure
+        # raises out of this callback, failing the timer bundle so the runner
+        # retries it against state this method has deliberately not yet wiped.
+        if self._on_expire is not None:
+            self._flush_expiring(key, memory, seq, timestamp.micros // 1000)
+
         # Working memory is event-time garbage: wipe every spec so an idle key
         # leaves zero residue. Unconditional -- reporting the loss above does not
         # rescue the key. No SEQ change beyond the wipe.
@@ -718,6 +750,38 @@ class _AgentDoFn(beam.DoFn):
         llm_cache.clear()
         pending.clear()
         seq.clear()
+
+    def _flush_expiring(self, key: bytes, memory: _State, seq: _State, expired_at_ms: int) -> None:
+        """Upsert the expiring key's final ``MemoryBlob`` to the long-term tier.
+
+        Migrated before the blob is interpreted, like every other state read; a
+        future-version blob raises here, *before* the wipe, so GC can never
+        destroy state a newer binary wrote and this one cannot read.
+
+        An empty (or absent) working memory is wiped with no store call: there
+        is nothing to demote, and a round trip per idle expiry would be pure
+        cost. Everything the hook is handed is replay-stable -- committed state
+        plus the timer's scheduled firing time, never a wall clock -- so a
+        retried timer bundle produces a byte-identical upsert the store's
+        equal-seq guard collapses onto one row.
+        """
+        hook = self._on_expire
+        assert hook is not None
+        blob = migrate_to_current(memory.read())
+        if blob is None or not blob.entries:
+            return
+        store = self._longterm_store
+        if store is None or self._bridge is None:
+            raise RuntimeError(
+                "AgentConfig.on_expire is set but no long-term store is available; "
+                "set AgentConfig.longterm_memory to a store URI"
+            )
+        expiry = ExpiringMemory(
+            entity_key=key, seq=seq.read(), blob=blob, expired_at_ms=expired_at_ms
+        )
+        # Bounded on the bridge the DoFn already runs for its lifetime; a wedged
+        # store surfaces as a failed timer bundle rather than a stalled worker.
+        self._bridge.run(lambda: hook(store, expiry), self._activation_timeout_s)
 
     @on_timer(HITL_TIMER)
     def on_hitl(

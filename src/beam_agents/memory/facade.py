@@ -236,6 +236,33 @@ class Memory:
         """
         return self._longterm.staged_upserts if self._longterm is not None else ()
 
+    # -- enumeration (the compaction iteration surface) ------------------------
+
+    def keys(self) -> tuple[str, ...]:
+        """Stored key names, least-recently-used first — ``to_blob()``'s order.
+
+        The read-only half of the compaction surface (`memory-compaction`
+        design D3). Deliberately does NOT re-stamp access order or set
+        ``dirty``: the accessors that do (:meth:`get`, :meth:`ring`) move each
+        inspected entry to most-recently-used, so a strategy that used them to
+        survey candidates would destroy the very order it is iterating. The
+        returned tuple is a snapshot, so a caller may delete while iterating it.
+        """
+        return tuple(self._entries)
+
+    def entry_size(self, key: str) -> int:
+        """Stored encoded size of ``key``'s value in bytes (ring framing and
+        kind tag included) — what evicting it would actually reclaim.
+
+        Raises ``KeyError`` for an absent key; like :meth:`keys`, it is inert
+        with respect to access order and ``dirty``. Summing this over
+        :meth:`keys` reproduces :attr:`size_bytes` exactly.
+        """
+        entry = self._entries.get(key)
+        if entry is None:
+            raise KeyError(key)
+        return len(entry.value)
+
     # -- scalar access --------------------------------------------------------
 
     def get(self, key: str) -> bytes | None:

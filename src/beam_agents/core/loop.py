@@ -47,6 +47,7 @@ from beam_agents.observability.traces import (
 
 if TYPE_CHECKING:
     from beam_agents.core.agent import Agent
+    from beam_agents.memory.compaction import Summarizer
     from beam_agents.memory.facade import Compactor
     from beam_agents.memory.stores import MemoryRecord, MemoryStore
     from beam_agents.model.client import LLMClient
@@ -182,6 +183,7 @@ async def run_activation(
     resume_approval: AgentEnvelope.Approval | None = None,
     snapshot: bytes = b"",
     compactor: Compactor | None = None,
+    summarizer: Summarizer | None = None,
     default_hitl_timeout_ms: int = DEFAULT_HITL_TIMEOUT_MS,
     step_index: int = 0,
     intent_ttl_ms: int = DEFAULT_INTENT_TTL_MS,
@@ -239,6 +241,22 @@ async def run_activation(
         ctx.stage_trace(trace.activation_start())
 
         outcome = await agent(ctx)
+
+        # Tier-2 compaction, at the one point where it can be both deterministic
+        # and atomic (memory-compaction design D1/D2): after the agent's outcome
+        # exists, before that outcome is folded into a `Continuation` or an
+        # `ActivationResult`, and inside this failure wrap — so a summarizer
+        # raise fails the activation closed and a half-summarized blob can never
+        # commit. Running it before `build_continuation` is what makes the
+        # persisted `step_index` include the summarizer's `call_model` advances,
+        # so a resume cannot re-mint an intent ID the suspension consumed.
+        #
+        # The trigger is a pure function of staged memory — no clock, no
+        # sampling — so a replayed bundle makes the identical run/don't-run
+        # decision, and the summarizer's own model calls ride `ctx.call_model`'s
+        # cache-first path (correctness invariant 3).
+        if summarizer is not None and ctx.memory.size_bytes >= summarizer.trigger_bytes:
+            await summarizer.compact(ctx)
 
         if isinstance(outcome, Suspend):
             timeout_deadline_ms = now_ms + (

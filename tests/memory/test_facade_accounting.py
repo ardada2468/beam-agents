@@ -58,5 +58,10 @@ def test_accounting_matches_recomputation_under_mixed_operations(
         else:
             continue
         assert mem.size_bytes == _recompute(mem)
+        # The compaction enumeration surface is part of the same accounting:
+        # a strategy that sums `entry_size` over `keys()` to decide what to
+        # evict must reach exactly `size_bytes`, after any operation sequence.
+        stored = mem.keys()
+        assert sum(mem.entry_size(key) for key in stored) == mem.size_bytes
 
     assert mem.to_blob().total_value_bytes == mem.size_bytes

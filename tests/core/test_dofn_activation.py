@@ -38,8 +38,10 @@ from beam_agents.core.dofn import (
     _AgentDoFn,
 )
 from beam_agents.core.loop import ActivationResult
+from beam_agents.core.transform import AgentConfig
 from beam_agents.hitl import HitlPolicy
 from beam_agents.memory import Memory
+from beam_agents.memory.facade import HARD_CAP_BYTES
 from beam_agents.model.fake import FakeLLM, match_any, respond_with
 from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
 from beam_agents.observability.metrics import ActivationTally
@@ -54,6 +56,7 @@ from tests.core._dofn_fakes import (
 from tests.core._dofn_helpers import (
     append_agent,
     approval_agent,
+    bulk_write_agent,
     make_pong_provider,
     model_agent,
     raising_agent,
@@ -117,6 +120,7 @@ class _Driver:
         pending: list[ToolIntent] | None = None,
         seq: int = 0,
         monotonic_ns: Any = None,
+        compactor: Any = None,
     ) -> None:
         self.metrics = RecordingMetrics()
         self.dofn = _AgentDoFn(
@@ -127,6 +131,7 @@ class _Driver:
             hitl_policy=hitl_policy,
             metrics=self.metrics,
             monotonic_ns=monotonic_ns if monotonic_ns is not None else scripted_clock(),
+            compactor=compactor,
         )
         self.memory = FakeValue(memory_blob if memory_blob is not None else MemoryBlob())
         self.continuation = FakeValue(continuation)
@@ -657,6 +662,67 @@ def test_a_suspension_with_no_deadline_falls_back_to_the_activation_clock() -> N
     assert driver.hitl_timer.set_to is None
     assert driver.hitl_timer.cleared is True
     assert _mark_ms(driver.ttl_timer) == _NOW_MS + _TTL_MS
+
+
+# --- Requirement: the default compactor is wired through AgentConfig ----------
+
+
+def _crowded_memory_blob() -> MemoryBlob:
+    """Six 150 KiB-ish entries in LRU order `old-0 .. old-5` (900 006 bytes).
+
+    Sized so `bulk_write_agent`'s write crosses the 1 MiB hard cap, and so the
+    post-eviction total lands under the soft cap — the eviction under test is
+    then the hard-cap one, with no soft-cap pass following it.
+    """
+    blob = MemoryBlob(state_schema_version=1)
+    total = 0
+    for index in range(6):
+        encoded = b"\x00" + b"x" * 150_000
+        blob.entries.add(key=f"old-{index}", value=encoded, last_access_ms=index)
+        total += len(encoded)
+    blob.total_value_bytes = total
+    return blob
+
+
+def test_an_unconfigured_pipeline_survives_a_hard_cap_crossing_write() -> None:
+    # Scenario: An unconfigured pipeline survives a hard-cap-crossing write.
+    # The compactor parameter used to be dead — `AgentConfig` had no field and
+    # `_activate` passed nothing — so the hard cap's only behavior was
+    # `MemoryOverflow` -> dead letter, forever, on every later over-cap write.
+    default_compactor = AgentConfig(provider_factory=make_pong_provider).compactor
+    driver = _Driver(
+        bulk_write_agent, memory_blob=_crowded_memory_blob(), compactor=default_compactor
+    )
+
+    emitted = driver.process(_event())
+
+    assert _tagged(emitted, "errors") == []
+    assert _main(emitted) == [b"written"]
+    committed = {entry.key for entry in driver.memory.value.entries}
+    # LRU-first eviction, stopping at the default target (half the hard cap).
+    assert committed == {"old-3", "old-4", "old-5", "bulk"}
+    assert driver.memory.value.total_value_bytes <= HARD_CAP_BYTES
+    assert driver.seq.value == 1
+
+
+def test_opting_out_restores_strict_overflow() -> None:
+    # Scenario: Opting out restores strict overflow. `compactor=None` is the
+    # documented migration escape hatch for pipelines that relied on
+    # overflow-as-failure.
+    driver = _Driver(bulk_write_agent, memory_blob=_crowded_memory_blob(), compactor=None)
+
+    emitted = driver.process(_event())
+
+    errors = _tagged(emitted, "errors")
+    assert len(errors) == 1
+    assert errors[0].entity_key == _KEY
+    assert errors[0].reason == REASON_ERROR
+    assert "MemoryOverflow" in errors[0].detail
+    # Fail-closed: nothing committed, so the key's memory and seq are untouched.
+    assert {entry.key for entry in driver.memory.value.entries} == {
+        f"old-{index}" for index in range(6)
+    }
+    assert driver.seq.value == 0
 
 
 if __name__ == "__main__":  # pragma: no cover

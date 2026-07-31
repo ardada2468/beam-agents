@@ -88,6 +88,17 @@ async def append_agent(ctx: ActivationContext) -> Complete:
     return Complete(output=ring + b"#" + str(ctx.seq).encode())
 
 
+async def bulk_write_agent(ctx: ActivationContext) -> Complete:
+    """Write 150 KiB under ``bulk``, enough to cross the hard cap on a full key.
+
+    Paired with a pre-loaded, nearly-full ``MemoryBlob`` so the write's
+    prospective total exceeds the 1 MiB cap: with a compactor configured it
+    succeeds after LRU eviction, without one it raises ``MemoryOverflow``.
+    """
+    ctx.memory.set("bulk", b"b" * 150_000)
+    return Complete(output=b"written")
+
+
 async def model_agent(ctx: ActivationContext) -> Complete:
     """Call the model once and return its response bytes (exercises the cache)."""
     resp = await ctx.call_model(request())

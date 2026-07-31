@@ -13,7 +13,9 @@ promoted, demoted, or hydrated between them automatically.
 | Enabled | Always | Only when `AgentConfig.longterm_memory` is set |
 
 The working tier is documented by the facade itself (`beam_agents.memory.facade`).
-This page covers the long-term tier.
+This page covers the long-term tier, plus the [compaction](#compaction) that
+keeps the working tier inside its caps and the [expiry hook](#on_expire-demoting-expiring-memory)
+that bridges the two at TTL.
 
 ## Enabling the tier
 
@@ -169,3 +171,126 @@ deferred until a deployment needs one.
 activation. A failed activation flushes nothing and a failed flush fails the
 activation, so the counter only ever reflects durable writes on the committed
 path.
+
+## Compaction
+
+Working memory is capped at 1 MiB per key. Compaction is what keeps a
+long-lived key under that cap, and it comes in two tiers, split by *where each
+is allowed to run*.
+
+| | Tier 1 — `AgentConfig.compactor` | Tier 2 — `AgentConfig.summarizer` |
+|---|---|---|
+| Strategy | `DropOldestCompactor` (the default) | `SummarizeCompactor` (opt-in) |
+| Runs | synchronously, inside a memory write | inside the activation, after the agent returns |
+| Trigger | the facade's soft cap (75%) and hard cap | staged `size_bytes >= trigger_bytes` |
+| Model calls | never (it cannot `await`) | through `ctx.call_model` only |
+| Effect | deletes LRU entries down to `target_bytes` | folds old ring items into a summary entry |
+
+### Tier 1: `DropOldestCompactor` (default, behavior change)
+
+`AgentConfig.compactor` defaults to `DropOldestCompactor()`. **This changes
+default behavior:** a write whose prospective total crosses the 1 MiB hard cap
+used to raise `MemoryOverflow`, failing the activation and dead-lettering the
+element — permanently, on every subsequent over-cap write. It now succeeds after
+evicting least-recently-used entries down to `target_bytes` (default 524 288,
+half the cap, chosen for hysteresis below the 786 432-byte soft cap).
+
+An agent may therefore observe a previously-written key as absent. To restore
+the old contract:
+
+```python
+config = AgentConfig(provider_factory=my_provider, compactor=None)  # strict overflow
+```
+
+Keys matching `protected_prefixes` (default `("__langgraph__/",)`) are never
+evicted: those hold a suspended LangGraph agent's resume state. If only
+protected entries remain and the target is still exceeded, compaction stops and
+the write raises `MemoryOverflow` as before — silently dropping resume state to
+admit a write would corrupt the suspension.
+
+Eviction reads only staged entries and the compactor's frozen configuration — no
+clock, no randomness, no I/O — so a replayed activation evicts an identical set.
+
+### Tier 2: `SummarizeCompactor` (opt-in)
+
+Tier 1 discards; tier 2 preserves meaning by folding a ring's older items into
+one summary entry. Because that needs the model, **where it runs is the whole
+design**: it runs inside the activation, and its model calls go through
+`ctx.call_model` and nothing else. That makes each call keyed by
+`(content, key, seq)`, staged in the replay cache, committed atomically with the
+bundle, and served from keyed state with zero provider calls on a bundle retry.
+A summarizer that called a provider from a timer, a side transform, or a raw
+client would break exactly that.
+
+```python
+def build_request(items: tuple[bytes, ...], prior_summary: bytes | None) -> LlmRequest:
+    ...  # your prompt; MUST be a pure function of these two inputs
+
+def extract_summary(response: bytes) -> bytes:
+    ...  # your provider's response parsing
+
+config = AgentConfig(
+    provider_factory=my_provider,
+    summarizer=SummarizeCompactor(
+        build_request=build_request,
+        extract_summary=extract_summary,
+        source_keys=("log",),
+        summary_key="summary",   # written as a scalar
+        keep_recent=8,           # newest items survive verbatim
+        trigger_bytes=786_432,   # the soft cap, by default
+    ),
+)
+```
+
+The runtime owns *when* to summarize, *what* to feed, *where* the call runs, and
+*how* the result lands. It owns nothing about the prompt: beam-agents is a
+runtime, not a framework, and a shipped summarization prompt would be prompt
+templating.
+
+Two contract points to hold up your end of:
+
+- **`build_request` must be pure.** An impure builder hashes to a different
+  cache key on replay, misses the cache, and re-calls the provider — which the
+  retry-determinism gate detects rather than silently absorbing.
+- **The summary must shrink.** An `extract_summary` result no smaller than the
+  bytes it replaces raises `ValueError`, failing the activation closed instead of
+  committing memory growth.
+
+Anything the summarizer raises fails the activation atomically: nothing commits,
+and no half-summarized blob is observable.
+
+## `on_expire`: demoting expiring memory
+
+`TTL_TIMER` reclaims an idle key's working memory. By default the memory is
+simply gone. `AgentConfig.on_expire` gives it somewhere to go — the long-term
+tier — and requires `longterm_memory` to be configured (setting one without the
+other raises at `AgentConfig` construction):
+
+```python
+config = AgentConfig(
+    provider_factory=my_provider,
+    longterm_memory="bigtable://my-project/my-instance/agent-memory",
+    on_expire=FlushToLongterm(),           # upserts under key "working_memory"
+)
+```
+
+Before the wipe, the timer callback reads the key's committed `MemoryBlob` and
+`seq` and performs **one** idempotent upsert keyed by `(entity_key, seq)` — the
+same invariant-5 carve-out the rest of this page documents — on the DoFn's async
+bridge, under a bounded timeout. The upsert's content is a pure function of
+committed state and the timer's firing time, so a retried timer bundle produces
+byte-identical bytes that the seq guard collapses onto one row. A key with empty
+working memory is wiped with no store call.
+
+**Fail-closed, and the trade-off that comes with it.** The wipe runs only after
+the flush succeeds. A flush failure propagates out of the callback, failing the
+timer bundle so the runner retries it against state that has deliberately not
+been wiped. During a long store outage this leaves the key wedged — retrying
+until the store recovers — which is the meaning of configuring `on_expire`: this
+memory must not be lost. Flush failures are visible as failed timer bundles at
+the runner level; they cannot be dead-lettered, because a raising callback's
+bundle discards its outputs.
+
+Unset (the default), expiry behaves exactly as it always has: no store
+interaction, the same wipe, and the same `ttl_wiped_suspension` dead letter when
+GC reaches a key that was still waiting on an answer.
