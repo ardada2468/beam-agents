@@ -1,0 +1,18 @@
+# beam-agents' Beam YAML provider listing.
+#
+# A provider listing file is a LIST of provider specs, exactly as they would be
+# written inline under a pipeline's `providers:` key
+# (apache_beam/yaml/yaml_provider.py::load_providers). Pull it into a pipeline
+# document instead of copying the block:
+#
+#     providers:
+#       - include: "<path or URL to this file>"
+#
+# `beam_agents.yaml.PROVIDER_LISTING` is this file's path inside the installed
+# wheel. The `type: python` provider below carries no `packages:`, so Beam
+# resolves the constructor in the launch environment; add
+# `config: {packages: ["beam-agents==0.1.0"]}` to have Beam install beam-agents
+# into a managed environment instead (see docs/yaml.md).
+- type: python
+  transforms:
+    RunAgent: "beam_agents.yaml.run_agent"
