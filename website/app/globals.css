@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+@import './chrome.css';
+@import './diagram.css';
 @import './pipeline.css';
 
 /*

@@ -4,7 +4,11 @@ import nextPlugin from '@next/eslint-plugin-next';
 
 export default tseslint.config(
   {
-    ignores: ['.next/**', 'node_modules/**', 'next-env.d.ts', 'generated/**'],
+    // `.next-build` is the dist dir `make site-build` and the SSR/a11y checks
+    // use, so `make site-check` leaves one behind. Without it here, the next
+    // `pnpm lint` walks the emitted bundle and reports thousands of errors in
+    // generated code.
+    ignores: ['.next/**', '.next-build/**', 'node_modules/**', 'next-env.d.ts', 'generated/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

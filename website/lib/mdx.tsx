@@ -5,6 +5,7 @@ import rehypeSlug from 'rehype-slug';
 import { Example } from '@/components/Example';
 import { Callout } from '@/components/Callout';
 import { ClaimTable, Cell } from '@/components/ClaimTable';
+import { Diagram, DgEdge, DgNode, DgText } from '@/components/Diagram';
 import { Figure } from '@/components/Figure';
 import { RepoDoc } from '@/components/RepoDoc';
 import { Spec } from '@/components/Spec';
@@ -35,7 +36,19 @@ export async function renderMdx(source: string): Promise<ReactElement> {
         ],
       },
     },
-    components: { Example, Callout, ClaimTable, Cell, Figure, RepoDoc, Spec },
+    components: {
+      Example,
+      Callout,
+      ClaimTable,
+      Cell,
+      Diagram,
+      DgNode,
+      DgEdge,
+      DgText,
+      Figure,
+      RepoDoc,
+      Spec,
+    },
   });
   return content;
 }
