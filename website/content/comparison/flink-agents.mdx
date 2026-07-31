@@ -48,6 +48,61 @@ The other difference is maturity, and it does not favor this project. Flink
 Agents has published releases; `beam-agents` declares version `0.0.0` and has
 published none.
 
+{/*
+  One row of the table below, and only one, is drawn.
+
+  Substrate is the only axis where both sides are established: the right-hand
+  stack is exactly the sourced claim "Apache Flink Agents is an Agentic AI
+  framework based on Apache Flink", and the left-hand stack is the `Substrate`
+  row's own backing test. Everything else on this page — side effects, memory,
+  human-in-the-loop — has an empty cell on one side, and a picture cannot draw
+  "Not established" without inventing it. So it stays in the table.
+
+  The asymmetry at the bottom is the content, not an unfinished drawing. The
+  right stack ends at its engine; the left one fans out, with Spark's connector
+  stopping short because no test in this repository runs against it.
+*/}
+
+<Diagram
+  title="What each project runs on"
+  desc="Two stacks, compared on substrate only. On the left, an agent runs under beam-agents, which targets Apache Beam; Beam in turn fans out to DirectRunner, Flink and Dataflow. Spark hangs below the end of that fan with no connector at all, because no test in this repository runs against it. On the right, an agent runs under Apache Flink Agents, which targets Apache Flink; that stack ends there. No other row of the comparison table is drawn."
+  caption="Only the substrate row is drawn, because it is the row a citation establishes on both sides. Side effects, memory and human-in-the-loop stay in the table — including the rows that read Not established."
+  viewBox="0 0 600 476"
+  minWidth={592}
+>
+  {/* ---- left stack: this project ---- */}
+  <DgNode x={16} y={48} w={304} h={44} label="your agent" />
+  <DgEdge d="M 168,92 V 108" />
+  <DgNode x={16} y={112} w={304} h={44} label="beam-agents" />
+  <DgEdge d="M 168,156 V 172" />
+  <DgNode x={16} y={176} w={304} h={44} label="Apache Beam" />
+  {/*
+    The fan-out is the left stack's whole point, so it gets a proper spine
+    down the left gutter with one drop per runner. The spine carries no
+    arrowhead — it is a rail, not a flow.
+
+    It stops at the third drop. Spark hangs below the end of the spine with no
+    connector and a visible gap, because no test in this repository runs
+    against it; a fourth drop, even a short one, reads as a connection.
+  */}
+  <DgEdge d="M 168,220 V 236 H 36 V 364" arrow={false} />
+  <DgEdge d="M 36,268 H 54" />
+  <DgEdge d="M 36,316 H 54" />
+  <DgEdge d="M 36,364 H 54" />
+  <DgNode x={56} y={248} w={264} h={40} label="DirectRunner" />
+  <DgNode x={56} y={296} w={264} h={40} label="Flink" />
+  <DgNode x={56} y={344} w={264} h={40} label="Dataflow" />
+  <DgNode x={56} y={408} w={264} h={40} soft label="Spark" sub="NOT EXERCISED" />
+  {/* The two stacks are alternatives, so nothing crosses this rule. */}
+  <DgEdge d="M 336,36 V 456" arrow={false} />
+  {/* ---- right stack: the comparable project, drawn to its sourced depth ---- */}
+  <DgNode x={352} y={48} w={232} h={44} label="your agent" />
+  <DgEdge d="M 468,92 V 108" />
+  <DgNode x={352} y={112} w={232} h={44} label="Apache Flink Agents" />
+  <DgEdge d="M 468,156 V 172" />
+  <DgNode x={352} y={176} w={232} h={44} label="Apache Flink" />
+</Diagram>
+
 ## Comparison
 
 <ClaimTable
