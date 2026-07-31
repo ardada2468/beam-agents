@@ -87,7 +87,13 @@ deleting versions older than ~30 days keeps the last month launchable while
 bounding storage. GCS template specs are small JSON objects; a matching
 lifecycle rule on the `templates/` prefix does the same job.
 
-## The Dataflow `--update` compatibility gate
+<!-- Heading text without the `--` on purpose: this file is rendered twice,
+     by mkdocs and by the documentation site, and the two slugifiers disagree
+     about a run of hyphens (mkdocs collapses it, github-slugger keeps it). The
+     anchor `#the-dataflow-update-compatibility-gate` is linked from this table
+     and from docs/state-compat.md, and this phrasing is the one that resolves
+     under both. -->
+## The Dataflow update-compatibility gate
 
 `tests/dataflow/test_update_compat.py` is the only `dataflow`-marked test and
 the executable half of [`docs/state-compat.md`](state-compat.md). It launches a
