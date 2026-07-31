@@ -1,0 +1,493 @@
+/*
+ * Traces explorer and trace detail.
+ *
+ * Every value here resolves to a token. Two rules the span tree in particular
+ * has to keep:
+ *
+ * 1. No element's *width* carries meaning. The runtime's spans are zero-width
+ *    (`start_ms === end_ms`), so a bar scaled by anything would be fabricated.
+ *    Roles are told apart by label and weight; nesting by indentation and a
+ *    hairline guide rule per level.
+ * 2. Hairlines, never shadows, and no gradients, glows, or blurs anywhere.
+ */
+
+/* -- Shared ---------------------------------------------------------------- */
+
+/* The lede belongs under the title, not opposite it: `.page-title` spreads its
+   children apart, which would strand a sentence against the right edge of a
+   1440px page. */
+.tr-title {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.tr-lede {
+  max-width: 78ch;
+}
+
+.tr-note {
+  max-width: 82ch;
+  font-size: var(--text-sm);
+}
+
+.tr-note--framed {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tr-note--framed strong {
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
+.tr-section__title {
+  font-size: var(--text-md);
+}
+
+/* -- List page ------------------------------------------------------------- */
+
+.tr-toolbar {
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.tr-search {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.tr-toolbar__meta {
+  flex: none;
+}
+
+.tr-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+/* -- Detail header --------------------------------------------------------- */
+
+.tr-head__actions {
+  flex-wrap: wrap;
+}
+
+.tr-head__ids {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.tr-head__sep {
+  width: 1px;
+  height: 14px;
+  background: var(--line-strong);
+}
+
+/* A timestamp is not a headline figure; it should not be set at 28px. */
+.tr-tile__time {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+}
+
+/* -- Span tree ------------------------------------------------------------- */
+
+.tr-tree {
+  --tr-indent: 18px;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tr-tree__panel {
+  padding: var(--space-3) 0 0;
+}
+
+.tr-tree__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+}
+
+/* Text actions rather than buttons: three of them in a row of `.btn` would read
+   as the most important thing in the panel, and they are not. */
+.tr-tree__action {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line-strong);
+}
+
+.tr-tree__action:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.tr-tree__action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+/* The tree scrolls in its own container, so the page body never scrolls
+   sideways however deep the nesting goes. */
+.tr-tree__scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-top: 1px solid var(--line);
+}
+
+.tr-tree__rows {
+  min-width: 560px;
+}
+
+.tr-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--row-height);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  scroll-margin: var(--space-6);
+}
+
+.tr-row:hover {
+  background: var(--surface-2);
+}
+
+.tr-row[aria-selected='true'] {
+  background: var(--surface-3);
+}
+
+/* Position in the trace's recorded order. The only sequence number on screen,
+   and it belongs to events — spans have no order of their own to report. */
+.tr-row__ordinal {
+  flex: none;
+  width: 2.25em;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  text-align: right;
+}
+
+.tr-row__rails {
+  display: flex;
+  flex: none;
+}
+
+/* One hairline per level of nesting: depth is real, width is not. */
+.tr-row__rail {
+  width: var(--tr-indent);
+  align-self: stretch;
+  border-left: 1px solid var(--line);
+}
+
+.tr-row__twisty {
+  flex: none;
+  width: 1em;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.tr-row__twisty--leaf {
+  color: var(--faint);
+}
+
+.tr-row__body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex-wrap: wrap;
+  padding-block: var(--space-1);
+}
+
+.tr-row__label {
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+/* An event is a record on a span, so it reads one step quieter than the span
+   that holds it — weight, not color. */
+.tr-row__label--event {
+  font-weight: var(--weight-regular);
+}
+
+.tr-row--activation .tr-row__label {
+  font-weight: var(--weight-semibold);
+}
+
+.tr-row--error .tr-row__label {
+  color: var(--error);
+  font-weight: var(--weight-medium);
+}
+
+.tr-row__id,
+.tr-row__clock,
+.tr-row__meta {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* -- Event detail ---------------------------------------------------------- */
+
+.tr-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  background: var(--surface-2);
+}
+
+.tr-detail__heading {
+  margin-top: var(--space-1);
+}
+
+.tr-attrs {
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+  width: 100%;
+}
+
+.tr-attrs__key,
+.tr-attrs__value {
+  padding: var(--space-1) var(--space-3) var(--space-1) 0;
+  text-align: left;
+  vertical-align: top;
+  font-weight: var(--weight-regular);
+  border-bottom: 1px solid var(--line);
+}
+
+.tr-attrs__key {
+  color: var(--muted);
+  white-space: nowrap;
+  width: 1%;
+}
+
+.tr-attrs__value {
+  overflow-wrap: anywhere;
+}
+
+/* -- Attempt comparison ---------------------------------------------------- */
+
+.tr-cmp__scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/* Sized to its content, not to the viewport: a single-attempt trace should not
+   strand one column of numbers 900px from its labels. */
+.tr-cmp {
+  border-collapse: collapse;
+  min-width: min(100%, 520px);
+  font-size: var(--text-sm);
+}
+
+.tr-cmp__head,
+.tr-cmp__cell {
+  min-width: 15ch;
+}
+
+.tr-cmp__corner,
+.tr-cmp__head {
+  text-align: left;
+  vertical-align: bottom;
+  padding: 0 var(--space-3) var(--space-2) 0;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.tr-cmp__corner {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tr-cmp__head {
+  display: table-cell;
+}
+
+.tr-cmp__head-title {
+  display: block;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.tr-cmp__head-sub {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+}
+
+.tr-cmp__key {
+  text-align: left;
+  font-weight: var(--weight-regular);
+  color: var(--muted);
+  padding: var(--space-2) var(--space-4) var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  max-width: 26ch;
+}
+
+.tr-cmp__key-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink);
+  flex-wrap: wrap;
+}
+
+.tr-cmp__note {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+.tr-cmp__cell {
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A row that moved between attempts gets a rule, not a fill: the `differs` chip
+   carries the meaning, and the rule only helps the eye find it. */
+.tr-cmp__row--differs .tr-cmp__key {
+  border-left: 2px solid var(--line-strong);
+  padding-left: var(--space-2);
+}
+
+.tr-cmp__cell-note {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  max-width: 32ch;
+}
+
+.tr-cmp__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.tr-cmp__inline-chip::before {
+  content: 'differs';
+  display: inline-block;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--info-bg);
+  color: var(--info);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+/* -- Event sequence -------------------------------------------------------- */
+
+.tr-seq__heading {
+  margin-bottom: var(--space-1);
+}
+
+.tr-seq {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 420px));
+  justify-content: start;
+  gap: var(--space-4) var(--space-6);
+  margin-top: var(--space-3);
+}
+
+.tr-seq__column {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-2);
+  min-width: 0;
+}
+
+.tr-seq__title {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
+}
+
+.tr-seq__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tr-seq__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-xs);
+}
+
+.tr-seq__ordinal {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.tr-seq__label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* -- Raw records ----------------------------------------------------------- */
+
+/* A trace's event list is hundreds of lines of JSON; without a cap it is the
+   whole page. The block keeps its own scroll. */
+.tr-raw .code__pre {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* -- Narrow viewports ------------------------------------------------------ */
+
+@media (max-width: 720px) {
+  .tr-tree {
+    --tr-indent: 12px;
+  }
+
+  .tr-tree__rows {
+    min-width: 480px;
+  }
+
+  .tr-head__ids {
+    gap: var(--space-1) var(--space-2);
+  }
+
+  .tr-head__sep {
+    display: none;
+  }
+}
