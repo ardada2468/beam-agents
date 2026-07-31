@@ -272,6 +272,16 @@ ignore = [
 # aiokafka imports keep these modules importable in the offline lane (host
 # side) and outside the pipeline (container side) without the client installed.
 "tests/semantics/_e2e/*" = ["B008", "PLC0415"]
+# The `--update` gate's harness: the GCP clients (google.auth, google.cloud
+# .pubsub) are imported inside the constructors/methods that need them, on
+# purpose — these modules are *collected* in the offline unit lane (deselection
+# happens after import) and must import cleanly with no credentials and no
+# client construction. Same PLC0415-is-the-point rationale as the e2e harness
+# above.
+"tests/dataflow/_update/*" = ["PLC0415"]
+# The gate module itself: one scenario told in phases (launch, drive, update,
+# assert, tear down), the same shape and same rationale as the e2e gate above.
+"tests/dataflow/test_update_compat.py" = ["PLR0915"]
 # The docs/errors.md failure-streak example, copied verbatim: the state handle
 # is the same Beam-requires-it-as-a-default idiom as core/dofn.py, and the doc
 # must show the working form rather than a lint-shaped variant of it.
@@ -582,6 +592,16 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 [[tool.mypy.overrides]]
 module = "tests.semantics.test_effectively_once_e2e"
 disable_error_code = ["no-untyped-call", "type-arg"]
+
+# The Dataflow `--update` gate and its harness. `_update/pipeline.py` is a real
+# Beam pipeline (ReadFromPubSub/Map/WithKeys/WriteToPubSub, unparameterized
+# PCollections) — the same Beam-untyped-API relaxation every pipeline-driving
+# module in this repo carries — and the harness reads Dataflow's REST payloads
+# and the Pub/Sub client, both of which arrive as `Any`. Everything non-Beam,
+# non-client in these modules stays strictly typed.
+[[tool.mypy.overrides]]
+module = ["tests.dataflow._update.*", "tests.dataflow.test_update_compat"]
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 [[tool.mypy.overrides]]
 module = "tests.semantics.test_hitl_fail_closed"
