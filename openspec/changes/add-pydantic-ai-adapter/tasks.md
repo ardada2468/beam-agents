@@ -173,7 +173,7 @@
       (7 scenarios × 3 adapters); offline semantics selection 43 passed in **22s**
       (well under the ~2-minute budget, no batching needed);
       `check_semantics_partition.py`: 43 offline + 22 docker = 65 total, OK
-- [ ] 7.4 Bring the Flink leg green for the `pydantic_ai` axis entry (five runnable
+- [x] 7.4 Bring the Flink leg green for the `pydantic_ai` axis entry (five runnable <!-- discharged by verify-live-infrastructure phase 2 (2026-07-31): `make test-conformance-flink` on a cold compose stack -> 20 passed, 8 skipped, 0 failed (6 m 54 s); all four adapters green, the declared skips reported as skips. The `pydantic_ai` axis required fixing the SDK-harness image, which was missing `pydantic-ai-slim` (report defect D-4). `make test-semantics` also re-run green: 1 passed, 482.77 s at default volume. See verification-report.md. -->
       scenarios including the TaskManager-restart cell; bundle_retry_cache and
       ttl_expiry report as the matrix's declared skips) via
       `make test-conformance-flink` against the compose stack
@@ -194,13 +194,13 @@
       hoist) — `Success: no issues found in 212 source files`
 - [x] 8.3 `make test-unit` (offline; adapter cells skip cleanly where the extra is
       absent) — 968 passed, 1 skipped (aiokafka absent), 106 deselected
-- [ ] 8.4 `make test-conformance-flink` (with `make test-semantics` re-run to prove
+- [x] 8.4 `make test-conformance-flink` (with `make test-semantics` re-run to prove <!-- discharged by verify-live-infrastructure phase 2 (2026-07-31): `make test-conformance-flink` on a cold compose stack -> 20 passed, 8 skipped, 0 failed (6 m 54 s); all four adapters green, the declared skips reported as skips. The `pydantic_ai` axis required fixing the SDK-harness image, which was missing `pydantic-ai-slim` (report defect D-4). `make test-semantics` also re-run green: 1 passed, 482.77 s at default volume. See verification-report.md. -->
       the transport hoist did not disturb the e2e gate)
       **(blocked: needs docker)** — the offline half is green:
       `make test-semantics-offline` 43 passed, 1 skipped
-- [ ] 8.5 Coverage ratchet passes (`make coverage-ratchet`; coverage may never
+- [x] 8.5 Coverage ratchet passes (`make coverage-ratchet`; coverage may never <!-- discharged by verify-live-infrastructure gates (2026-07-31): `make coverage-ratchet` -> `branch coverage 91.64% is at baseline`. See verification-report.md. -->
       decrease) **(deferred: runs against CI's coverage.xml artifact)**
-- [ ] 8.6 `uv run pre-commit run --all-files`
+- [x] 8.6 `uv run pre-commit run --all-files` <!-- discharged by verify-live-infrastructure phase 0 (2026-07-31): `uv run pre-commit run --all-files` executed on the merged tree, all 10 hooks passed (ruff, ruff-format, check-yaml, check-toml, end-of-file-fixer, trailing-whitespace, mypy, protobuf-drift, openspec-change-required, changelog-fragment-required). See verification-report.md. -->
       **(blocked: `uv sync --locked` fails until `uv lock` is regenerated for the
       new extra; ruff / ruff-format / mypy — the hooks' substance — are green above)**
 - [x] 8.7 `openspec validate add-pydantic-ai-adapter --strict`

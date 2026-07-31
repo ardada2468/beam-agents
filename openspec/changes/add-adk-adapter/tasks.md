@@ -216,14 +216,14 @@ session-state key explicitly set to `None` survives the round-trip (asserted).
 - [x] 8.2 `make type` (mypy --strict on the new package and the hoisted transport)
 - [x] 8.3 `make test-unit` (offline; ADK and LangGraph suites green, clean skips
       without extras)
-- [ ] 8.4 `make test-conformance-flink` (full matrix including the ADK leg, against
+- [x] 8.4 `make test-conformance-flink` (full matrix including the ADK leg, against <!-- discharged by verify-live-infrastructure phase 2 (2026-07-31): `make test-conformance-flink` on a cold compose stack -> 20 passed, 8 skipped, 0 failed (6 m 54 s); all four adapters green, the declared skips reported as skips. The `pydantic_ai` axis required fixing the SDK-harness image, which was missing `pydantic-ai-slim` (report defect D-4). `make test-semantics` also re-run green: 1 passed, 482.77 s at default volume. See verification-report.md. -->
       the compose stack) — **(blocked: needs docker)**. The DirectRunner leg was run
       instead and is green: 20 passed + 1 declared adapter skip
-- [ ] 8.5 Coverage ratchet (`make coverage-ratchet`) — **(not run: the shared
+- [x] 8.5 Coverage ratchet (`make coverage-ratchet`) — **(not run: the shared <!-- discharged by verify-live-infrastructure gates (2026-07-31): `make coverage-ratchet` -> `branch coverage 91.64% is at baseline`. See verification-report.md. -->
       checkout's `pyproject.toml` was mid-merge-conflict from a parallel worker for part
       of this session, breaking `uv` workspace discovery, so the coverage-instrumented
       `make` target could not run; the unit tier itself was run directly and is green)**
-- [ ] 8.6 `uv run pre-commit run --all-files` — **(not run: same `uv` workspace-discovery
+- [x] 8.6 `uv run pre-commit run --all-files` — **(not run: same `uv` workspace-discovery <!-- discharged by verify-live-infrastructure phase 0 (2026-07-31): `uv run pre-commit run --all-files` executed on the merged tree, all 10 hooks passed (ruff, ruff-format, check-yaml, check-toml, end-of-file-fixer, trailing-whitespace, mypy, protobuf-drift, openspec-change-required, changelog-fragment-required). See verification-report.md. -->
       breakage as 8.5; `ruff check`, `ruff format --check`, and `mypy --strict` — the
       hooks that cover this change's files — were all run directly and are clean)**
 - [x] 8.7 `openspec validate add-adk-adapter --strict` (green after the artifact edits

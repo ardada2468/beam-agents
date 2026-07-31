@@ -68,7 +68,7 @@
 - [ ] 7.4 `make coverage-ratchet`
   - **Pre-existing failure on the merged base, not caused by this change.** `coverage-baseline.toml` demands `branch_rate = 0.9497`; the merged tree measures `0.8984` **both with and without this change** (verified by stashing the whole working tree and re-running the unit tier: identical `0.8984`). This change adds no `src/` code and only adds tests, so it cannot lower the branch rate. Left for whoever reconciles the baseline against the merged M2 branch.
 - [x] 7.5 `uv run python scripts/check_semantics_partition.py` (unchanged selections, still green) — `semantics tier partition OK: 65 offline + 29 docker = 94 total`.
-- [ ] 7.6 `uv run pre-commit run --all-files`
+- [x] 7.6 `uv run pre-commit run --all-files` <!-- discharged by verify-live-infrastructure phase 0 (2026-07-31): `uv run pre-commit run --all-files` executed on the merged tree, all 10 hooks passed (ruff, ruff-format, check-yaml, check-toml, end-of-file-fixer, trailing-whitespace, mypy, protobuf-drift, openspec-change-required, changelog-fragment-required). See verification-report.md. -->
   - **(not run: pre-commit is not in the synced dependency groups here.)** Its four checks are covered individually: `ruff`/`ruff-format` via 7.1, `mypy` via 7.2, `check-yaml` via `yaml.safe_load` on both new YAML files, and the `openspec-change-required` / `changelog-fragment-required` hooks are no-ops for this change (they fire only on `src/` edits, and this change touches no `src/` file).
 - [x] 7.7 `openspec validate promote-spark-runner --strict` — `Change 'promote-spark-runner' is valid`.
 
