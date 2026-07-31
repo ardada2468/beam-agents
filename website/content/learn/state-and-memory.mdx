@@ -13,6 +13,19 @@ verifies:
   - example: fast_path.py
 ---
 
+## What one key holds
+
+Every agent runs as a single Beam stateful `DoFn`, and everything it remembers
+hangs off one entity key: five state cells and two timers, scoped to that key
+alone.
+
+<StateCells />
+
+The two timers are worth reading twice. `TTL_TIMER` is an event-time timer and
+`HITL_TIMER` is a real-time one, so both are set from the same commit but
+measured against clocks that can drift apart — which is the seam the
+[garbage collection](#garbage-collection) section below is about.
+
 ## Working memory
 
 Working memory is per-key, durable, and race-free by construction — Beam
@@ -61,6 +74,12 @@ continuation is gone and nothing can answer it. That case is reported on
 `.errors` with reason `ttl_wiped_suspension` rather than silently dropped.
 
 Set the TTL through `AgentConfig.ttl_ms`. The default is one hour.
+
+Staging, committing, and wiping are the three things that can happen to a
+write, and they are easier to hold together in one picture than in three
+sections:
+
+<StateWriteLifecycle />
 
 ## State schema and pipeline updates
 
