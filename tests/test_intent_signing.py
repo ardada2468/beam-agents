@@ -295,11 +295,16 @@ def test_reference_syntax_validates_without_resolving() -> None:
     validate_secret_reference("sasl_password", "env:KAFKA_PASSWORD")
     validate_secret_reference("sasl_password", "file:/var/run/secrets/kafka")
 
+    # The rejected case only has to lack an `env:`/`file:` prefix — that is the
+    # whole of what makes it invalid. A literal that *looks* like a password
+    # adds no signal and trips secret scanners, so the value says what it is.
     with pytest.raises(ValueError, match="sasl_password"):
-        validate_secret_reference("sasl_password", "hunter2")
+        validate_secret_reference("sasl_password", "literal-without-a-scheme")
 
 
 def test_resolving_a_reference_returns_the_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TEST_KAFKA_PASSWORD", "s3cret\n")
+    # The trailing newline is the point: `file:` references are read from disk
+    # and routinely end in one, so the resolver strips it on both surfaces.
+    monkeypatch.setenv("TEST_KAFKA_PASSWORD", "resolved-value\n")
 
-    assert resolve_secret_reference("sasl_password", "env:TEST_KAFKA_PASSWORD") == "s3cret"
+    assert resolve_secret_reference("sasl_password", "env:TEST_KAFKA_PASSWORD") == "resolved-value"

@@ -24,7 +24,7 @@ from beam_agents.effector.sources import KafkaIntentSource
 from .test_adapters import fake_aiokafka  # noqa: F401  (pytest fixture)
 
 PASSWORD_ENV = "TEST_KAFKA_PASSWORD"
-PASSWORD = "s3cret-broker-password"
+FAKE_PASSWORD = "placeholder-broker-password-not-a-credential"
 
 _VALID = {
     "intents_from": "kafka://localhost:9092/intents",
@@ -37,7 +37,7 @@ _VALID = {
 
 @pytest.fixture(autouse=True)
 def _provision_password(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(PASSWORD_ENV, PASSWORD)
+    monkeypatch.setenv(PASSWORD_ENV, FAKE_PASSWORD)
 
 
 def sasl_security() -> TransportSecurity:
@@ -66,7 +66,7 @@ def test_sasl_settings_reach_the_kafka_source(fake_aiokafka: types.ModuleType) -
     assert consumer.kwargs["security_protocol"] == "SASL_SSL"
     assert consumer.kwargs["sasl_mechanism"] == "SCRAM-SHA-512"
     assert consumer.kwargs["sasl_plain_username"] == "effector"
-    assert consumer.kwargs["sasl_plain_password"] == PASSWORD
+    assert consumer.kwargs["sasl_plain_password"] == FAKE_PASSWORD
 
 
 def test_sasl_settings_reach_the_kafka_sink(fake_aiokafka: types.ModuleType) -> None:  # noqa: F811
@@ -76,7 +76,7 @@ def test_sasl_settings_reach_the_kafka_sink(fake_aiokafka: types.ModuleType) -> 
 
     assert producer.kwargs["security_protocol"] == "SASL_SSL"
     assert producer.kwargs["sasl_mechanism"] == "SCRAM-SHA-512"
-    assert producer.kwargs["sasl_plain_password"] == PASSWORD
+    assert producer.kwargs["sasl_plain_password"] == FAKE_PASSWORD
     # Idempotence is not negotiable away by adding security settings.
     assert producer.kwargs["enable_idempotence"] is True
 
@@ -89,7 +89,7 @@ def test_sasl_settings_reach_the_outbox_producer_config() -> None:
 
     assert config["security.protocol"] == "SASL_SSL"
     assert config["sasl.mechanism"] == "SCRAM-SHA-512"
-    assert PASSWORD in config["sasl.jaas.config"]
+    assert FAKE_PASSWORD in config["sasl.jaas.config"]
     assert config["bootstrap.servers"] == "broker:9092"
 
 
@@ -130,7 +130,7 @@ def test_a_malformed_credential_reference_fails_eagerly_and_import_free() -> Non
                 security_protocol="SASL_SSL",
                 sasl_mechanism="PLAIN",
                 sasl_username_reference="env:TEST_KAFKA_USER",
-                sasl_password_reference="hunter2",
+                sasl_password_reference="literal-without-a-scheme",
             ),
         )
 
@@ -166,9 +166,9 @@ def test_resolved_secrets_are_absent_from_the_configuration_object(
 
     KafkaIntentSource("broker:9092", "intents", "effector", security=config.transport_security)
 
-    assert PASSWORD not in repr(config)
-    assert PASSWORD not in repr(config.transport_security)
-    assert PASSWORD not in str(vars(config))
+    assert FAKE_PASSWORD not in repr(config)
+    assert FAKE_PASSWORD not in repr(config.transport_security)
+    assert FAKE_PASSWORD not in str(vars(config))
     assert config.transport_security is not None
     assert config.transport_security.sasl_password_reference == f"env:{PASSWORD_ENV}"
 
