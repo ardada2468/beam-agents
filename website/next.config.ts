@@ -10,6 +10,12 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   pageExtensions: ['ts', 'tsx'],
   reactStrictMode: true,
+  // `make site-check` runs a production build, and by default that writes to
+  // the same `.next` a running `next dev` is serving from — which deletes the
+  // dev server's manifests out from under it and leaves the page rendering
+  // unstyled. Giving the build its own directory means the checks and the dev
+  // server can run at the same time without fighting.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // `next build` must fail on a type or lint error: the fidelity checks are
   // worthless if the build that runs them tolerates broken code.
   typescript: { ignoreBuildErrors: false },

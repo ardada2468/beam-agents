@@ -5,6 +5,11 @@ COMPOSE := docker compose -f docker/compose.yaml
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
 PNPM := pnpm --dir website
+# The production build and the checks that serve it write to their own output
+# directory, so running `make site-check` never deletes the manifests out from
+# under a `make site-dev` server that happens to be running. `next start` in
+# the SSR and a11y checks reads the same variable, so all three agree.
+SITE_BUILD_ENV := NEXT_DIST_DIR=.next-build
 
 .PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-dataflow test-smoke mutation coverage-ratchet compose-up compose-down proto site-dev site-build site-check api-reference
 
@@ -101,7 +106,7 @@ site-dev: ## Run the documentation site's dev server
 
 site-build: ## Build the documentation site (Node only, no Python needed)
 	$(PNPM) install --frozen-lockfile
-	$(PNPM) build
+	$(SITE_BUILD_ENV) $(PNPM) build
 
 api-reference: ## Regenerate website/generated/api.json from the installed package
 	uv run python scripts/gen_api_reference.py
@@ -117,7 +122,7 @@ site-check: ## Run every site gate: types, lint, fidelity, build, links, SSR, a1
 	uv run python scripts/gen_api_reference.py --check
 	uv run python scripts/verify_docs_claims.py
 	uv run python scripts/check_docs_prose.py
-	$(PNPM) build
+	$(SITE_BUILD_ENV) $(PNPM) build
 	$(PNPM) check:links
-	$(PNPM) check:ssr
-	$(PNPM) check:a11y
+	$(SITE_BUILD_ENV) $(PNPM) check:ssr
+	$(SITE_BUILD_ENV) $(PNPM) check:a11y

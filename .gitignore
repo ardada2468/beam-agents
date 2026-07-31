@@ -36,6 +36,7 @@ mutants/
 # generated API reference is drift-checked against the package in CI.
 website/node_modules/
 website/.next/
+website/.next-build/
 website/out/
 website/next-env.d.ts
 website/.search-index.json
