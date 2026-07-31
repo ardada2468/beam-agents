@@ -1,0 +1,506 @@
+/*
+ * Styles for the activation list and the activation detail.
+ *
+ * Everything resolves to a token: no literal colors, no shadows, no gradients.
+ * Separation is hairline rules, exactly as the token file requires, and the two
+ * themes are handled entirely by the tokens rather than by any override here.
+ *
+ * The waterfall block is the part with a rule behind it. Every `.wf__rule` is
+ * the same width and the same weight, on purpose and permanently: the runtime's
+ * spans satisfy `start_ms == end_ms`, so any width that varied would be encoding
+ * a duration nothing measured.
+ */
+
+/* -- List: filters --------------------------------------------------------- */
+
+/* A grid rather than a wrapping flex row: with flex, whichever control lands
+   alone on the last line stretches to the full width and reads as a different
+   kind of control. Every cell here is one column wide, wherever it wraps to. */
+.act-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+
+.act-filters__cell {
+  min-width: 0;
+}
+
+.act-filters__cell > .field {
+  display: flex;
+  width: 100%;
+}
+
+.act-active {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.act-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: border-color var(--duration) var(--ease);
+}
+
+.act-pill:hover {
+  border-color: var(--muted);
+}
+
+.act-pill__value {
+  font-family: var(--font-mono);
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- List: table cells ----------------------------------------------------- */
+
+.act-stop {
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.act-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.act-model {
+  display: inline-block;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.act-errors {
+  color: var(--error);
+  font-weight: var(--weight-medium);
+}
+
+.act-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.act-footer__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* -- Detail: chrome -------------------------------------------------------- */
+
+.act-crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.act-title-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A stated limitation, not a decoration. One colored edge, no fill beyond the
+   surface step, no shadow. */
+.act-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  max-width: 100ch;
+}
+
+.act-notice > p {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.act-panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.act-panel__title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+}
+
+.act-panel__count {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+}
+
+.act-panel__note {
+  font-size: var(--text-xs);
+  max-width: 72ch;
+}
+
+/* Chips and identifiers wrap as whole items, never mid-value: a truncated ID
+   broken across two lines is unreadable and unclickable. */
+.act-nowrap {
+  white-space: nowrap;
+}
+
+.act-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+/* -- Detail: the waterfall ------------------------------------------------- */
+
+.wf {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 680px;
+}
+
+.wf__row {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(300px, 1fr) minmax(200px, 1.1fr);
+  gap: var(--space-3);
+  align-items: stretch;
+  min-height: var(--row-height);
+  border-bottom: 1px solid var(--line);
+}
+
+.wf__row:last-child {
+  border-bottom: 0;
+}
+
+.wf__index {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-left: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.wf__node {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* One guide per level of nesting: the vertical rules that make depth readable
+   as structure rather than as indentation alone. */
+.wf__guide {
+  flex: none;
+  width: 16px;
+  align-self: stretch;
+  border-left: 1px solid var(--line);
+}
+
+/* The rule. Fixed width, forever. */
+.wf__rule {
+  flex: none;
+  width: 40px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--line-strong);
+}
+
+.wf__rule--root {
+  background: var(--ink-2);
+}
+
+.wf__label {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.wf__step {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.wf__facts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-1) var(--space-4) var(--space-1) 0;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.wf__fact {
+  white-space: nowrap;
+}
+
+.wf__fact-label {
+  color: var(--muted);
+}
+
+.wf__fact-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Detail: the event inspector ------------------------------------------- */
+
+.ev__toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: var(--text-sm);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.ev__count {
+  margin-left: auto;
+  font-size: var(--text-xs);
+}
+
+.ev {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ev__item {
+  border-bottom: 1px solid var(--line);
+}
+
+.ev__item:last-child {
+  border-bottom: 0;
+}
+
+.ev__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ev__head:hover {
+  background: var(--surface-2);
+}
+
+.ev__index {
+  flex: none;
+  width: 2rem;
+  text-align: right;
+  font-size: var(--text-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.ev__type {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.ev__type-name {
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.ev__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+}
+
+.ev__attr-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.ev__caret {
+  width: 1rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.ev__body {
+  padding: var(--space-2) var(--space-4) var(--space-4) calc(var(--space-4) + 2rem);
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.ev__attrs-title {
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.ev__none {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+}
+
+/* -- Detail: failures ------------------------------------------------------ */
+
+.act-failures {
+  display: flex;
+  flex-direction: column;
+}
+
+.act-failure {
+  border-bottom: 1px solid var(--line);
+}
+
+.act-failure:last-child {
+  border-bottom: 0;
+}
+
+.act-failure__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+
+.act-failure__time {
+  font-size: var(--text-xs);
+}
+
+.act-failure__link {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.act-failure__detail {
+  padding: 0 var(--space-4) var(--space-3);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+  max-width: 100ch;
+}
+
+/* The four failure-position scalars. A cell with no value says "not available"
+   rather than showing a zero, because the runtime records these only on the
+   routes that can reach an activation context. */
+.fail {
+  border-top: 1px solid var(--line);
+}
+
+.fail__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.fail__cell {
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--line);
+  min-width: 0;
+}
+
+.fail__cell:last-child {
+  border-right: 0;
+}
+
+.fail__label {
+  color: var(--muted);
+}
+
+.fail__value {
+  margin-top: var(--space-1);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.fail__value--text {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.01em;
+}
+
+.fail__value--missing {
+  color: var(--faint);
+  font-weight: var(--weight-regular);
+}
+
+.fail__note {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.fail__source {
+  padding: 0 var(--space-4) var(--space-3);
+  font-size: var(--text-xs);
+  max-width: 90ch;
+}
+
+@media (max-width: 720px) {
+  .act-notice {
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .ev__body {
+    padding-left: var(--space-4);
+  }
+}
