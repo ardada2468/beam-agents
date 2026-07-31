@@ -1,29 +1,158 @@
 ---
 title: LangGraph adapter
-summary: Adopt an existing LangGraph graph without editing its topology.
+summary: Adopt an existing LangGraph graph without editing its topology — three changes, a real streaming pipeline, and a tripwire proving model calls are replay-cached.
 status: stable
 order: 6
 verifies:
-  - example: langgraph_adapter.py
-  - spec: openspec/specs/wire-schemas/spec.md
+  - symbol: beam_agents.LangGraphAgent
+  - module: src/beam_agents/adapters/langgraph/agent.py
+  - module: src/beam_agents/adapters/langgraph/toolnode.py
+  - module: src/beam_agents/adapters/langgraph/checkpoint.py
+  - spec: openspec/specs/tool-registry/spec.md
+  - spec: openspec/specs/llm-replay-cache/spec.md
   - test: tests/docs/test_website_examples.py
   - test: tests/adapters/test_e2e_pipeline.py
+  - test: tests/adapters/test_toolnode_shim.py
+  - test: tests/adapters/test_transport_hook.py
+  - test: tests/conformance/test_matrix.py
+  - example: langgraph_adapter.py
 ---
 
-Three changes, none to the graph's shape: re-tag side-effecting tools, swap `ToolNode`
-for `BeamToolNode`, and wrap the graph in `LangGraphAgent`.
+Agent authoring belongs to frameworks. Execution guarantees belong here. This example is
+the seam between the two: an ordinary model-and-tools graph, adopted whole, running
+inside a streaming pipeline that gives it durable checkpoints, deduplicated side
+effects, and replay-cached model calls.
 
-This example requires the `langgraph` extra. Without it installed, the repository's test
-suite skips it with a stated reason rather than failing.
+The graph's topology is not edited. Three changes, none of them structural, are the
+entire adoption cost.
 
 <Callout>
-This example needs the `langgraph` extra: `uv sync --extra langgraph`.
+This example needs the `langgraph` extra: `uv sync --extra langgraph`. Without it, the
+repository's test suite skips the example with a stated reason rather than failing —
+the marker that drives the skip is the `# requires-extra: langgraph` line in the file
+itself.
 </Callout>
 
-Run it:
+## The three changes
+
+### 1. Re-declare side-effecting tools
+
+<Example file="langgraph_adapter.py" region="tool" />
+
+`side_effect=True` is the whole declaration. A tool carrying it never executes inside
+the pipeline: the runtime turns the call into a `ToolIntent`, and the effector performs
+it exactly once per intent id. Calling it directly raises — see
+[read-only tools and side effects](/examples/read-only-tools) for the guard.
+
+### 2. and 3. Swap the tool node, wrap the graph
+
+<Example file="langgraph_adapter.py" region="graph" />
+
+`BeamToolNode` is a drop-in for LangGraph's prebuilt `ToolNode`, and it is the only
+topology-adjacent line in the file. It sorts each batch of tool calls by the
+`side_effect` flag: read-only tools run inline and come back as `ToolMessage`s in the
+same node invocation, while side-effecting ones are collected and raised as a single
+LangGraph `interrupt(...)`. It accepts runtime `Tool` objects only, and raises at
+construction if handed something else — so a graph that forgot change 1 fails loudly
+rather than executing a write inside the pipeline.
+
+`LangGraphAgent` wraps the result. A user-compiled graph is never mutated: the
+per-activation checkpointer is injected into a copy. The `chat_models` list is how the
+adapter finds the models to instrument — see the transport section below.
+
+Everything else in that function is a plain LangGraph graph. `add_node`, `add_edge`,
+`add_conditional_edges`, `START`, `END` — unchanged, and portable back out.
+
+## Choosing what lands on .output
+
+<Example file="langgraph_adapter.py" region="encode" />
+
+The default encoder serializes the whole terminal state as JSON, which for a message
+graph includes LangChain's per-message UUIDs. That is useful as a debugging tap and
+awkward as a contract for a downstream consumer, so `encode_output` is the hook for
+deciding what the pipeline actually publishes. The mirror hook, `decode_event`, turns
+the inbound `AgentEnvelope` payload into graph input.
+
+## Pickling: the worker-local singleton
+
+<Example file="langgraph_adapter.py" region="singleton" />
+
+`RunAgent` holds the agent inside a stateful `DoFn` that Beam serializes and ships to
+workers, and a compiled graph is not a thing to serialize. Handing `RunAgent` a
+module-level function means only a reference travels; each worker builds its own graph
+on first activation.
+
+This is a *worker-local* singleton, which is the sanctioned shape. It holds no per-key
+state, so it does not introduce the cross-key shared mutable state that
+[correctness invariant 4](/learn/correctness-invariants) forbids.
+
+## Model calls really do go through the runtime
+
+<Example file="langgraph_adapter.py" region="transport" />
+
+The claim "recognized httpx-backed chat models are served through the runtime's
+replay-cached client" is easy to assert and easy to get wrong. So the example installs a
+`MockTransport` on the model's own client that raises if it is ever reached, and the
+program passes — which means every request the graph issued was intercepted and served
+by the runtime.
+
+That interception is what buys the graph replay-cached model calls: a retried bundle
+walking the same path re-reads the cache instead of re-calling the provider, so a retry
+cannot re-bill the call and cannot take a different branch because the model answered
+differently the second time. The [replay cache spec](/specs/llm-replay-cache) has the
+key derivation and the bounds.
+
+An **unrecognized** chat model falls back to direct calls with a one-time warning and a
+`transport_fallback` metric. It still works; it simply does not carry the replay
+guarantee.
+
+## The intent id is predictable here too
+
+<Example file="langgraph_adapter.py" region="intent-id" />
+
+Nothing about going through an adapter weakens the determinism. The graph's model call
+consumes step 0 of the activation, the tool shim's side-effect intent is step 1, and the
+id follows from `(key, seq, step_index)` alone — so the test can name the intent the
+graph is about to stage, before the pipeline is built, and assert on it exactly.
+
+## What the graph gains, and what to watch
+
+Adoption buys the four things a graph running by itself does not have: durable keyed
+checkpoints, side effects behind deduplicated intents, replay-cached model calls, and
+per-key serialization.
+
+Two caveats, both documented by the adapter itself:
+
+- **Checkpoints persist latest-only inside working memory**, under the same per-key cap
+  as everything else in that blob. Long message histories have to be trimmed or
+  summarized on the LangGraph side; the adapter will not do it for you.
+- **An interrupted node re-runs from its start** on resume. That is LangGraph's own
+  resume semantics, not something the adapter adds: code before the `interrupt()`
+  executes again. Because side effects can only live behind intents and model calls are
+  replay-cached, re-execution is deterministic and cheap — but pre-interrupt node code
+  should be idempotent regardless.
+
+## Run it
 
 ```sh
+uv sync --extra langgraph
 uv run python website/examples/langgraph_adapter.py
 ```
 
+The program scripts a `TestStream`: one event, then the effector's `ToolResult` arriving
+on the same key, so the interrupt-and-resume round trip completes in one bounded run.
+
+## The complete program
+
 <Example file="langgraph_adapter.py" />
+
+## Related
+
+- [Adapters](/comparison/adapters) — which frameworks are supported today, and the
+  conformance matrix that keeps the answer honest.
+- [Architecture](/learn/architecture) — the re-injection path this graph's interrupt
+  travels.
+- [Intents and resume](/examples/intents-and-resume) — the same round trip without a
+  framework in the way.
+- [LLM replay cache](/specs/llm-replay-cache) — what interception buys.
+- [`LangGraphAgent`](/api/LangGraphAgent) in the API reference.

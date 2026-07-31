@@ -49,9 +49,11 @@ from beam_agents.core.agent import intent_id_for
 from beam_agents.model.fake import FakeLLM, match_any, match_contains, respond_with
 from beam_agents.tools import tool
 
+# region: intent-id
 ENTITY_KEY = b"incident-7"
 # The model call consumes step 0; the tool shim's side-effect intent is step 1.
 EXPECTED_INTENT_ID = intent_id_for(ENTITY_KEY, 0, 1)
+# endregion: intent-id
 
 
 # region: tool
@@ -104,6 +106,7 @@ class _SdkClient:
         self._client = httpx.AsyncClient(transport=transport)
 
 
+# region: transport
 class _ChatModel:
     """Stands in for a LangChain chat model.
 
@@ -120,6 +123,9 @@ def _tripwire(request: httpx.Request) -> httpx.Response:
     raise AssertionError("the chat model's own transport must never be reached")
 
 
+# endregion: transport
+
+
 def _to_wire(messages: list[Any]) -> list[dict[str, str]]:
     wire: list[dict[str, str]] = []
     for message in messages:
@@ -132,6 +138,7 @@ def _to_wire(messages: list[Any]) -> list[dict[str, str]]:
     return wire
 
 
+# region: encode
 def encode_output(state: object) -> bytes:
     """Emit just the final assistant message on `.output`.
 
@@ -142,6 +149,9 @@ def encode_output(state: object) -> bytes:
     """
     assert isinstance(state, dict)
     return str(state["messages"][-1].content).encode()
+
+
+# endregion: encode
 
 
 # region: graph
@@ -177,15 +187,27 @@ def build_agent() -> LangGraphAgent:
 # endregion: graph
 
 
+# region: singleton
 _AGENT: LangGraphAgent | None = None
 
 
 async def langgraph_agent(ctx: Any) -> Any:
-    """Worker-side lazy singleton, so the DoFn pickles by reference."""
+    """Worker-side lazy singleton, so the DoFn pickles by reference.
+
+    A compiled LangGraph graph is not something you want to serialize into the
+    DoFn and ship to every worker. Handing `RunAgent` this module-level
+    function instead means only a reference travels, and each worker builds its
+    own graph the first time it activates. It is worker-*local*, so it does not
+    violate the no-cross-key-shared-mutable-state rule: the graph is rebuilt
+    per process and holds nothing about any particular key.
+    """
     global _AGENT  # noqa: PLW0603 - worker-local singleton
     if _AGENT is None:
         _AGENT = build_agent()
     return await _AGENT(ctx)
+
+
+# endregion: singleton
 
 
 def _event(t_ms: int) -> TimestampedValue:
