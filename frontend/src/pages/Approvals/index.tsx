@@ -52,6 +52,8 @@ import {
   shortId,
 } from '@/lib/format';
 
+import './approvals.css';
+
 /** How many approvals to pull. The queue is a working set, not an archive. */
 const LIMIT = 200;
 
@@ -376,14 +378,25 @@ export default function Page() {
         a queue longer than that is not counted in full.
       </p>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2 style={{ fontSize: 'var(--text-md)' }}>This page cannot approve or deny</h2>
+      {/*
+        A disclosure, not a panel.
+
+        The claim that matters — this page cannot approve anything — is one
+        line, and it was spending the entire top of the screen to say it:
+        somebody arriving to look at the queue read a paragraph about
+        `AgentEnvelope.Approval` before reaching a single row of one. The
+        summary carries the whole point, and the detail stays one click away for
+        the reader who has just noticed there is no Approve button and wants to
+        know where the button actually is.
+      */}
+      <details className="ap-readonly">
+        <summary>
           <Chip tone="neutral" plain>
             Read-only
           </Chip>
-        </div>
-        <div className="panel-body stack" style={{ gap: 'var(--space-3)', maxWidth: '92ch' }}>
+          <span>This page cannot approve or deny — where to do it instead</span>
+        </summary>
+        <div className="ap-readonly__body">
           <p>
             The console reads stored telemetry and never writes to a running pipeline. A decision
             reaches a suspended activation as an{' '}
@@ -399,7 +412,7 @@ export default function Page() {
             Waiting is a decision.
           </p>
         </div>
-      </section>
+      </details>
 
       {all.isPending || pending.isPending ? (
         <div className="panel">

@@ -62,5 +62,6 @@ nav:
       - Runtime metrics: metrics.md
       - Trace delivery: traces.md
       - The console: console.md
+      - Deploying to Dataflow: deploying.md
       - State export and replay: replay.md
       - Releasing: releasing.md

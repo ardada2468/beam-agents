@@ -1,0 +1,70 @@
+/*
+ * Approvals-page layout only. Flat `ap-` classes, never nested more than one
+ * level deep — the same rule `ui.css` follows.
+ */
+
+/* The read-only disclosure. Styled as a rule with a summary rather than as a
+   panel, so a closed one reads as a note and an open one as prose — neither
+   competes with the queue below it for the eye. */
+.ap-readonly {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.ap-readonly > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  /* The default triangle is replaced by the chip, which says more. */
+  list-style: none;
+}
+
+.ap-readonly > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ap-readonly > summary:hover {
+  color: var(--ink);
+}
+
+.ap-readonly > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  border-radius: var(--radius);
+}
+
+/* A caret drawn last, so the chip stays the leading element. */
+.ap-readonly > summary::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  margin-left: auto;
+  border-right: 1px solid var(--faint);
+  border-bottom: 1px solid var(--faint);
+  transform: rotate(45deg);
+  transition: transform var(--duration) var(--ease);
+}
+
+.ap-readonly[open] > summary::after {
+  transform: rotate(225deg);
+}
+
+.ap-readonly__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 92ch;
+  padding: 0 var(--space-3) var(--space-3);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.ap-readonly__body p {
+  margin: 0;
+}
