@@ -308,6 +308,19 @@ async def batch_join_agent(ctx: ActivationContext) -> Complete:
     return Complete(output=b"|".join(ctx.events) + b"#" + str(ctx.seq).encode())
 
 
+async def batch_prior_agent(ctx: ActivationContext) -> Complete:
+    """Report the key's committed memory alongside the batch, then write to it.
+
+    ``prior/joined-events``, so a flush that reasoned from a blank working
+    memory instead of the key's committed one is visible in the output rather
+    than only in the blob nobody asserts on.
+    """
+    prior = ctx.memory.get("prior") or b"-"
+    joined = b"|".join(ctx.events)
+    ctx.memory.set("last_batch", joined)
+    return Complete(output=prior + b"/" + joined)
+
+
 async def batch_shape_agent(ctx: ActivationContext) -> Complete:
     """Report the agent-visible shape: ``<is_batch>:<type>:<len(events)>``.
 

@@ -1,0 +1,195 @@
+---
+title: Compared with running a framework yourself
+summary: What the runtime provides that an agent framework plus a job scheduler does not — and where the honest answer is "you may not need this".
+status: stable
+order: 2
+verifies:
+  - symbol: beam_agents.RunAgent
+  - module: src/beam_agents/core/dofn.py
+  - module: src/beam_agents/model/replay_cache.py
+  - spec: openspec/specs/llm-replay-cache/spec.md
+  - test: tests/semantics/test_retry_determinism.py
+  - test: tests/core/test_dofn_commit.py
+  - example: intents_and_resume.py
+sources:
+  - claim: LangGraph is an agent-authoring framework maintained by LangChain, used here only as a stand-in for "the framework you already run".
+    url: https://github.com/langchain-ai/langgraph
+    retrieved: 2026-07-30
+  - claim: Apache Flink Agents is a separate comparable project, covered on its own page.
+    url: https://github.com/apache/flink-agents
+    retrieved: 2026-07-30
+---
+
+The realistic alternative to this project is not another runtime. It is a
+LangGraph app in a container, consuming from a queue, with state in Redis. That
+works, and for a lot of workloads it keeps working. This page is about the
+specific failures it has, and when they matter enough to justify a pipeline.
+
+{/*
+  The argument on this page is spatial, so it gets drawn.
+
+  Two panels, same work, same shape, so the only thing that changes between
+  them is where the retry boundary falls and what is inside it. Both panels
+  put one box at the top of the boundary and fork it into a left slot (state)
+  and a right slot (the effect). Beside the runtime the right slot is the
+  external API, inside the boundary. Inside the runtime the right slot leads
+  *out* of the boundary, and the effect happens two boxes further down. The
+  two rectangles are labelled identically for exactly that reason: a reader who
+  reads nothing else should still see which one contains the effect.
+
+  Deliberately generic nouns — "queue", "worker process", "state store". This
+  is a comparison page, which means every claim about a named third party needs
+  a dated citation, and a picture is a claim like any other. Nothing here is
+  about LangGraph or any other framework's behaviour; it is about an
+  architectural arrangement, which is what the prose argues too.
+
+  600 user units wide because that is the reading column; anything wider
+  scrolls sideways even on a large desktop. Height is free, so the panels
+  stack.
+*/}
+
+<Diagram
+  title="Two arrangements of the same work"
+  desc="Two stacked panels. Beside the runtime: a queue that redelivers on failure feeds a worker process holding the agent and its framework, and the worker forks into a state store that commits separately and an external API where the effect runs. A rectangle labelled retry boundary encloses all three, so a redelivery re-runs the worker, the state write and the API call. Inside the runtime: events feed the RunAgent transform, which stages every effect and forks into keyed state that commits with the bundle and an intents output. A rectangle labelled retry boundary encloses the transform and its keyed state only. The intents output leaves that rectangle to an outbox topic that deduplicates by intent id, and then to an effector — a separate service, outside the boundary, where the effect runs. Its result re-enters on the same key."
+  caption="Same work, same shape, one difference: in the upper panel the retry boundary contains the external effect, and in the lower one the effect is the single thing left outside it."
+  viewBox="0 0 600 852"
+  minWidth={592}
+>
+  {/* ---- panel A: the framework beside the runtime ---- */}
+  <DgText x={16} y={26} variant="title">Beside the runtime</DgText>
+  <DgText x={16} y={46} variant="faint">A REDELIVERY RE-RUNS EVERYTHING INSIDE THE BOUNDARY</DgText>
+  <DgNode x={180} y={62} w={240} h={48} label="queue" sub="REDELIVERS ON FAILURE" />
+  {/*
+    The boundary is a closed path on `DgEdge`, not a `DgNode`: it is an
+    annotation over the drawing, and the lighter rule stroke keeps it from
+    competing with the boxes it encloses. Feed lines cross it on purpose.
+  */}
+  <DgEdge d="M 24,148 H 576 V 322 H 24 Z" arrow={false} />
+  <DgText x={34} y={164} variant="faint">RETRY BOUNDARY</DgText>
+  <DgEdge d="M 300,110 V 172" />
+  <DgNode x={180} y={176} w={240} h={48} label="worker process" sub="AGENT AND FRAMEWORK" />
+  <DgEdge d="M 300,224 V 242" arrow={false} />
+  <DgEdge d="M 156,242 H 444" arrow={false} />
+  <DgEdge d="M 156,242 V 254" />
+  <DgEdge d="M 444,242 V 254" />
+  <DgNode x={32} y={258} w={248} h={48} soft label="state store" sub="SEPARATE COMMIT" />
+  <DgNode x={320} y={258} w={248} h={48} label="external API" sub="EFFECT RUNS HERE" />
+  {/* The rule between the panels. Nothing crosses it; they are alternatives. */}
+  <DgEdge d="M 16,352 H 584" arrow={false} />
+  {/* ---- panel B: the agent inside the runtime ---- */}
+  <DgText x={16} y={392} variant="title">Inside the runtime</DgText>
+  <DgText x={16} y={412} variant="faint">NOTHING INSIDE THE BOUNDARY APPLIES UNTIL THE BUNDLE COMMITS</DgText>
+  <DgNode x={180} y={428} w={240} h={48} label="events" sub="KEYED BY ENTITY" />
+  <DgEdge d="M 24,514 H 576 V 688 H 24 Z" arrow={false} />
+  <DgText x={34} y={530} variant="faint">RETRY BOUNDARY</DgText>
+  <DgEdge d="M 300,476 V 538" />
+  <DgNode x={180} y={542} w={240} h={48} label="RunAgent" sub="STAGES EVERY EFFECT" />
+  <DgEdge d="M 300,590 V 608" arrow={false} />
+  <DgEdge d="M 156,608 H 444" arrow={false} />
+  <DgEdge d="M 156,608 V 620" />
+  <DgNode x={32} y={624} w={248} h={48} soft label="keyed state" sub="COMMITS WITH THE BUNDLE" />
+  {/*
+    The right fork is the mirror of panel A's external API — same slot, but it
+    leaves the boundary instead of sitting inside it. Coloured as the intents
+    stream because that is literally what it carries.
+  */}
+  <DgEdge d="M 444,608 V 700" stream="intents" />
+  {/* The name is a separate `DgText` rather than the edge's own label, because
+      only `DgText` can carry the stream colour — and a rail name in a
+      different colour from its rail reads as a different thing. */}
+  <DgText x={464} y={656} variant="faint" stream="intents">.intents</DgText>
+  <DgNode x={320} y={704} w={248} h={48} label="outbox topic" sub="DEDUP BY INTENT_ID" />
+  <DgEdge d="M 444,752 V 774" />
+  <DgNode x={320} y={778} w={248} h={48} label="effector" sub="EFFECT RUNS HERE" />
+  {/*
+    Dashed, because this is the one path that leaves the pipeline and comes
+    back — the same convention the landing-page diagram uses for the intent
+    loop. It runs up the right margin, outside the boundary rectangle, because
+    every other lane is occupied.
+  */}
+  <DgEdge d="M 568,802 H 588 V 452 H 424" dashed label="RE-ENTERS ON THIS KEY" labelX={505} labelY={444} />
+</Diagram>
+
+## The four problems this exists to solve
+
+### 1. A retried unit of work re-executes its effects
+
+A worker crashes after calling the payments API but before acknowledging the
+message. The message is redelivered. The refund goes out twice.
+
+The usual mitigations are an idempotency key you generate and store, or an
+inbox table. Both work; both are yours to build and to get right.
+
+Here, the identity is structural rather than generated: the intent id is
+`uuid5(namespace, key|seq|step_index)`, a pure function of the activation's
+position. A replayed bundle walking the same path mints the same id, and the
+effector deduplicates on it.
+
+<Example file="intents_and_resume.py" region="agent" />
+
+The guarantee is bounded and stated as such: duplicates are confined to the
+crash window between a tool's effect and its durable completion record, and
+true exactly-once still requires the tool to be idempotent on `intent_id`.
+
+### 2. A retried unit of work re-bills its model calls
+
+Fewer people think about this one. If the crash above happened after three
+model calls, the retry pays for three more — and if the model answers
+differently the second time, the retry takes a *different path*, which can
+undo the reasoning that led to the effect you already performed.
+
+The replay cache keys every call on the request content plus `(key, seq)` and
+stores it in keyed state. A bundle retry costs zero additional provider calls
+on the cached path, and takes the same path.
+
+### 3. Partial state after a failure
+
+The framework wrote to memory, then failed. Now the agent's state reflects half
+of a decision that never completed.
+
+Every effect an activation produces is staged and applied only on success.
+A failed activation mutates nothing — no memory write, no intent, not even the
+sequence counter. You can see it from outside: a failed activation's staged
+traces are discarded with everything else, leaving a single `ERROR` event where
+a committed one emits a full span set.
+
+### 4. Concurrency on the same entity
+
+Two events for the same account arrive at once and two workers process them
+concurrently against shared state. The usual fix is a distributed lock.
+
+Beam serializes elements per key. There is no lock because there is no
+concurrency to guard — parallelism comes from having many keys, not many
+workers per key.
+
+## When you do not need this
+
+Directly and without hedging:
+
+- **A human is waiting.** This is designed for system-triggered agents, not
+  sub-second interactive chat. If someone is watching a text box, use something
+  else.
+- **Your effects are already idempotent.** If every write is an upsert keyed on
+  something stable, problem 1 is already solved and problem 2 is a cost
+  question rather than a correctness one.
+- **Your volume is small.** A pipeline is real operational weight — a runner, a
+  message bus, an effector service. Below some throughput, a container and a
+  queue is the right engineering call.
+- **You need it in production now.** This project is unreleased. That is a
+  serious argument against it, and it should be weighed as one.
+
+## What you give up
+
+- **Python only**, for v0.x.
+- **A runtime dependency on Beam**, including its Python SDK's constraints — no
+  `MapState`, no portable async DoFn, stateful DoFns require KV input.
+- **The effector is a separate service you deploy and operate.** Effects
+  happening outside the pipeline is what makes the guarantee possible, and also
+  what makes it another thing to run.
+- **A young API.** Writing an agent currently requires importing from modules
+  the project documents as private. See [the API reference](/api).
+
+## Related
+
+- [Correctness invariants](/learn/correctness-invariants)
+- [Compared with Apache Flink Agents](/comparison/flink-agents)

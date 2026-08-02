@@ -46,9 +46,26 @@ def _step_appending(suffix: bytes, *, to_version: int) -> Callable[[MemoryBlob],
     target version (as a real registered step does — the incoming stamp may
     read the raw `0` of a pre-versioned blob) and appends `suffix` to the
     marker entry, so composition order is observable.
+
+    Single-shot, and that is load-bearing rather than defensive. `walk the
+    chain one step at a time` means each registered step is applied exactly
+    once; the walk's only source of progress is the cursor advance after a
+    successful step, so a walk that re-enters a step is a walk that does not
+    terminate. Raising on re-entry turns that into an immediate failure in
+    whichever chain-walking test runs first, instead of a hang — which is
+    neither a pass nor a fail, and is exactly what the mutation gate refuses
+    to accept as a verdict.
     """
+    applied = 0
 
     def step(blob: MemoryBlob) -> MemoryBlob:
+        nonlocal applied
+        applied += 1
+        if applied > 1:
+            raise AssertionError(
+                f"migration step to version {to_version} was applied {applied} times; "
+                "a chain walk applies each step once and then advances"
+            )
         migrated = MemoryBlob()
         migrated.CopyFrom(blob)
         migrated.state_schema_version = to_version
@@ -85,6 +102,38 @@ def test_chains_compose_across_multiple_versions(monkeypatch: pytest.MonkeyPatch
     assert migrated.entries[0].value == b"v1+2+3"
 
 
+def test_the_walk_advances_one_version_per_step_and_terminates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The chain walk's termination argument, stated rather than assumed: the
+    # cursor advances by exactly one after each successful step, so a chain of
+    # length N applies N steps and stops. Nothing else in this suite pins the
+    # advance -- the composed suffixes above would look identical to a walk
+    # that re-applied the first step forever until it ran out of memory, and a
+    # non-terminating walk on the element path wedges a key rather than failing
+    # it.
+    monkeypatch.setattr(migration, "CURRENT_STATE_SCHEMA_VERSION", 4)
+    seen: list[int] = []
+
+    def recording(to_version: int) -> Callable[[MemoryBlob], MemoryBlob]:
+        inner = _step_appending(f"+{to_version}".encode(), to_version=to_version)
+
+        def step(blob: MemoryBlob) -> MemoryBlob:
+            seen.append(blob.state_schema_version)
+            return inner(blob)
+
+        return step
+
+    for version in (1, 2, 3):
+        migration.migration(MemoryBlob, from_version=version)(recording(version + 1))
+
+    migrated = migrate_to_current(_memory_blob(1))
+
+    # Each step saw exactly the version it was registered for, once, in order.
+    assert seen == [1, 2, 3]
+    assert migrated.state_schema_version == 4
+
+
 def test_a_gap_in_the_chain_is_a_hard_error(monkeypatch: pytest.MonkeyPatch) -> None:
     # Scenario: A gap in the chain is a hard error.
     monkeypatch.setattr(migration, "CURRENT_STATE_SCHEMA_VERSION", 3)
@@ -97,8 +146,17 @@ def test_a_gap_in_the_chain_is_a_hard_error(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert excinfo.value.message_type is MemoryBlob
     assert excinfo.value.from_version == 2
-    assert "MemoryBlob" in str(excinfo.value)
-    assert "2" in str(excinfo.value)
+    assert excinfo.value.current_version == 3
+    # The full message, not a substring. The spec's word is "naming the message
+    # type and the missing `from_version`", and this error only ever surfaces
+    # in a build that bumped the constant without shipping its steps -- so what
+    # it says about *which* steps are still owed (`1..current - 1`) is the whole
+    # value of the record, and a substring check cannot tell that range from
+    # any other.
+    assert str(excinfo.value) == (
+        "no migration registered for MemoryBlob at version 2 (current version is 3); "
+        "every step in 1..2 must be registered in core/migration.py"
+    )
 
 
 def test_a_current_version_blob_passes_through_untouched() -> None:
@@ -142,6 +200,13 @@ def test_a_step_that_fails_to_advance_the_stamp_is_rejected(
     assert excinfo.value.message_type is MemoryBlob
     assert excinfo.value.from_version == 1
     assert excinfo.value.produced_version == 1
+    # Both versions in full: the message's job is to say what the step returned
+    # *and* what it owed, and "expected 2" is the half a migration author acts
+    # on. The two numbers are one apart, so anything less than the exact string
+    # leaves the arithmetic unasserted.
+    assert str(excinfo.value) == (
+        "migration step for MemoryBlob at version 1 returned state_schema_version=1, expected 2"
+    )
 
 
 def test_chains_are_per_message_type(monkeypatch: pytest.MonkeyPatch) -> None:

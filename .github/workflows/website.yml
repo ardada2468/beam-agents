@@ -1,0 +1,68 @@
+name: website
+
+# Triggered by more than `website/**` on purpose: the site's fidelity checks
+# assert against the repository, so a change to `src/`, `docs/`, or the specs
+# can invalidate a published claim without touching a single site file. That
+# is the whole point of the claim registry — it has to run when the ground
+# truth moves, not when the prose does.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'src/**'
+      - 'docs/**'
+      - 'openspec/specs/**'
+      - 'scripts/gen_api_reference.py'
+      - 'scripts/verify_docs_claims.py'
+      - 'scripts/check_docs_prose.py'
+      - '.github/workflows/website.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'src/**'
+      - 'docs/**'
+      - 'openspec/specs/**'
+      - 'scripts/gen_api_reference.py'
+      - 'scripts/verify_docs_claims.py'
+      - 'scripts/check_docs_prose.py'
+      - '.github/workflows/website.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  website:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: website/.nvmrc
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+
+      # `site-check` verifies claims against the real package, so the Python
+      # environment has to be present — see design D3. `site-build` alone does
+      # not need this step.
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.11'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python dependencies
+        run: uv sync --locked --group test --extra langgraph
+
+      - name: Site check
+        run: make site-check

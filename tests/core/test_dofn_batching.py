@@ -19,16 +19,28 @@ import pytest
 from apache_beam.utils.timestamp import Timestamp
 
 from beam_agents._protos import AgentEnvelope, Continuation, LlmCacheBlob, MemoryBlob, ToolIntent
+from beam_agents._protos import TraceEvent as TraceEventProto
 from beam_agents.core.agent import intent_id_for
-from beam_agents.core.batching import TRIGGER_SIZE, TRIGGER_TIMER, BatchSettings
+from beam_agents.core.batching import (
+    TRACE_BATCH_SIZE,
+    TRACE_BATCH_TRIGGER,
+    TRIGGER_SIZE,
+    TRIGGER_TIMER,
+    BatchSettings,
+)
 from beam_agents.core.dofn import (
     REASON_BATCH_OVERFLOW,
     REASON_ERROR,
+    REASON_TIMEOUT,
     REASON_TTL_WIPED_BATCH,
     ActivationError,
     _AgentDoFn,
 )
+from beam_agents.core.loop import ActivationResult
 from beam_agents.hitl import HITL_TIMEOUT_OUTPUT, HitlPolicy
+from beam_agents.memory import Memory
+from beam_agents.model.replay_cache import ReplayCache, compute_cache_key
+from beam_agents.observability import trace_id_for
 from beam_agents.observability.metrics import (
     COUNTER_ACTIVATIONS,
     COUNTER_AGENT_ERRORS,
@@ -41,10 +53,14 @@ from tests.core._dofn_fakes import FakeBag, FakeSum, FakeTimer, FakeValue, Recor
 from tests.core._dofn_helpers import (
     batch_intent_agent,
     batch_join_agent,
+    batch_prior_agent,
     batch_suspend_agent,
     escalate_once,
+    make_briefly_slow_provider,
     make_pong_provider,
+    model_agent,
     raising_agent,
+    request,
 )
 
 _KEY = b"k"
@@ -53,6 +69,9 @@ _TTL_MS = 3_600_000
 # buffer cap with room for deferral above it.
 _SETTINGS = BatchSettings(max_batch_size=3, max_wait_ms=500, max_buffered_events=6)
 _WALL_S = 10.0
+# The one request `model_agent` issues, restated here so a test can compute the
+# replay-cache key a flush will look up.
+_REQUEST = request()
 
 
 def _event(payload: bytes, t_ms: int = 1_000) -> AgentEnvelope:
@@ -117,19 +136,32 @@ class _Driver:
         handles: _Handles | None = None,
         hitl_policy: HitlPolicy | None = None,
         wall_s: float = _WALL_S,
+        provider_factory: Any = make_pong_provider,
+        activation_timeout_s: float = 30.0,
+        cancel_grace_s: float = 5.0,
+        setup: bool = True,
     ) -> None:
         self.metrics = RecordingMetrics()
         self.handles = handles if handles is not None else _Handles()
         self.dofn = _AgentDoFn(
             agent,
-            provider_factory=make_pong_provider,
+            provider_factory=provider_factory,
+            activation_timeout_s=activation_timeout_s,
+            cancel_grace_s=cancel_grace_s,
             ttl_ms=_TTL_MS,
             hitl_policy=hitl_policy,
             metrics=self.metrics,
             batch=settings,
             time_fn=lambda: wall_s,
         )
-        self.dofn.setup()
+        # `setup=False` leaves the bridge and provider unbuilt, which is what
+        # presents `_activate`'s wiring assertion to the flush path -- the only
+        # failure that is neither an `ActivationTimeout` nor an
+        # `ActivationFailed`, and so the only one that reaches `_flush`'s
+        # general-exception route.
+        self._setup = setup
+        if setup:
+            self.dofn.setup()
 
     def process(self, envelope: AgentEnvelope) -> list[Any]:
         return list(self.dofn.process((_KEY, envelope), **self.handles.kwargs()))
@@ -175,7 +207,8 @@ class _Driver:
         )
 
     def close(self) -> None:
-        self.dofn.teardown()
+        if self._setup:
+            self.dofn.teardown()
 
 
 _DriverFactory = Callable[..., _Driver]
@@ -233,6 +266,45 @@ def test_the_wait_is_armed_once_from_the_first_buffered_event(driver: _DriverFac
     assert run.handles.seq.value == 0
 
 
+def test_an_event_joining_a_buffer_left_by_an_earlier_bundle_arms_nothing(
+    driver: _DriverFactory,
+) -> None:
+    # The same scenario across a bundle boundary, which is where the arming
+    # rule is actually load-bearing. `BATCH` is committed keyed state, so a new
+    # bundle can find the buffer already non-empty with its `FLUSH_TIMER` mark
+    # already set and no reading of the clock in this DoFn's history. The
+    # empty-to-non-empty transition is the only arming point, so appending to
+    # an existing buffer must arm nothing at all -- and unlike the two-events-
+    # in-one-bundle case above, which cannot distinguish "armed on the first"
+    # from "armed on every later one" under a fixed clock, this one has an
+    # observable difference: zero marks against one.
+    handles = _Handles(batch=FakeBag([_event(b"earlier")]))
+    run = driver(handles=handles)
+
+    run.process(_event(b"b"))
+
+    assert handles.flush_timer.marks == []
+    assert handles.payloads() == [b"earlier", b"b"]
+    assert handles.seq.value == 0
+
+
+def test_buffering_under_the_none_policy_names_the_wiring_bug() -> None:
+    # `_buffer`'s guard. `process()` routes to it only when batch settings
+    # exist, so `BatchPolicy.NONE` can never reach it -- which is exactly what
+    # the assertion says, and why the message has to name the policy: a future
+    # rewiring that routed a NONE pipeline here would otherwise crash on
+    # `settings.max_buffered_events` with a bare `AttributeError` that names
+    # nothing.
+    dofn = _AgentDoFn(batch_join_agent, provider_factory=make_pong_provider, batch=None)
+    handles = _Handles()
+
+    with pytest.raises(AssertionError) as exc_info:
+        list(dofn._buffer(_KEY, _event(b"a"), **handles.kwargs()))
+
+    assert str(exc_info.value) == "_buffer reached under BatchPolicy.NONE"
+    assert handles.batch.items == []
+
+
 # --- Requirement: reaching the size threshold flushes the buffer --------------
 
 
@@ -269,6 +341,117 @@ def test_a_size_flush_disarms_the_pending_flush_timer(driver: _DriverFactory) ->
     run.process(_event(b"c"))
 
     assert run.handles.flush_timer.cleared is True
+
+
+def test_a_flush_runs_against_the_keys_committed_working_memory(
+    driver: _DriverFactory,
+) -> None:
+    # A flush is an activation like any other, so it reads the key's committed
+    # `MEMORY` before running and writes the result back. Every batching test
+    # above starts from an empty blob, where "read the committed memory" and
+    # "start from nothing" are the same picture; this one seeds the key so they
+    # are not. Without the read a batch would silently reason from a blank
+    # working memory -- the failure mode a keyed agent runtime exists to
+    # prevent, and one no output shape reveals on its own.
+    seeded = Memory(now_ms=1_000)
+    seeded.set("prior", b"seed")
+    handles = _Handles(memory=FakeValue(seeded.to_blob()))
+    run = driver(batch_prior_agent, handles=handles)
+
+    run.process(_event(b"a"))
+    run.process(_event(b"b"))
+    emitted = run.process(_event(b"c"))
+
+    assert _main(emitted) == [b"seed/a|b|c"]
+    # ...and the committed blob carries the batch's own write forward.
+    committed = Memory(handles.memory.value, now_ms=1_000)
+    assert committed.get("prior") == b"seed"
+    assert committed.get("last_batch") == b"a|b|c"
+
+
+def test_a_flush_resolves_its_model_call_from_the_keys_replay_cache(
+    driver: _DriverFactory,
+) -> None:
+    # Scenario: A retried flush bundle replays deterministically -- "resolves
+    # the call from the replay cache with zero extra provider calls". The cache
+    # is keyed by `(entity_key, seq)`, which a flush shares with the attempt
+    # that populated it, so a re-run flush must reach the cached bytes. A flush
+    # that read no cache would look identical apart from the provider call it
+    # made, which is the entire correctness claim.
+    cache = ReplayCache(None, now_ms=1_000)
+    cache.put(
+        compute_cache_key(
+            _REQUEST.model_id,
+            _REQUEST.messages,
+            _REQUEST.tools_schema,
+            _REQUEST.sampling_params,
+            _KEY,
+            0,
+        ),
+        b"from-cache",
+    )
+    provider = make_pong_provider()
+    handles = _Handles(llm_cache=FakeValue(cache.to_blob()))
+    run = driver(model_agent, handles=handles, provider_factory=lambda: provider)
+
+    run.process(_event(b"a"))
+    run.process(_event(b"b"))
+    emitted = run.process(_event(b"c"))
+
+    assert _main(emitted) == [b"from-cache"]
+    assert provider.call_count == 0
+
+
+def test_a_flushs_activation_trace_names_the_batch_it_ran_over(
+    driver: _DriverFactory,
+) -> None:
+    # Scenario: One activation per flush ... "the flush activation's trace SHALL
+    # carry `beam_agents.batch.size` and `beam_agents.batch.trigger`". Asserted
+    # here, at the DoFn, and not only at the loop driver: the trigger is decided
+    # by whichever of the two flush paths fired and has to survive the hand-off
+    # through `_flush` and `_activate` to reach the trace. A trigger dropped in
+    # transit leaves a trace that still says "this was a batch" while silently
+    # losing which threshold assembled it.
+    run = driver()
+
+    run.process(_event(b"a"))
+    run.process(_event(b"b"))
+    size_flush = run.process(_event(b"c"))
+
+    start = _tagged(size_flush, "traces")[0]
+    assert start.event_type == TraceEventProto.ACTIVATION_START
+    assert start.attributes[TRACE_BATCH_SIZE] == "3"
+    assert start.attributes[TRACE_BATCH_TRIGGER] == TRIGGER_SIZE
+
+    run.process(_event(b"d"))
+    timer_flush = run.fire_flush()
+
+    start = _tagged(timer_flush, "traces")[0]
+    assert start.attributes[TRACE_BATCH_SIZE] == "1"
+    assert start.attributes[TRACE_BATCH_TRIGGER] == TRIGGER_TIMER
+
+
+async def test_the_activation_seam_names_no_trigger_by_default(driver: _DriverFactory) -> None:
+    # `_activate` carries `events` and `batch_trigger` as two independent
+    # parameters, so a caller can hand it a batch without naming a trigger --
+    # `_start` and `_resume` rely on that default to omit both. The unnamed
+    # value has to be empty for the same reason `run_activation`'s is: the
+    # attribute reaches a trace consumer that partitions flushes by trigger,
+    # and a placeholder there would count as a third trigger that never fired.
+    run = driver()
+
+    result, _elapsed_ms = run.dofn._activate(
+        key=_KEY,
+        seq=0,
+        now_ms=1_000,
+        memory_blob=None,
+        cache_blob=None,
+        events=[b"a"],
+    )
+
+    (start,) = [e for e in result.traces if e.event_type == TraceEventProto.ACTIVATION_START]
+    assert start.attributes[TRACE_BATCH_SIZE] == "1"
+    assert start.attributes[TRACE_BATCH_TRIGGER] == ""
 
 
 def test_the_batch_clock_is_the_latest_buffered_event_time(driver: _DriverFactory) -> None:
@@ -493,11 +676,18 @@ def test_a_failed_flush_dead_letters_every_batched_event_and_consumes_the_buffer
     run.process(_event(b"b"))
     emitted = run.process(_event(b"c"))
 
-    errors = _tagged(emitted, "errors")
-    assert len(errors) == 3
-    assert {error.reason for error in errors} == {REASON_ERROR}
-    assert all(f"batch_size=3,trigger={TRIGGER_SIZE}" in error.detail for error in errors)
-    assert all(error.event_time_ms == 1_000 for error in errors)
+    # The whole record, per envelope, not a field at a time. `.errors` is a
+    # sink an operator triages from: the key says which entity is poisoned,
+    # the detail says what raised and how big the batch was, and the event
+    # time says when -- and every one of those is derived from a different
+    # argument at the call site.
+    detail = (
+        f"{RuntimeError('agent blew up')!r} failed_at_step=0 after=ACTIVATION_START "
+        f"batch_size=3,trigger={TRIGGER_SIZE}"
+    )
+    assert _tagged(emitted, "errors") == [
+        ActivationError(_KEY, REASON_ERROR, detail, 1_000) for _ in range(3)
+    ]
     # One activation, so one ERROR trace -- not one per batched envelope.
     assert len(_tagged(emitted, "traces")) == 1
     assert run.metrics.counters[COUNTER_AGENT_ERRORS] == 3
@@ -509,6 +699,115 @@ def test_a_failed_flush_dead_letters_every_batched_event_and_consumes_the_buffer
     assert run.handles.llm_cache.value == LlmCacheBlob()
     assert run.handles.continuation.value is None
     assert run.handles.pending.items == []
+
+
+def test_a_failed_flushs_error_trace_carries_the_batchs_scope_and_position(
+    driver: _DriverFactory,
+) -> None:
+    # The trace half of the same scenario. The dead letters say what happened;
+    # the ERROR trace says *where* -- under which key and seq the batch ran, at
+    # which clock, what type raised, and how far the activation had walked. It
+    # is synthesized entirely from values `_flush` is holding when it catches,
+    # so every one of them is an argument that can be dropped or crossed with
+    # its neighbour and still produce a plausible-looking event.
+    run = driver(raising_agent)
+
+    run.process(_event(b"a"))
+    emitted = run.process(_event(b"b", t_ms=3_000))
+    emitted += run.process(_event(b"c", t_ms=2_000))
+
+    (trace,) = _tagged(emitted, "traces")
+    assert trace.event_type == TraceEventProto.ERROR
+    assert trace.attributes["beam_agents.reason"] == REASON_ERROR
+    # The batch's own scope: the key's current seq (the flush never got to
+    # increment it) and the batch clock, `max(event_time_ms)`.
+    assert trace.trace_id == trace_id_for(_KEY, 0)
+    assert trace.start_ms == 3_000
+    # The agent's exception type, not the runtime's `ActivationFailed` wrapper.
+    assert trace.attributes["error.type"] == "RuntimeError"
+    # ...and the failure position, which only the enriched `ActivationFailed`
+    # route can supply: nothing was staged before the raise.
+    assert trace.attributes["beam_agents.failure.step"] == "0"
+    assert trace.attributes["beam_agents.failure.last_event"] == "ACTIVATION_START"
+    assert trace.attributes["beam_agents.failure.staged_intents"] == "0"
+    assert trace.attributes["beam_agents.failure.llm_calls"] == "0"
+
+
+def test_a_flush_that_times_out_dead_letters_the_batch_with_no_exception_named(
+    driver: _DriverFactory,
+) -> None:
+    # Scenario: A flush activation that ... exceeds `activation_timeout` ...
+    # emits one ActivationError per buffered envelope with reason
+    # `activation_timeout`. The timeout route is the flush path's third exit
+    # and the only one with no exception to name: the coroutine may still be
+    # running, so neither its type nor its failure position is reachable, and
+    # absent is the only truthful reading. `make_briefly_slow_provider`
+    # outlasts the 50ms budget but finishes in ~300ms, so a flush that failed
+    # to apply its timeout would commit here rather than hang.
+    run = driver(
+        model_agent,
+        provider_factory=make_briefly_slow_provider,
+        activation_timeout_s=0.05,
+        cancel_grace_s=0.5,
+    )
+
+    run.process(_event(b"a"))
+    run.process(_event(b"b", t_ms=3_000))
+    emitted = run.process(_event(b"c", t_ms=2_000))
+
+    assert _tagged(emitted, "errors") == [
+        ActivationError(_KEY, REASON_TIMEOUT, f"batch_size=3,trigger={TRIGGER_SIZE}", 3_000)
+        for _ in range(3)
+    ]
+    (trace,) = _tagged(emitted, "traces")
+    assert trace.event_type == TraceEventProto.ERROR
+    assert trace.attributes["beam_agents.reason"] == REASON_TIMEOUT
+    assert trace.trace_id == trace_id_for(_KEY, 0)
+    assert trace.start_ms == 3_000
+    assert "error.type" not in trace.attributes
+    assert not any(key.startswith("beam_agents.failure.") for key in trace.attributes)
+    # Fail-closed, exactly as the raising route: the poison batch is consumed
+    # and nothing else moved.
+    assert run.handles.batch.items == []
+    assert run.handles.flush_timer.cleared is True
+    assert run.handles.seq.value == 0
+    assert run.handles.memory.value == MemoryBlob()
+    assert run.handles.continuation.value is None
+
+
+def test_a_flush_that_fails_outside_the_activation_wrap_still_fails_closed(
+    driver: _DriverFactory,
+) -> None:
+    # The flush path's general-exception exit. `run_activation` wraps every
+    # agent-path raise into `ActivationFailed`, so what reaches this branch is
+    # a failure of the runtime *around* the activation -- here the wiring
+    # assertion an un-`setup()` DoFn trips before any agent runs. It has to
+    # fail closed identically: one dead letter per envelope naming the
+    # exception and the batch, one ERROR trace, and a consumed buffer. Without
+    # this the whole branch is unexecuted, and an argument dropped from either
+    # of its two calls would look exactly like a working one.
+    run = driver(setup=False)
+
+    run.process(_event(b"a"))
+    run.process(_event(b"b"))
+    emitted = run.process(_event(b"c"))
+
+    detail = f"{AssertionError('setup() not called')!r} batch_size=3,trigger={TRIGGER_SIZE}"
+    assert _tagged(emitted, "errors") == [
+        ActivationError(_KEY, REASON_ERROR, detail, 1_000) for _ in range(3)
+    ]
+    (trace,) = _tagged(emitted, "traces")
+    assert trace.event_type == TraceEventProto.ERROR
+    assert trace.attributes["beam_agents.reason"] == REASON_ERROR
+    assert trace.trace_id == trace_id_for(_KEY, 0)
+    assert trace.start_ms == 1_000
+    assert trace.attributes["error.type"] == "AssertionError"
+    # No failure position: there is no `ActivationFailed` to read one from, and
+    # this route must not invent one.
+    assert not any(key.startswith("beam_agents.failure.") for key in trace.attributes)
+    assert run.handles.batch.items == []
+    assert run.handles.flush_timer.cleared is True
+    assert run.handles.seq.value == 0
 
 
 def test_a_failed_timer_flush_names_the_timer_trigger(driver: _DriverFactory) -> None:
@@ -523,6 +822,90 @@ def test_a_failed_timer_flush_names_the_timer_trigger(driver: _DriverFactory) ->
     assert f"batch_size=1,trigger={TRIGGER_TIMER}" in error.detail
     assert run.handles.batch.items == []
     assert run.handles.flush_timer.cleared is True
+
+
+# --- The flush commit's own handle contract ----------------------------------
+
+
+def _flush_result() -> ActivationResult:
+    """A committed-flush `ActivationResult` with nothing staged on it."""
+    return ActivationResult(
+        status="completed",
+        seq=0,
+        memory_blob=MemoryBlob(state_schema_version=1),
+        cache_blob=LlmCacheBlob(state_schema_version=1),
+        intents=[],
+        traces=[],
+        outputs=[],
+        continuation=None,
+        hitl_deadline_ms=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("missing", "message"),
+    [
+        ("batch", "a flush commit needs its buffer handle"),
+        ("flush_timer", "a flush commit needs its timer handle"),
+    ],
+)
+def test_a_flush_commit_refuses_a_missing_handle_by_name(
+    driver: _DriverFactory, missing: str, message: str
+) -> None:
+    # `_commit`'s two flush guards. `flush_size is not None` *is* the statement
+    # "this commit consumes a buffer", so both handles must be there -- the bag
+    # to clear and the timer to disarm. Without the guards a caller that passed
+    # a size but forgot a handle would raise `AttributeError: 'NoneType' object
+    # has no attribute 'clear'` from inside the commit, halfway through a fixed
+    # commit order, naming nothing about what it actually needed.
+    run = driver()
+    handles = run.handles
+    kwargs: dict[str, Any] = {"batch": handles.batch, "flush_timer": handles.flush_timer}
+    kwargs[missing] = None
+
+    with pytest.raises(AssertionError) as exc_info:
+        list(
+            run.dofn._commit(
+                _flush_result(),
+                1_000,
+                5,
+                handles.memory,
+                handles.continuation,
+                handles.llm_cache,
+                handles.pending,
+                handles.seq,
+                handles.ttl_timer,
+                handles.hitl_timer,
+                flush_size=2,
+                flush_trigger=TRIGGER_SIZE,
+                **kwargs,
+            )
+        )
+
+    assert str(exc_info.value) == message
+
+
+@pytest.mark.parametrize("missing", ["batch", "flush_timer"])
+def test_the_deferred_buffer_rearm_needs_both_handles_or_does_nothing(
+    driver: _DriverFactory, missing: str
+) -> None:
+    # `_rearm_flush`'s guard is a three-way `or`, and each arm stands for a
+    # different caller: no batch settings at all (`BatchPolicy.NONE`), or a
+    # resolving path handed only part of the pair. Either half missing means
+    # there is nothing to re-arm *with*, so the re-arm is a no-op -- it must
+    # not read a bag it does not have, nor set a timer it does not have. A
+    # guard that required *both* to be absent would sail past exactly the
+    # half-wired case it is there for.
+    run = driver()
+    batch: Any = FakeBag([_event(b"deferred")]) if missing != "batch" else None
+    flush_timer: Any = FakeTimer() if missing != "flush_timer" else None
+
+    run.dofn._rearm_flush(batch, flush_timer)
+
+    if flush_timer is not None:
+        assert flush_timer.marks == []
+    if batch is not None:
+        assert batch.items == [_event(b"deferred")]
 
 
 def test_overflow_during_deferral_is_explicit(driver: _DriverFactory) -> None:

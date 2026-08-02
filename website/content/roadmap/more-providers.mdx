@@ -1,0 +1,26 @@
+---
+title: Vertex and vLLM providers
+summary: Model providers for Vertex AI and vLLM, including a GPU-worker sidecar. Named in the architecture notes; no code exists.
+status: planned
+order: 4
+verifies: []
+---
+
+<Callout kind="not-implemented">
+Nothing on this page exists in the current code. `src/beam_agents/model/vertex.py` is not present in the
+repository. This is a description of intent, published so the project's direction is
+legible — not documentation of a feature you can use.
+</Callout>
+
+The architecture notes describe four providers — Anthropic, OpenAI-compatible, Vertex,
+and vLLM — with vLLM available either as an endpoint or as a GPU-worker sidecar managed
+through `beam.utils.shared.Shared`.
+
+**What exists today:** `src/beam_agents/model/` contains `anthropic.py`, `openai_compat.py`,
+and `fake.py`, plus the client, facade, and replay cache. There is no `vertex.py` and no
+`vllm.py`.
+
+Note that an OpenAI-compatible endpoint covers a good deal of what a vLLM deployment would
+need in practice, since vLLM serves an OpenAI-compatible API — but that is a workaround
+using an existing provider, not the described integration, and it comes with none of the
+sidecar lifecycle management.

@@ -13,7 +13,14 @@ COMPOSE_CONSOLE := docker compose -f docker/compose.console.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: quickstart quickstart-docker quickstart-flink help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build console-build console-up console-down console-logs console-frontend proto docs docs-serve build changelog changelog-draft
+PNPM := pnpm --dir website
+# The production build and the checks that serve it write to their own output
+# directory, so running `make site-check` never deletes the manifests out from
+# under a `make site-dev` server that happens to be running. `next start` in
+# the SSR and a11y checks reads the same variable, so all three agree.
+SITE_BUILD_ENV := NEXT_DIST_DIR=.next-build
+
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-flink compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build proto docs docs-serve build changelog changelog-draft site-dev site-build site-check api-reference quickstart quickstart-docker quickstart-flink console-build console-up console-down console-logs console-frontend
 
 BENCH_RESULTS := bench-results
 # Local-iteration knob only. CI pins the modules' own sampling constants by
@@ -100,7 +107,17 @@ test-dataflow: ## Run dataflow-marked tests (nightly only, requires real GCP)
 test-smoke: ## Run smoke-marked tests against live providers (nightly only, requires credentials)
 	uv run pytest -m smoke; test $$? -eq 0 -o $$? -eq 5
 
+# `rm -rf mutants/tests`: mutmut's copy into `mutants/` only ever adds — it
+# skips targets that already exist and copytrees `tests/` with dirs_exist_ok —
+# so a file that MOVED in the real tree survives forever in the copy as a
+# phantom at its old path. That is not cosmetic: tests/core/test_schema_compat.py
+# asserts no golden fixture sits outside a version directory, and the pre-v1
+# flat `golden/*.bin` left behind by an older run made it fail inside the copy
+# while passing in the real tree, aborting the whole session during baseline
+# stats. Only the copied test tree is dropped; `mutants/src` keeps the expensive
+# generated mutants, so re-runs stay incremental.
 mutation: ## Run and enforce the core/ mutation gate
+	rm -rf mutants/tests
 	uv run mutmut run --max-children $(MUTATION_CHILDREN)
 	uv run python scripts/mutation_gate.py
 
@@ -132,18 +149,49 @@ compose-up: ## Start the local Redpanda/Redis/Flink stack
 	$(COMPOSE) up -d $(COMPOSE_UP_FLAGS)
 
 # The base integration lane's services only — no Flink JobManager/TaskManager,
-# no jobserver, no SDK-harness build. Service-list audit (2026-07-30): the
-# `integration and not semantics` tests reach exactly Redpanda
+# no jobserver, no SDK-harness build. Service-list audit (2026-07-31): the
+# `integration and not semantics and not spark` tests reach exactly Redpanda
 # (localhost:19092 — tests/actions/test_write_intents_integration.py,
 # tests/effector/test_service_integration.py), Redis (localhost:16379 —
-# tests/effector/test_dedup_redis.py, test_service_integration.py), the
+# tests/effector/test_dedup_redis.py, test_service_integration.py,
+# tests/memory/stores/test_redis_live.py), the
 # Pub/Sub emulator (localhost:8085 — test_write_intents_integration.py,
-# test_service_integration.py), and the Bigtable emulator (localhost:8086 —
-# tests/effector/test_dedup_bigtable.py). Nothing else in that selection
-# touches Flink (docker/compose.yaml: only the Beam-on-Flink gates submit
-# jobs). If a new test needs another service, grow this list — loudly.
+# test_service_integration.py), the Bigtable emulator (localhost:8086 —
+# tests/effector/test_dedup_bigtable.py,
+# tests/memory/stores/test_bigtable_emulator.py), and the Firestore emulator
+# (localhost:8087 — tests/memory/stores/test_firestore_emulator.py). Nothing
+# else in that selection touches Flink (docker/compose.yaml: only the
+# Beam-on-Flink gates submit jobs). If a new test needs another service, grow
+# this list — loudly.
+#
+# `firestore-emulator` was missing from this list until 2026-07-31 even though
+# tests/memory/stores/test_firestore_emulator.py is plainly `integration`-marked
+# and therefore inside this target's own selection. The documented sequence
+# `make compose-up-core && make test-integration` failed to connect for that
+# leg rather than exercising it. The lesson the previous audit comment already
+# stated — grow this list loudly — is the one that was missed, so the selection
+# above is now written to match `test-integration`'s marker expression verbatim.
 compose-up-core: ## Start only the non-Flink services (base integration lane)
-	$(COMPOSE) up -d --wait redpanda redis pubsub-emulator bigtable-emulator
+	$(COMPOSE) up -d --wait redpanda redis pubsub-emulator bigtable-emulator firestore-emulator
+
+# The mirror image of compose-up-core, and the other half of the same split:
+# the Flink lane's two selections (`test-semantics`, `test-conformance-flink`)
+# reach exactly Redpanda and Redis (tests/semantics/_flink_stack.py's
+# HOST_BROKERS/REDIS_URL and tests/semantics/_e2e/ledger.py) plus the Flink
+# services and the SDK harness. Neither tree names a GCP emulator anywhere —
+# every emulator-backed test is `integration and not semantics`, which is
+# compose-up-core's lane by construction.
+#
+# Starting them here is not merely wasteful, it is load-bearing against the
+# gate: three idle emulator JVMs share a 4-vCPU/16 GB runner with the
+# JobManager, a 3 GB TaskManager, the job server, and the harness, and the
+# JobManager's blob server is where the pressure surfaces — a submission whose
+# jar upload dies with `Broken pipe` and leaves the source stuck at in=0/out=0.
+# Same rule as the list above: if a Flink-lane test needs another service, grow
+# this list — loudly.
+compose-up-flink: ## Start only the Flink lane's services (semantics + conformance)
+	$(COMPOSE) up -d $(COMPOSE_UP_FLAGS) \
+		redpanda redis flink-jobmanager flink-taskmanager flink-jobserver beam-sdk-harness
 
 # Local-parity equivalent of the flink-minicluster job's cached buildx build
 # (the CI step uses docker/build-push-action with the same tag and file).
@@ -318,3 +366,39 @@ changelog: ## Assemble changelog.d/ fragments into CHANGELOG.md (VERSION=X.Y.Z)
 changelog-draft: ## Print the pending changelog section without writing anything
 	uv run --group release python scripts/check_release.py --fragments-only
 	uv run --group release towncrier build --version "$(or $(VERSION),UNRELEASED)" --draft
+
+# -- documentation site --------------------------------------------------------
+#
+# The `site-*` targets are the ONLY targets requiring a Node toolchain, and
+# `site-check` is the only one that also needs the uv environment (the claim
+# verifier imports beam_agents; the API generator introspects it). Keeping that
+# split is load-bearing: a contributor with no Node can still run bootstrap,
+# lint, type, and test-unit, and a contributor with no .venv can still build
+# the site.
+
+site-dev: ## Run the documentation site's dev server
+	$(PNPM) install --frozen-lockfile
+	$(PNPM) dev
+
+site-build: ## Build the documentation site (Node only, no Python needed)
+	$(PNPM) install --frozen-lockfile
+	$(SITE_BUILD_ENV) $(PNPM) build
+
+api-reference: ## Regenerate website/generated/api.json from the installed package
+	uv run python scripts/gen_api_reference.py
+
+# Ordering is deliberate: the cheap static gates run before the build, and the
+# build runs before the checks that need its output. `--check` on the API
+# generator fails on drift instead of rewriting, mirroring the protobuf gate.
+site-check: ## Run every site gate: types, lint, fidelity, build, links, SSR, a11y
+	$(PNPM) install --frozen-lockfile
+	$(PNPM) typecheck
+	$(PNPM) lint
+	$(PNPM) test
+	uv run python scripts/gen_api_reference.py --check
+	uv run python scripts/verify_docs_claims.py
+	uv run python scripts/check_docs_prose.py
+	$(SITE_BUILD_ENV) $(PNPM) build
+	$(PNPM) check:links
+	$(SITE_BUILD_ENV) $(PNPM) check:ssr
+	$(SITE_BUILD_ENV) $(PNPM) check:a11y

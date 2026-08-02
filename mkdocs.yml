@@ -46,6 +46,7 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Examples:
+      - Quickstart: examples/quickstart.md
       - Hello, world: examples/hello-world.md
       - Fraud triage: examples/fraud-triage.md
       - Fraud triage on Dataflow: examples/fraud-triage-dataflow.md

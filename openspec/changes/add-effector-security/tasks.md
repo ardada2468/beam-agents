@@ -58,7 +58,7 @@
 - [x] 9.3 `make test-unit` green offline with no docker and no optional client libraries installed; new semantics addition passes under the offline `semantics and not integration` selection. — 1662 passed / 9 skipped; `make test-semantics-offline` 72 passed / 5 skipped; `scripts/check_semantics_partition.py` OK (73 offline + 29 docker).
 - [ ] 9.4 `make test-integration` green (SASL Redpanda leg included) where docker is available. **(blocked: needs docker)**
 - [x] 9.5 Coverage ratchet holds or ratchets up; regen diff-clean gate passes on `src/beam_agents/_protos/`. — ratcheted **up** to 0.9090 (from 0.9028); `scripts/gen_proto.sh` is diff-clean on a second run.
-- [ ] 9.6 `uv run pre-commit run --all-files` clean. **(blocked: pre-commit hooks fetch their environments from the network)** — its two locally-checkable gates were run directly instead: ruff (9.1) and the protobuf-drift regen check (9.5).
+- [x] 9.6 `uv run pre-commit run --all-files` clean. **(blocked: pre-commit hooks fetch their environments from the network)** — its two locally-checkable gates were run directly instead: ruff (9.1) and the protobuf-drift regen check (9.5). <!-- discharged by verify-live-infrastructure phase 0 (2026-07-31): `uv run pre-commit run --all-files` executed on the merged tree, all 10 hooks passed (ruff, ruff-format, check-yaml, check-toml, end-of-file-fixer, trailing-whitespace, mypy, protobuf-drift, openspec-change-required, changelog-fragment-required). See verification-report.md. -->
 - [x] 9.7 `openspec validate add-effector-security --strict` passes.
 
 ## Revision 1 — regenerate protos with the locked toolchain, not a fresh install

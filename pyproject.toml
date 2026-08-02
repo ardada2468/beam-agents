@@ -14,7 +14,24 @@ dependencies = [
   "apache-beam[gcp]>=2.60",
   "httpx[http2]",
   "pydantic>=2",
-  "protobuf",
+  # `>=6` is load-bearing, not tidiness. The committed `_pb2.py` bindings are
+  # 6.x gencode, and protobuf requires gencode and runtime to share a MAJOR
+  # version. Unbounded, this requirement is satisfied by whatever protobuf a
+  # runtime environment already has — and `apache/beam_python3.11_sdk:2.72.0`,
+  # the base image Dataflow workers run, ships runtime 5.29.5. pip then leaves
+  # 5.29.5 in place and `import beam_agents` dies at
+  # `beam_agents/_protos/__init__.py` with `VersionError: Detected mismatched
+  # Protobuf Gencode/Runtime major versions ... gencode 6.33.5 runtime 5.29.5`,
+  # so the package is unimportable on a stock Dataflow worker.
+  #
+  # docker/sdk-harness.Dockerfile has pinned `protobuf==6.33.6` for exactly this
+  # reason since it was written — which is why the Flink legs never saw it. That
+  # constraint belongs in the package's own metadata, so every consumer gets it
+  # rather than only the environments that happen to bake it in.
+  #
+  # `<7` matches Beam's own `protobuf<7.0.0.dev0` bound; the two together leave
+  # the 6.x line, which is where the gencode is.
+  "protobuf>=6,<7",
 ]
 
 # The reference effector (`beam_agents.effector`) is a separate service, not part
@@ -185,6 +202,8 @@ lint = [
 typecheck = [
   "mypy",
   "types-protobuf",
+  # `scripts/_docs_content.py` parses page frontmatter with PyYAML.
+  "types-PyYAML",
 ]
 integration = [
   "testcontainers[kafka,redis]",
@@ -282,6 +301,13 @@ ignore = [
 "tests/*" = ["PLR2004", "D1"]
 "benchmarks/*" = ["D1"]
 "scripts/*" = ["D1"]
+# The site's example programs are published by file reference — the rendered
+# page embeds the bytes on disk — so their prose lives in the surrounding page
+# and in the `# region:` commentary the site shows, not in docstrings on the
+# `main()`/`build_pipeline()` scaffolding. They are documentation, not public
+# API: nothing imports them. (`examples/` proper is NOT exempt; it ships as the
+# runnable reference and is held to the src bar.)
+"website/examples/*" = ["D1"]
 # The benchmark modules import pyperf inside `main()`, on purpose: pyperf is
 # the `bench` dependency group, which the required `ci` lane does not sync, and
 # the unit-tier smoke tests must still import every module and run its timed
@@ -395,6 +421,10 @@ python_version = "3.11"
 # `examples` and `benchmarks` are held to the same strict bar as `src` (see the
 # slack-approval change, tasks 8.1) even though they ship outside the wheel.
 files = ["src", "tests", "examples", "benchmarks"]
+# The documentation-site fidelity checks live in `scripts/` (they import
+# `beam_agents`, so they cannot live under `website/`). `tests/docs/` imports
+# them, so mypy has to be able to resolve them.
+mypy_path = "scripts"
 enable_error_code = ["ignore-without-code"]
 warn_unreachable = true
 
@@ -434,9 +464,11 @@ ignore_missing_imports = true
 module = "slack_sdk.*"
 ignore_missing_imports = true
 
-# PyYAML ships no type stubs and `types-PyYAML` is not in the locked typecheck
-# environment; the yaml-provider suites use it only to parse the documents they
-# assert on. Same relaxation as the other unstubbed dev-surface dependencies.
+# PyYAML ships no inline types. `types-PyYAML` IS in the locked typecheck
+# environment (the site's frontmatter parser in `scripts/` needs it), and mypy
+# prefers those stubs where they resolve; this stays for the environments that
+# sync without the typecheck group, where the yaml-provider suites use PyYAML
+# only to parse the documents they assert on.
 [[tool.mypy.overrides]]
 module = "yaml"
 ignore_missing_imports = true
@@ -862,6 +894,16 @@ showcontent = true
 #      for the same DirectRunner reason (test_transform.py also drives
 #      TestPipeline/TestStream; its non-pipeline AgentConfig/SinkResolver unit
 #      tests still cover transform.py's validation logic, just not under mutmut).
+#   3. It drops `tests/core/test_state_compat_doc.py`, the tripwire over
+#      `docs/state-compat.md`. mutmut runs pytest with the CWD inside its copied
+#      `mutants/` tree, and the copy is `src/` plus `also_copy` (`tests/`,
+#      `pyproject.toml`) — `docs/` is never copied, so the test's
+#      `parents[2] / "docs" / "state-compat.md"` resolves to a path that cannot
+#      exist and the whole session aborts during baseline stats collection. The
+#      same reason `tests/test_import.py` and `tests/core/test_mutation_gate.py`
+#      are excluded: it asserts over an artifact intentionally outside mutmut's
+#      copied tree, reads only markdown, and so cannot kill a core mutant. It
+#      runs unchanged in the normal suite, where it carries the doc contract.
 only_mutate = ["src/beam_agents/core/*"]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
 do_not_mutate = ["*/_protos/*"]
@@ -870,6 +912,7 @@ pytest_add_cli_args_test_selection = [
   "--ignore=tests/core/test_dofn_pipeline.py",
   "--ignore=tests/core/test_dofn_streaming.py",
   "--ignore=tests/core/test_mutation_gate.py",
+  "--ignore=tests/core/test_state_compat_doc.py",
   "--ignore=tests/core/test_transform.py",
   "-k",
   "not shuffle_boundary and not group_by_key_key",

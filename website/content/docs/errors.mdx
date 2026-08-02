@@ -1,0 +1,160 @@
+---
+title: The errors output
+summary: How element-level failures are routed to .errors, the reason taxonomy, and how to configure a sink.
+status: stable
+order: 1
+verifies:
+  - symbol: beam_agents.RunAgentOutputs
+  - module: src/beam_agents/core/error_records.py
+  - module: docs/errors.md
+  - spec: openspec/specs/wire-schemas/spec.md
+  - test: tests/core/test_error_records.py
+  - test: tests/examples/test_failure_streak_alarm.py
+  - example: four_outputs.py
+---
+
+`RunAgent` never fails a bundle for an element-level problem. It routes the
+failure to `.errors` and moves on. A record there means the activation
+committed nothing at all — so consuming this stream is not optional
+housekeeping, it is how you find out that a key was touched and produced
+nothing.
+
+{/*
+  Two lanes of the same bundle, because the whole point of this page is a
+  contrast: one key's activation fails and commits nothing, and the bundle it
+  was in commits anyway. A single-lane drawing can show the dead letter but
+  cannot show what did *not* happen around it, which is the part readers get
+  wrong.
+
+  Geometry note for anyone editing this: the coordinate space is 620 units
+  wide on purpose. The prose column on this site is ~630px, so a 620-wide
+  viewBox renders at roughly 1:1 and the 11px labels stay 11px. Authoring
+  against a 1000-wide box (as the landing-page diagram does, in a much wider
+  container) scales the type down to seven-ish pixels and forces a sideways
+  scroll on a desktop, which is exactly the failure this component exists to
+  avoid.
+*/}
+
+<Diagram
+  title="How an element-level failure reaches .errors"
+  desc="Two activations in the same Beam bundle. In the first, an AgentEnvelope for key k enters RunAgent, the activation fails, and the atomic commit writes nothing: no working-memory write, no .intents element, and no .output element. A single dead letter leaves on .errors instead — routed, not raised as a bundle failure. In the second, an AgentEnvelope for key j runs in the same bundle, its commit goes through, and it writes state and emits .output as usual. The failure of the first key neither fails the bundle nor affects the second."
+  caption="An element-level failure is routed, not raised. The activation for key k commits nothing — no memory write, no intent, no output — and the record on .errors is the only trace that the key was touched at all. The bundle is not failed, so every other key in it commits as usual."
+  viewBox="0 0 620 448"
+  minWidth={620}
+>
+  {/* The bundle bracket. Everything inside it commits, or does not, together. */}
+  <DgEdge d="M30,42 H14 V430 H30" arrow={false} />
+  <DgText x={14} y={32} variant="faint">ONE BUNDLE</DgText>
+
+  {/* --- lane 1: the key whose activation fails --- */}
+  <DgNode x={34} y={42} w={118} h={44} label="AgentEnvelope" sub="KEY k" soft />
+  <DgEdge d="M152,64 H176" />
+  <DgNode x={180} y={38} w={146} h={52} label="RunAgent" sub="ACTIVATION FOR KEY k" />
+  {/*
+    "FAILS", not "RAISES": the reason taxonomy below covers timeouts, orphaned
+    results, and TTL wipes as well as a raising agent, so naming one of them
+    here would narrow the mechanism. It also avoids an unhelpful echo with
+    "routed, not raised" further down, where "raised" means something else
+    entirely — raised as a bundle failure.
+  */}
+  <DgEdge d="M326,64 H386" label="FAILS" labelX={356} labelY={54} />
+  <DgNode x={390} y={34} w={148} h={60} label="atomic commit" sub="NOTHING COMMITS" />
+
+  {/*
+    The dead letter runs straight down out of the commit and everything the
+    commit would have written branches off it to the left, rather than the two
+    being drawn as symmetric siblings. That asymmetry is the point of the
+    page: one path carries an element, the other carries nothing.
+  */}
+  <DgEdge d="M464,94 V150" stream="errors" />
+  <DgNode x={376} y={154} w={176} h={52} label=".errors" sub="ONE DEAD LETTER" stream="errors" />
+  <DgText x={464} y={228} anchor="middle" stream="errors">routed, not raised</DgText>
+
+  {/*
+    The three suppressed writes sit flush against each other, as one block
+    under one arrow, because they are a single decision and not three events:
+    the commit is all-or-nothing. Naming them individually is only there to
+    make "nothing" concrete.
+  */}
+  <DgEdge d="M464,118 H104 V150" />
+  <DgNode x={38} y={154} w={132} h={32} label="no memory write" soft />
+  <DgNode x={38} y={186} w={132} h={32} label="no .intents" soft />
+  <DgNode x={38} y={218} w={132} h={32} label="no .output" soft />
+
+  {/* --- lane 2: another key, same bundle, ordinary commit --- */}
+  <DgNode x={34} y={298} w={118} h={44} label="AgentEnvelope" sub="KEY j" soft />
+  <DgEdge d="M152,320 H176" />
+  <DgNode x={180} y={294} w={146} h={52} label="RunAgent" sub="ACTIVATION FOR KEY j" />
+  <DgEdge d="M326,320 H386" />
+  <DgNode x={390} y={290} w={148} h={60} label="atomic commit" sub="STATE AND OUTPUTS" />
+  <DgEdge d="M464,350 V378" stream="output" />
+  <DgNode x={376} y={382} w={176} h={44} label=".output" sub="AND MEMORY WRITE" stream="output" />
+</Diagram>
+
+<Example file="four_outputs.py" region="outputs" />
+
+{/*
+  The record diagram. `docs/errors.md` draws this same structure as an ASCII
+  tree in a bare code fence — unreadable on a phone, invisible to a screen
+  reader, and unable to carry the stream colour. The fence stays where it is
+  (this site renders the repository file verbatim, byte for byte, and that
+  contract is worth more than the fence costs), but the reader meets the real
+  drawing first, so the fence below reads as a detail rather than as the
+  explanation.
+
+  The nesting is the interesting part: the value on the topic is an
+  AgentEnvelope, and the record itself is bytes inside `external_event`. That
+  wrapping is what makes the errors topic replayable as a RunAgent *input*.
+*/}
+
+<Diagram
+  title="What a dead letter looks like on the errors topic"
+  desc="One record on the errors topic is a key-value pair. The key is the failing entity_key, so one key's dead letters keep their order through a single partition; the value is a serialized AgentEnvelope. That envelope carries three fields: entity_key, the failing key; event_time_ms, the record's event time; and external_event, which holds a serialized ActivationErrorRecord. The nested record carries four fields of its own: entity_key, again the failing key; reason, one of the reasons listed below; detail, free-form context for the reason; and event_time_ms, which is the element's event time or a timer's scheduled firing time, never a wall clock."
+  caption="The value on the errors topic is an AgentEnvelope whose external_event holds the serialized ActivationErrorRecord. That wrapping is what lets the errors topic be keyed by entity_key and fed straight into another RunAgent with no adapter."
+  viewBox="0 0 620 460"
+  minWidth={620}
+>
+  {/* The message as it sits on the topic: a key and a value, key first. */}
+  <DgText x={18} y={22} variant="faint">ONE RECORD ON THE ERRORS TOPIC</DgText>
+  <DgNode x={18} y={32} w={180} h={44} label="key" sub="ENTITY_KEY" soft />
+  <DgNode x={216} y={32} w={180} h={44} label="value" sub="PROTOBUF BYTES" soft />
+
+  {/* The value decodes to an envelope, whose three fields fan out on one trunk. */}
+  <DgEdge d="M306,76 V106" />
+  <DgNode x={216} y={110} w={180} h={48} label="AgentEnvelope" />
+  <DgEdge d="M306,158 V180" arrow={false} />
+  <DgEdge d="M108,180 H504" arrow={false} />
+  <DgEdge d="M108,180 V206" />
+  <DgEdge d="M306,180 V206" />
+  <DgEdge d="M504,180 V206" />
+  <DgNode x={18} y={210} w={180} h={44} label="entity_key" sub="THE FAILING KEY" soft />
+  <DgNode x={216} y={210} w={180} h={44} label="event_time_ms" sub="THE RECORD'S EVENT TIME" soft />
+  {/* Drawn as a primary node rather than a soft one: it is the field that expands. */}
+  <DgNode x={414} y={210} w={180} h={44} label="external_event" sub="SERIALIZED RECORD" />
+
+  {/* One level down: the record the sink actually encodes into those bytes. */}
+  <DgEdge d="M504,254 V302 Q504,318 488,318 H416" stream="errors" />
+  <DgNode x={200} y={294} w={212} h={48} label="ActivationErrorRecord" stream="errors" />
+  <DgEdge d="M306,342 V364" arrow={false} />
+  <DgEdge d="M86,364 H527" arrow={false} />
+  <DgEdge d="M86,364 V390" />
+  <DgEdge d="M233,364 V390" />
+  <DgEdge d="M380,364 V390" />
+  <DgEdge d="M527,364 V390" />
+  <DgNode x={18} y={394} w={136} h={44} label="entity_key" sub="THE FAILING KEY" soft />
+  <DgNode x={165} y={394} w={136} h={44} label="reason" sub="ONE OF THE REASONS" soft />
+  <DgNode x={312} y={394} w={136} h={44} label="detail" sub="MAY BE EMPTY" soft />
+  <DgNode x={459} y={394} w={136} h={44} label="event_time_ms" sub="NEVER A WALL CLOCK" soft />
+</Diagram>
+
+<RepoDoc file="docs/errors.md" />
+
+## Related
+
+- [The four outputs](/examples/four-outputs) — the program whose regions are
+  embedded above, with one key that raises so a dead letter is actually
+  produced.
+- [Correctness invariant 1](/learn/correctness-invariants) — why a record here
+  means the activation committed nothing.
+- [The effector](/docs/effector) — where an intent that never came back leaves
+  its trace.

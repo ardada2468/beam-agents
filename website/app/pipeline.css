@@ -1,0 +1,741 @@
+/*
+ * The pipeline diagram.
+ *
+ * Everything animates off one 12-second master clock: every moving element
+ * carries `animation-duration: var(--cycle)` and expresses its own motion as a
+ * window inside the keyframes. That is why the packet reaching the effector
+ * and the caption describing the effector can never drift apart — there is one
+ * timeline, not eight.
+ *
+ * The windows, in percent of the cycle, and the caption each one belongs to:
+ *
+ *   00–12  step 1  event travels to RunAgent
+ *   13–21  step 2  activation running, first trace on the wire
+ *   22–39  step 3  suspended; the intent travels to the outbox
+ *   40–63  step 4  outbox to effector, result back in on the same key
+ *   64–81  step 5  activation resumes; `.output` and a second trace leave
+ *   82–100 step 6  commit; `.errors` drains
+ *
+ * Change one window and the neighbours have to move with it — the captions
+ * below are keyed to exactly these numbers.
+ *
+ * The motion is pure CSS, so the diagram runs with JavaScript disabled, like
+ * the rest of the site. The pause control is a checkbox, for the same reason:
+ * an animation that loops forever needs a stop, and a stop that needs
+ * JavaScript is not a stop.
+ */
+
+.pipe-pause-scope {
+  /*
+   * `position: relative` is load-bearing: `.pipe-pause-input` below is taken
+   * out of flow to hide it, and without a positioned ancestor here it would
+   * anchor to whichever ancestor happens to be positioned — which on this page
+   * is the whole section.
+   */
+  position: relative;
+  --cycle: 12s;
+  --packet: 9px;
+}
+
+.pipeline {
+  position: relative;
+}
+
+.pipe-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.pipeline svg {
+  display: block;
+  width: 100%;
+  min-width: 820px;
+  height: auto;
+}
+
+/* --- static geometry ------------------------------------------------------- */
+
+.pipe-line {
+  fill: none;
+  stroke: var(--rule-2);
+  stroke-width: 1.25;
+}
+
+.pipe-line--loop {
+  stroke: var(--s-intents);
+  stroke-dasharray: 4 3;
+  opacity: 0.85;
+}
+
+.pipe-node {
+  fill: var(--paper);
+  stroke: var(--ink);
+  stroke-width: 1.25;
+}
+
+.pipe-node--soft {
+  fill: var(--paper-2);
+  stroke: var(--rule-2);
+  stroke-width: 1;
+}
+
+.pipe-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  fill: var(--ink-2);
+  letter-spacing: 0.01em;
+}
+
+.pipe-label--title {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  fill: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.pipe-label--faint {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  fill: var(--ink-3);
+  letter-spacing: 0.06em;
+}
+
+.pipe-arrow {
+  fill: var(--rule-2);
+}
+
+/*
+ * One arrowhead per stream. The rails are stroked in their stream colour, so
+ * a single shared marker ended every coloured rail in the neutral rule grey —
+ * four rails apparently changing colour in their last eight units. The
+ * one-declaration version of this is `fill: context-stroke`, which is still
+ * not safe to rely on across browsers.
+ */
+.pipe-arrow--output {
+  fill: var(--s-output);
+}
+.pipe-arrow--intents {
+  fill: var(--s-intents);
+}
+.pipe-arrow--traces {
+  fill: var(--s-traces);
+}
+.pipe-arrow--errors {
+  fill: var(--s-errors);
+}
+
+/* Where the return merges into the tool-results rail. */
+.pipe-junction {
+  fill: var(--s-intents);
+}
+
+.s-output {
+  color: var(--s-output);
+}
+.s-intents {
+  color: var(--s-intents);
+}
+.s-traces {
+  color: var(--s-traces);
+}
+.s-errors {
+  color: var(--s-errors);
+}
+
+.pipe-rail--output {
+  stroke: var(--s-output);
+}
+.pipe-rail--intents {
+  stroke: var(--s-intents);
+}
+.pipe-rail--traces {
+  stroke: var(--s-traces);
+}
+.pipe-rail--errors {
+  stroke: var(--s-errors);
+}
+
+.pipe-name--output {
+  fill: var(--s-output);
+}
+.pipe-name--intents {
+  fill: var(--s-intents);
+}
+.pipe-name--traces {
+  fill: var(--s-traces);
+}
+.pipe-name--errors {
+  fill: var(--s-errors);
+}
+
+/* --- packets --------------------------------------------------------------- */
+
+.packet {
+  /*
+   * `transform-box` is the difference between a packet on its rail and a
+   * packet next to it. An SVG element's default reference box is the view-box,
+   * so `transform-origin: 50% 50%` — which is what `offset-anchor: auto`
+   * resolves to — is measured against the whole canvas rather than the 9x9
+   * rect, and the packet ends up anchored by its top-left corner: half a
+   * packet down and to the right of the line it is supposed to be riding.
+   * `fill-box` makes the reference box the rect itself, so the anchor is the
+   * packet's own centre and the rail runs through it.
+   */
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  width: var(--packet);
+  height: var(--packet);
+  offset-rotate: 0deg;
+  opacity: 0;
+  animation-duration: var(--cycle);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.packet--event {
+  fill: var(--ink);
+  offset-path: path('M140,78 H190 Q206,78 206,94 V134 Q206,150 222,150 H430');
+  animation-name: pkt-event;
+}
+
+.packet--output {
+  fill: var(--s-output);
+  offset-path: path('M620,114 H872');
+  animation-name: pkt-output;
+}
+
+.packet--intent {
+  fill: var(--s-intents);
+  offset-path: path('M620,186 H684 Q700,186 700,202 V330 Q700,346 684,346 H662');
+  animation-name: pkt-intent;
+}
+
+.packet--outbox {
+  fill: var(--s-intents);
+  offset-path: path('M505,346 H472');
+  animation-name: pkt-outbox;
+}
+
+.packet--return {
+  fill: var(--s-intents);
+  offset-path: path('M330,346 H186 Q170,346 170,330 V166 Q170,150 186,150 H430');
+  animation-name: pkt-return;
+}
+
+.packet--trace {
+  fill: var(--s-traces);
+  offset-path: path('M620,138 H872');
+  animation-name: pkt-trace;
+}
+
+.packet--error {
+  fill: var(--s-errors);
+  offset-path: path('M620,162 H872');
+  animation-name: pkt-error;
+}
+
+/*
+ * One keyframe set per packet, each a window on the shared clock. Verbose, but
+ * exact: the alternative — per-packet durations with delays — desynchronises
+ * from the captions after the first loop.
+ *
+ * Every keyframe states `offset-distance` explicitly, including the ones that
+ * only fade. A keyframe timing function applies to the interval that *starts*
+ * at that keyframe, so leaving the distance out would have split one journey
+ * into three eased sub-intervals and made the packet stutter. As written, each
+ * journey is a single interval carrying the glide curve, bracketed by two
+ * stationary frames that do nothing but fade — the packet eases away from its
+ * source and settles at its destination instead of snapping into motion.
+ *
+ * The curve is spelled out rather than held in a custom property because
+ * `var()` inside a keyframe's `animation-timing-function` is the kind of thing
+ * that works in three browsers and silently falls back to `linear` in the
+ * fourth.
+ */
+
+@keyframes pkt-event {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  1% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  12% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  13%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/*
+ * The activation emits a trace on the way in and another on the way out — the
+ * two lit windows of `.pipe-active`, and the only stream that runs twice.
+ */
+@keyframes pkt-trace {
+  0%,
+  13% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  14% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  25% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  26%,
+  64% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+  /* Rewound to the start while invisible, ready for the second pass. */
+  65% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  66% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  77% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  78%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes pkt-intent {
+  0%,
+  22% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  23% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  37% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  38%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes pkt-outbox {
+  0%,
+  40% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  41% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  45% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  46%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes pkt-return {
+  0%,
+  47% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  48% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  62% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  63%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/*
+ * `.output` is terminal agent output, so exactly one packet leaves per pass and
+ * it leaves *after* the resume at 64% — never while the continuation chip is
+ * lit. The earlier version sent one at 20–30%, two percent before the very
+ * suspension the caption was describing.
+ */
+@keyframes pkt-output {
+  0%,
+  67% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  68% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  80% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  81%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes pkt-error {
+  0%,
+  86% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  87% {
+    offset-distance: 0%;
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  95% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  96%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/*
+ * The empty socket both chips sit in, so their unlit state is a visible hole
+ * rather than nothing at all.
+ */
+.pipe-slot {
+  fill: none;
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+
+/* The RunAgent node lights while an activation is running: steps 2 and 5. */
+.pipe-active {
+  fill: var(--ink);
+  opacity: 0;
+  animation: pipe-active var(--cycle) linear infinite;
+}
+
+@keyframes pipe-active {
+  0%,
+  12% {
+    opacity: 0;
+  }
+  13%,
+  21% {
+    opacity: 1;
+  }
+  22%,
+  63% {
+    opacity: 0;
+  }
+  64%,
+  81% {
+    opacity: 1;
+  }
+  82%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
+ * The continuation chip is lit only while the activation is suspended: from
+ * one percent after `.pipe-active` goes dark until the return packet lands.
+ * The one-percent gap is the handoff, and it is deliberate — two chips lit at
+ * once would say the activation is running and suspended simultaneously.
+ */
+.pipe-suspended {
+  fill: var(--s-intents);
+  opacity: 0;
+  animation: pipe-suspended var(--cycle) linear infinite;
+}
+
+@keyframes pipe-suspended {
+  0%,
+  22% {
+    opacity: 0;
+  }
+  23%,
+  63% {
+    opacity: 1;
+  }
+  64%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* --- captions -------------------------------------------------------------- */
+
+/*
+ * Six captions in one grid cell. They used to be absolutely positioned inside
+ * a container clamped to `min-height: 3.4rem`, which is two lines — and the
+ * longest caption wraps to four on a phone, so it spilled out of the figure
+ * and over the section below. Stacking them with `grid-area: 1 / 1` keeps the
+ * cross-fade (they still overlap exactly) while letting the container size
+ * itself to the tallest caption at whatever width it is given.
+ */
+.pipe-steps {
+  display: grid;
+  margin-top: 0.5rem;
+}
+
+.pipe-step {
+  grid-area: 1 / 1;
+  opacity: 0;
+  display: flex;
+  gap: 0.7rem;
+  align-items: baseline;
+  animation-duration: var(--cycle);
+  animation-timing-function: steps(1, end);
+  animation-iteration-count: infinite;
+}
+
+.pipe-step__n {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+  flex: none;
+  padding-top: 0.15em;
+}
+
+.pipe-step__t {
+  font-size: 0.97rem;
+  line-height: 1.45;
+  color: var(--ink);
+  max-width: 62ch;
+}
+
+.pipe-step:nth-child(1) {
+  animation-name: step-1;
+}
+.pipe-step:nth-child(2) {
+  animation-name: step-2;
+}
+.pipe-step:nth-child(3) {
+  animation-name: step-3;
+}
+.pipe-step:nth-child(4) {
+  animation-name: step-4;
+}
+.pipe-step:nth-child(5) {
+  animation-name: step-5;
+}
+.pipe-step:nth-child(6) {
+  animation-name: step-6;
+}
+
+@keyframes step-1 {
+  0%,
+  12% {
+    opacity: 1;
+  }
+  13%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes step-2 {
+  0%,
+  12% {
+    opacity: 0;
+  }
+  13%,
+  21% {
+    opacity: 1;
+  }
+  22%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes step-3 {
+  0%,
+  21% {
+    opacity: 0;
+  }
+  22%,
+  39% {
+    opacity: 1;
+  }
+  40%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes step-4 {
+  0%,
+  39% {
+    opacity: 0;
+  }
+  40%,
+  63% {
+    opacity: 1;
+  }
+  64%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes step-5 {
+  0%,
+  63% {
+    opacity: 0;
+  }
+  64%,
+  81% {
+    opacity: 1;
+  }
+  82%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes step-6 {
+  0%,
+  81% {
+    opacity: 0;
+  }
+  82%,
+  100% {
+    opacity: 1;
+  }
+}
+
+/* --- pause control (no JavaScript) ----------------------------------------- */
+
+.pipe-pause-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.pipe-pause {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  user-select: none;
+  background: var(--paper);
+}
+
+.pipe-pause:hover {
+  border-color: var(--rule-2);
+}
+
+.pipe-pause-input:focus-visible + .pipe-pause {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.pipe-pause .when-running {
+  display: inline;
+}
+.pipe-pause .when-paused {
+  display: none;
+}
+
+.pipe-pause-input:checked + .pipe-pause .when-running {
+  display: none;
+}
+.pipe-pause-input:checked + .pipe-pause .when-paused {
+  display: inline;
+}
+
+.pipe-pause-input:checked ~ .pipeline .packet,
+.pipe-pause-input:checked ~ .pipeline .pipe-active,
+.pipe-pause-input:checked ~ .pipeline .pipe-suspended,
+.pipe-pause-input:checked ~ .pipe-steps .pipe-step {
+  animation-play-state: paused;
+}
+
+/* --- reduced motion -------------------------------------------------------- */
+
+/*
+ * No motion, and *more* information rather than less: the steps stop
+ * cross-fading and become a plain numbered list a reader can take at their own
+ * pace. The suspended-state chip stays lit, because that is the state the
+ * static diagram depicts.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .packet {
+    display: none;
+  }
+
+  .pipe-active,
+  .pipe-suspended {
+    animation: none;
+    opacity: 1;
+  }
+
+  /*
+   * The label goes, and so must the input. Visually hiding the checkbox alone
+   * left it in the tab order, so a keyboard reader still landed on an unlabelled
+   * control that pauses an animation that is not running.
+   */
+  .pipe-pause-wrap,
+  .pipe-pause-input {
+    display: none;
+  }
+
+  .pipe-steps {
+    gap: 0.55rem;
+    margin-top: 1.1rem;
+  }
+
+  .pipe-step {
+    grid-area: auto;
+    opacity: 1;
+    animation: none;
+  }
+}

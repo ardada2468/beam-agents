@@ -17,8 +17,17 @@ import pytest
 from beam_agents.effector.__main__ import main
 from beam_agents.effector.config import EffectorConfig, EffectorConfigError, redact_uri
 
-PASSWORD = "sup3rs3cret"
-CREDENTIALED = f"redis://admin:{PASSWORD}@redis.internal:6379"
+# A deliberately inert placeholder, not a realistic-looking credential. Every
+# assertion below is `FAKE_PASSWORD not in <rendered text>`, so what the value
+# needs is to be *distinctive* — a string that could not appear in an error
+# message, a repr, or a stderr line by coincidence — and nothing else. Its
+# earlier leetspeak form carried no extra test signal and tripped secret
+# scanners on every PR that touched this branch's history, so the scanner noise
+# was pure cost. Keep it inert if you change it: no entropy, no credential
+# shape, and no `@`, `:`, `/` or whitespace, which would break the URI userinfo
+# the redaction regex has to match.
+FAKE_PASSWORD = "placeholder-value-not-a-credential"
+CREDENTIALED = f"redis://admin:{FAKE_PASSWORD}@redis.internal:6379"
 
 _VALID = {
     "intents_from": "kafka://localhost:9092/intents",
@@ -50,17 +59,17 @@ def test_a_malformed_credentialed_uri_is_reported_redacted() -> None:
     # credential-carrying typo takes, and the one whose message must not echo
     # the credential.
     with pytest.raises(EffectorConfigError) as excinfo:
-        EffectorConfig(**{**_VALID, "dedup": f"redis://admin:{PASSWORD}@"})  # type: ignore[arg-type]
+        EffectorConfig(**{**_VALID, "dedup": f"redis://admin:{FAKE_PASSWORD}@"})  # type: ignore[arg-type]
 
-    assert PASSWORD not in _chain_text(excinfo.value)
+    assert FAKE_PASSWORD not in _chain_text(excinfo.value)
     assert "redis" in str(excinfo.value)
 
 
 def test_a_malformed_credentialed_bigtable_uri_is_reported_redacted() -> None:
     with pytest.raises(EffectorConfigError) as excinfo:
-        EffectorConfig(**{**_VALID, "dedup": f"bigtable://admin:{PASSWORD}@project"})  # type: ignore[arg-type]
+        EffectorConfig(**{**_VALID, "dedup": f"bigtable://admin:{FAKE_PASSWORD}@project"})  # type: ignore[arg-type]
 
-    assert PASSWORD not in _chain_text(excinfo.value)
+    assert FAKE_PASSWORD not in _chain_text(excinfo.value)
 
 
 @pytest.mark.parametrize(
@@ -71,16 +80,16 @@ def test_a_malformed_credentialed_transport_uri_is_reported_redacted(field: str)
     # The dedup URI is the documented example, but every URI the config parses
     # can carry userinfo, and every one of them lands in an error message.
     with pytest.raises(EffectorConfigError) as excinfo:
-        EffectorConfig(**{**_VALID, field: f"kafka://user:{PASSWORD}@broker:9092"})  # type: ignore[arg-type]
+        EffectorConfig(**{**_VALID, field: f"kafka://user:{FAKE_PASSWORD}@broker:9092"})  # type: ignore[arg-type]
 
-    assert PASSWORD not in _chain_text(excinfo.value)
+    assert FAKE_PASSWORD not in _chain_text(excinfo.value)
 
 
 def test_an_unknown_scheme_on_a_credentialed_uri_is_reported_redacted() -> None:
     with pytest.raises(EffectorConfigError) as excinfo:
-        EffectorConfig(**{**_VALID, "dedup": f"mongodb://admin:{PASSWORD}@host:27017"})  # type: ignore[arg-type]
+        EffectorConfig(**{**_VALID, "dedup": f"mongodb://admin:{FAKE_PASSWORD}@host:27017"})  # type: ignore[arg-type]
 
-    assert PASSWORD not in _chain_text(excinfo.value)
+    assert FAKE_PASSWORD not in _chain_text(excinfo.value)
 
 
 def test_the_config_repr_masks_credentials() -> None:
@@ -90,7 +99,7 @@ def test_the_config_repr_masks_credentials() -> None:
 
     rendered = repr(config)
 
-    assert PASSWORD not in rendered
+    assert FAKE_PASSWORD not in rendered
     assert "redis.internal" in rendered, "the host must survive so the repr stays useful"
     assert "EffectorConfig(" in rendered
 
@@ -106,7 +115,7 @@ def test_the_startup_error_path_prints_redacted_output(
             "--registry",
             "tests.effector.test_main:TOOLS",
             "--intents-from",
-            f"kafka://user:{PASSWORD}@broker:9092",
+            f"kafka://user:{FAKE_PASSWORD}@broker:9092",
             "--results-to",
             "kafka://localhost:9092/results",
             "--approvals-to",
@@ -116,7 +125,7 @@ def test_the_startup_error_path_prints_redacted_output(
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert PASSWORD not in captured.err + captured.out
+    assert FAKE_PASSWORD not in captured.err + captured.out
 
 
 def test_redact_uri_leaves_credential_free_uris_untouched() -> None:
@@ -132,11 +141,13 @@ def test_redact_uri_leaves_credential_free_uris_untouched() -> None:
 def test_redact_uri_masks_userinfo_in_free_text() -> None:
     # The helper is applied to whole messages, not only to bare URIs, so that
     # an interpolation site added later is covered by default.
-    text = f"could not connect to redis://admin:{PASSWORD}@redis.internal:6379/0 after 3 attempts"
+    text = (
+        f"could not connect to redis://admin:{FAKE_PASSWORD}@redis.internal:6379/0 after 3 attempts"
+    )
 
     redacted = redact_uri(text)
 
-    assert PASSWORD not in redacted
+    assert FAKE_PASSWORD not in redacted
     assert "admin" not in redacted
     assert "redis.internal:6379/0" in redacted
     assert "after 3 attempts" in redacted

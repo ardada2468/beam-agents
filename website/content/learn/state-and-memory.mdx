@@ -1,0 +1,113 @@
+---
+title: State and memory
+summary: What the runtime stores per key, how it is bounded, and when it is collected.
+status: partial
+order: 5
+verifies:
+  - module: src/beam_agents/memory/facade.py
+  - module: src/beam_agents/core/dofn.py
+  - spec: openspec/specs/memory-facade/spec.md
+  - test: tests/memory/test_facade_caps.py
+  - test: tests/memory/test_facade_ring.py
+  - test: tests/core/test_dofn_ttl.py
+  - example: fast_path.py
+---
+
+## What one key holds
+
+Every agent runs as a single Beam stateful `DoFn`, and everything it remembers
+hangs off one entity key: five state cells and two timers, scoped to that key
+alone.
+
+<StateCells />
+
+The two timers are worth reading twice. `TTL_TIMER` is an event-time timer and
+`HITL_TIMER` is a real-time one, so both are set from the same commit but
+measured against clocks that can drift apart — which is the seam the
+[garbage collection](#garbage-collection) section below is about.
+
+## Working memory
+
+Working memory is per-key, durable, and race-free by construction — Beam
+serializes elements per key, so an activation never contends with another
+activation for the same entity.
+
+<Example file="fast_path.py" region="agent" />
+
+The facade offers scalars and bounded rings:
+
+| Operation | Behavior |
+|---|---|
+| `memory.set(name, value)` | Write a scalar. |
+| `memory.get(name)` | Read a scalar. |
+| `memory.append(name, value, max_items=N)` | Append to a ring, evicting oldest past `N`. |
+| `memory.ring(name)` | Read the ring as a list. |
+
+Writes are staged, not applied. They land only when the activation commits —
+which is why a raising agent leaves no trace of its scratch writes.
+
+## The caps, and why they exist
+
+| Limit | Value |
+|---|---|
+| Blob size | 100 KiB |
+| Working memory per key | 1 MiB soft cap, with a compaction hook |
+| Replay cache | 64 entries, 6-hour TTL |
+
+The Python SDK provides no `MapState` and no `OrderedListState` in user state,
+so bounded maps live inside single-value protobuf blobs with explicit LRU
+eviction. That design choice is what makes the caps necessary: the whole blob
+is read and written per access, so an unbounded blob would turn every
+activation into an unbounded read.
+
+Exceeding the soft cap increments a `beam_agents.memory/soft_cap_warnings`
+counter rather than failing the activation.
+
+## Garbage collection
+
+`TTL_TIMER` is an **event-time** timer. When it fires for a key, that key's
+working memory is wiped. This is what bounds state growth: without it, every
+key ever seen would keep its memory forever.
+
+A wipe that lands on a key with a live suspension is unrecoverable — the
+continuation is gone and nothing can answer it. That case is reported on
+`.errors` with reason `ttl_wiped_suspension` rather than silently dropped.
+
+Set the TTL through `AgentConfig.ttl_ms`. The default is one hour.
+
+Staging, committing, and wiping are the three things that can happen to a
+write, and they are easier to hold together in one picture than in three
+sections:
+
+<StateWriteLifecycle />
+
+## State schema and pipeline updates
+
+All keyed state is protobuf with deterministic encoding, never pickle. The
+practical consequence is the upgrade rule: **additive proto changes only**. A
+breaking change requires a `state_schema_version` bump, lazy migration, and a
+golden-blob compatibility test.
+
+## Not yet implemented
+
+The long-term `MemoryStore` — the durable store behind working memory,
+intended to back Bigtable, Redis, Firestore, and SQLAlchemy — **does not exist
+in the current code**. `src/beam_agents/memory/` contains `facade.py` and
+nothing else.
+
+What that means concretely:
+
+- Working memory is the only memory. It lives in Beam keyed state, is bounded
+  by the caps above, and is wiped by the TTL timer.
+- There is no cross-key or cross-pipeline retrieval, no vector store, no
+  history beyond the ring buffers you maintain yourself.
+- The documented exception to invariant 5 for "idempotent upserts to the
+  long-term MemoryStore keyed by `(key, seq)`" describes an interface that has
+  no implementation yet.
+
+See [the roadmap](/roadmap) for what is planned, clearly marked as not built.
+
+## Next
+
+- [Correctness invariants](/learn/correctness-invariants) — why staging exists.
+- [The memory-facade spec](/specs/memory-facade) — the requirements verbatim.

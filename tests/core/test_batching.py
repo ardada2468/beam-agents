@@ -98,6 +98,54 @@ def test_misconfigured_adaptive_knobs_fail_at_the_construction_site(
         )
 
 
+def test_the_rejection_names_the_knob_and_the_offending_value() -> None:
+    # "an actionable message" is the requirement's word, and the field name
+    # alone is not it: the value that was rejected is half of what makes a
+    # construction-time traceback actionable.
+    with pytest.raises(ValueError) as exc_info:
+        AgentConfig(
+            provider_factory=make_pong_provider,
+            batch_policy=BatchPolicy.ADAPTIVE,
+            max_wait_ms=0,
+        )
+
+    assert str(exc_info.value) == "AgentConfig.max_wait_ms must be positive, got 0"
+
+
+def test_the_smallest_positive_batch_knobs_are_accepted() -> None:
+    # The other side of the "MUST be positive" boundary. A batch of one flushed
+    # after one millisecond is an aggressive configuration, not an invalid one,
+    # and no rejection case above can tell `> 0` from `> 1`.
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        batch_policy=BatchPolicy.ADAPTIVE,
+        max_batch_size=1,
+        max_wait_ms=1,
+        max_buffered_events=1,
+    )
+
+    assert config.batch_settings() == BatchSettings(
+        max_batch_size=1, max_wait_ms=1, max_buffered_events=1
+    )
+
+
+def test_a_buffer_cap_equal_to_the_batch_size_is_accepted() -> None:
+    # The `max_buffered_events >= max_batch_size` boundary. Equality is the
+    # documented minimum -- a cap that can hold exactly one batch -- and only
+    # the deferral headroom above it is optional, so rejecting it would refuse
+    # the very configuration the inequality is written to admit.
+    config = AgentConfig(
+        provider_factory=make_pong_provider,
+        batch_policy=BatchPolicy.ADAPTIVE,
+        max_batch_size=4,
+        max_buffered_events=4,
+    )
+
+    settings = config.batch_settings()
+    assert settings is not None
+    assert settings.max_buffered_events == settings.max_batch_size == 4
+
+
 @pytest.mark.parametrize("field_name", ["max_batch_size", "max_wait_ms", "max_buffered_events"])
 def test_a_batch_knob_under_the_none_policy_is_refused(field_name: str) -> None:
     # Scenario: Misconfigured batch knobs fail at the construction site (the

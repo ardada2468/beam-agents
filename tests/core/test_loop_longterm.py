@@ -14,7 +14,12 @@ import pytest
 
 from beam_agents.core.agent import Complete, Suspend
 from beam_agents.core.context import ActivationContext
-from beam_agents.core.loop import ActivationFailed, LongtermFlushFailed, run_activation
+from beam_agents.core.loop import (
+    ActivationFailed,
+    LongtermFlushFailed,
+    _flush_longterm,
+    run_activation,
+)
 from beam_agents.memory.stores import InMemoryMemoryStore, MemoryRecord
 from tests.core._dofn_helpers import make_pong_provider
 
@@ -180,6 +185,15 @@ async def test_a_flush_failure_fails_the_activation_closed() -> None:
     cause = excinfo.value.__cause__
     assert isinstance(cause, LongtermFlushFailed)
     assert isinstance(cause.__cause__, ConnectionError)
+    # Which record failed, by name. `saving_agent` stages "profile" then
+    # "case/1" and the store fails every save, so the first one is the one the
+    # error must name: the flush walks the upserts in staging order and stops
+    # at the first failure, and an operator triaging a partially-applied flush
+    # needs to know where it stopped. Both the attribute and the message carry
+    # it, because the DoFn reads the attribute while the dead letter's detail
+    # carries the `repr`.
+    assert cause.key == "profile"
+    assert str(cause) == "long-term flush failed for key 'profile'"
 
 
 # -- Scenario: Staged saves are visible to reads before any flush -------------
@@ -224,6 +238,35 @@ async def test_without_a_store_the_accessor_raises_and_nothing_changes() -> None
     cause = excinfo.value.__cause__
     assert isinstance(cause, RuntimeError)
     assert "AgentConfig.longterm_memory" in str(cause)
+
+
+async def test_flushing_upserts_without_a_store_names_the_wiring_bug() -> None:
+    # `_flush_longterm`'s guard, driven directly. Staging an upsert requires
+    # `ctx.memory.longterm`, which requires a store, so no agent can reach this
+    # state -- but the guard is the thing standing between a future rewiring
+    # and a silently swallowed flush, and an assertion is only as good as the
+    # name it fails with. The store is cleared after staging for exactly the
+    # reason `test_a_half_built_runtime_is_refused_too` clears the DoFn's
+    # provider: it is the only way to present the half-built runtime the guard
+    # exists to refuse.
+    store = _ScriptedStore()
+    ctx = ActivationContext(
+        entity_key=b"k",
+        seq=0,
+        now_ms=1000,
+        provider=make_pong_provider(),
+        memory_blob=None,
+        cache_blob=None,
+        longterm_store=store,
+    )
+    ctx.memory.longterm.save("profile", b"staged")
+    ctx._longterm_store = None
+
+    with pytest.raises(AssertionError) as excinfo:
+        await _flush_longterm(ctx)
+
+    assert str(excinfo.value) == "staged upserts without a configured store"
+    assert store.saved == []
 
 
 async def test_without_saves_the_result_carries_no_upserts() -> None:

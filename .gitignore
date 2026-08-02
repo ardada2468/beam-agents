@@ -39,6 +39,24 @@ mutants/
 bench-results/
 bench-report.md
 
+# Diagnostic capture from `make compose-logs LOGS_DIR=...` (per-service logs,
+# TaskManager thread dumps, Flink REST snapshots). Generated on demand when a
+# docker phase goes red — the local equivalent of what CI uploads as an
+# artifact, so it is reproducible rather than committed. The default LOGS_DIR
+# is named here; a custom one is the caller's to manage.
+compose-diagnostics/
+
+# Documentation site (Node). `website/pnpm-lock.yaml` and
+# `website/generated/` stay tracked: the lockfile pins the toolchain and the
+# generated API reference is drift-checked against the package in CI.
+website/node_modules/
+website/.next/
+website/.next-build/
+website/out/
+website/next-env.d.ts
+website/.search-index.json
+website/tsconfig.tsbuildinfo
+
 # e2e gate runtime artifacts (spool segments, worker logs, thread dumps).
 # The directory itself is committed (.gitkeep): the compose bind mount must
 # exist in a fresh checkout, or docker creates it root-owned on Linux CI
@@ -56,9 +74,11 @@ frontend/dist/
 frontend/.vite/
 frontend/screenshots/
 
-# Agent worktrees: ephemeral checkouts the harness creates for parallel work.
-# Tooling state, never source — each one is a full copy of this repository.
-.claude/worktrees/
-
 # TypeScript incremental build state: regenerated on every build.
 frontend/*.tsbuildinfo
+
+# Scratch worktrees created by the agent harness when it runs work in
+# isolation. Transient by construction — each one is a checkout of a branch
+# that already lives in .git, so committing them would vendor the repository
+# into itself.
+.claude/worktrees/

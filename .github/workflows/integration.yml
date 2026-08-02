@@ -60,15 +60,18 @@ jobs:
         if: always()
         run: make compose-down
 
-  # The Flink mini-cluster lane: full compose stack, the effectively-once
-  # e2e semantics gate, and the adapter conformance matrix's Flink leg. Runs
-  # in parallel with (never behind) the base integration job so the release
-  # gates have their own budget and re-run unit. The e2e gate runs a 10k-event
-  # chaos scenario against the full stack, budgeted ≤ 15 min on its own; the
-  # rest of this job's budget is stack bring-up, the harness build, and the
-  # conformance leg (~70 s per adapter).
+  # The Flink mini-cluster lane: the Flink services, the effectively-once e2e
+  # semantics gate, and the adapter conformance matrix's Flink leg. Runs in
+  # parallel with (never behind) the base integration job so the release gates
+  # have their own budget and re-run unit.
+  #
+  # Budget, measured 2026-07-31 on the first run whose e2e gate passed: harness
+  # build ~4 min, stack bring-up ~1 min, e2e gate ~15 min, conformance leg ~7
+  # min per adapter. That is ~41 min of the old 45, with no room for the retry
+  # the e2e gate is designed to take. 60 restores the margin the 45 was chosen
+  # for, back when the gate had never run to completion here.
   flink-minicluster:
-    timeout-minutes: 45
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,8 +109,13 @@ jobs:
       # on the missing tag rather than silently running a stale image.
       # `--wait` still blocks until every service, including flink-jobserver,
       # reports healthy.
+      #
+      # `compose-up-flink`, not `compose-up`: the three GCP emulators belong to
+      # the base lane's selection and are never reached from `tests/semantics`
+      # or `tests/conformance`. Their JVMs took memory this job's JobManager
+      # needs — see the target's comment in the Makefile.
       - name: Start local stack
-        run: make compose-up COMPOSE_UP_FLAGS=--wait
+        run: make compose-up-flink COMPOSE_UP_FLAGS=--wait
 
       # This step is the ONLY place the docker-backed semantics release gates
       # run (`make test-integration` excludes them so they are not paid for

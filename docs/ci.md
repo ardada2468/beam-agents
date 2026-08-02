@@ -8,7 +8,7 @@ plus the docs build:
 |---------------------|-----------------------------------|--------------------------------|---------------------|
 | `ci.yml`            | push to `main`, pull request      | lint, type, unit (3.11–3.12 × ubuntu) | yes |
 | `integration.yml` → `integration` job | push to `main`, pull request | integration minus semantics gates (core services only: Redpanda, Redis, GCP emulators via `make compose-up-core`) | yes |
-| `integration.yml` → `flink-minicluster` job | push to `main`, pull request | docker-backed semantics gates on the Flink mini-cluster (`make test-semantics` + `make test-conformance-flink`, full compose stack) | yes (add to required contexts at merge) |
+| `integration.yml` → `flink-minicluster` job | push to `main`, pull request | docker-backed semantics gates on the Flink mini-cluster (`make test-semantics` + `make test-conformance-flink`, Flink services only via `make compose-up-flink`) | yes (add to required contexts at merge) |
 | `quality.yml`       | push to `main`, pull request      | mutation (when `core/` source or tests change) + coverage ratchet | yes |
 | `nightly.yml`       | schedule `0 7 * * *` UTC, manual  | mutation and the [benchmark suite](benchmarks.md) unconditionally; the [Dataflow `--update` compatibility gate](#the-dataflow-update-compatibility-gate), the [fraud-triage Flex Template](#the-fraud-triage-flex-template) build and launch gate, and provider smoke tests when credentials exist | no (release-blocking) |
 | `spark-weekly.yml`  | schedule `0 6 * * 1` UTC, manual  | the adapter conformance matrix's weekly Spark leg (`make test-conformance-spark`, base stack + `docker/compose.spark.yaml`) plus the promotion-window report | no (never per-PR — see [the weekly Spark leg](#the-weekly-spark-leg)) |
@@ -87,7 +87,13 @@ deleting versions older than ~30 days keeps the last month launchable while
 bounding storage. GCS template specs are small JSON objects; a matching
 lifecycle rule on the `templates/` prefix does the same job.
 
-## The Dataflow `--update` compatibility gate
+<!-- Heading text without the `--` on purpose: this file is rendered twice,
+     by mkdocs and by the documentation site, and the two slugifiers disagree
+     about a run of hyphens (mkdocs collapses it, github-slugger keeps it). The
+     anchor `#the-dataflow-update-compatibility-gate` is linked from this table
+     and from docs/state-compat.md, and this phrasing is the one that resolves
+     under both. -->
+## The Dataflow update-compatibility gate
 
 `tests/dataflow/test_update_compat.py` is the only `dataflow`-marked test and
 the executable half of [`docs/state-compat.md`](state-compat.md). It launches a

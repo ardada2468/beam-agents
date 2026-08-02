@@ -29,6 +29,8 @@ from beam_agents.core.context import (
     AgentResult,
 )
 from beam_agents.hitl import DEFAULT_APPROVAL_CHANNEL, DEFAULT_INTENT_TTL_MS
+from beam_agents.memory.facade import LongtermMemory, Memory
+from beam_agents.memory.stores import InMemoryMemoryStore, MemoryRecord
 from beam_agents.model import (
     BudgetExceeded,
     DecodedResponse,
@@ -590,6 +592,33 @@ async def test_result_carries_every_staged_effect_category() -> None:
     assert result.cache_blob is not None
 
 
+def test_the_drained_result_carries_the_staged_long_term_upserts() -> None:
+    # The staged upserts are how the activation's owner learns there is a
+    # commit-tail flush to perform; a result that dropped them would leave a
+    # `longterm.save` silently unflushed, with the agent, the working tier, and
+    # every other drained field looking exactly as they do here. Nothing else
+    # on this surface exposes them, so nothing else can notice.
+    store = InMemoryMemoryStore()
+    handle = LongtermMemory(store, entity_key=b"key-1", seq=4, now_ms=1_000_000)
+    ctx = make_context(memory=Memory(now_ms=1_000_000, longterm=handle))
+
+    ctx.memory.longterm.save("profile", b"v1")
+
+    result = ctx.drain()
+
+    assert result.upserts == (
+        MemoryRecord(
+            entity_key=b"key-1", key="profile", value=b"v1", seq=4, updated_at_ms=1_000_000
+        ),
+    )
+
+
+def test_an_activation_without_a_long_term_tier_drains_no_upserts() -> None:
+    # The unconfigured shape: no store, so nothing staged and nothing for the
+    # owner to flush -- empty, never `None`, because the owner iterates it.
+    assert make_context().drain().upserts == ()
+
+
 def test_a_clean_activation_yields_an_empty_result() -> None:
     # Scenario: A clean activation yields an empty result.
     ctx = make_context()
@@ -818,8 +847,18 @@ def test_an_empty_batch_is_refused_rather_than_presented() -> None:
     # A flush only ever runs over a non-empty buffer; an empty list would give
     # the agent an activation with nothing to act on and a batch clock with no
     # source, so it is a construction error, not a runtime shape.
-    with pytest.raises(ValueError, match="events"):
+    with pytest.raises(ValueError) as exc_info:
         _batch_context([])
+
+    # The whole message. `events=[]` is the one construction that is neither
+    # the batch shape nor the per-event one, and the reader has to be told
+    # *which* of the two they meant -- "a flush only runs over a non-empty
+    # buffer" and "an empty batch has no activation clock" are both reasons a
+    # caller needs, and a `match="events"` substring pins neither.
+    assert str(exc_info.value) == (
+        "ActivationContext(events=[]) is not a valid activation: a flush only ever runs "
+        "over a non-empty buffer, and an empty batch has no activation clock to derive"
+    )
 
 
 def test_activation_context_stages_complete_intents_and_continuations() -> None:
@@ -1647,8 +1686,37 @@ def test_a_budget_without_a_decoder_is_refused_at_context_construction() -> None
     # rejects the pair first, but `ActivationContext` is buildable without one
     # (the loop driver's own tests do), so it re-checks defensively: unknown
     # usage must not silently mean free.
-    with pytest.raises(ValueError, match="decode"):
+    with pytest.raises(ValueError) as exc_info:
         _activation_context(max_tokens_per_activation=100)
+
+    # The whole message, because the whole message is the requirement: the
+    # spec's word is that it "explain[s] that budget enforcement requires the
+    # provider's response decoder", and the explanation -- unknown counts are
+    # not free, and an unenforceable budget must not meter nothing -- is the
+    # part a caller acts on. A substring match on "decode" survives every
+    # rewrite of that reasoning.
+    assert str(exc_info.value) == (
+        "max_tokens_per_activation requires a provider response decode: without one a "
+        "call's token counts are unknown, and an unenforceable budget must not silently "
+        "meter nothing"
+    )
+
+
+def test_charging_an_unknown_usage_against_a_budget_names_the_wiring_bug() -> None:
+    # `_charge`'s guard, driven directly. The constructor above refuses the
+    # budget-without-decoder pair, so `usage is None` is unreachable while a
+    # budget exists -- and that unreachability is exactly what the assertion
+    # asserts. Charging nothing would silently meter a call as free, which is
+    # the failure mode the whole requirement exists to prevent, so the guard
+    # has to fail loudly and say why.
+    ctx = _budgeted_context(100)
+
+    with pytest.raises(AssertionError) as exc_info:
+        ctx._charge(None)
+
+    assert str(exc_info.value) == "a budget without a decoder is refused at construction"
+    assert ctx._budget is not None
+    assert ctx._budget.consumed == 0
 
 
 def test_a_non_positive_budget_is_refused_at_context_construction() -> None:

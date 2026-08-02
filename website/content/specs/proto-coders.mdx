@@ -1,0 +1,55 @@
+---
+title: Proto coders
+summary: Deterministic protobuf coders for keyed state and pipeline elements — the reason state is never pickled.
+status: stable
+order: 2
+verifies:
+  - spec: openspec/specs/proto-coders/spec.md
+  - test: tests/core/test_coders.py
+---
+
+Beam needs a coder for every type that crosses a bundle boundary or lands in
+state. Left to itself it will fall back to pickle, and pickle is the wrong
+answer for both: it is not stable across library versions, it cannot be read by
+a non-Python consumer, and it is not deterministic — which disqualifies it as a
+key coder outright.
+
+This capability registers a protobuf coder for all seven
+[wire schema](/specs/wire-schemas) message types, encoding with
+`SerializeToString(deterministic=True)`.
+
+## What "deterministic" buys
+
+Encoding the same message value twice produces identical bytes. Beam depends on
+that for grouping: if two equal keys can encode differently, they land in
+different groups and per-key state silently splits in two. Declaring the coder
+deterministic is what makes these messages legal as keys, and the spec requires
+the coder to advertise it rather than merely happen to have the property.
+
+Round-tripping is lossless, which is the other half of the contract — a blob
+written by one bundle and read by the next has to be field-equal, not merely
+similar.
+
+## Registration is explicit
+
+Coders are registered by an explicit call, not by an import side effect.
+Importing `beam_agents` performs no I/O, spawns no threads, and mutates no
+global registry; a package that rewires Beam's coder resolution just because it
+was imported is a package that is very hard to debug when it does the wrong
+thing.
+
+## The check that keeps it honest
+
+The requirement that matters most is the negative one: **pipeline elements never
+fall back to pickle.** That is asserted by a test rather than assumed from the
+registration, because falling back to pickle is silent. Everything keeps
+working, right up until a state blob written by one version cannot be read by
+the next.
+
+## Related
+
+- [Wire schemas](/specs/wire-schemas) — the seven messages being coded.
+- [Architecture](/learn/architecture) — where coders sit in the transform.
+- [Runners](/docs/runners) — what portability across runners depends on.
+
+<Spec capability="proto-coders" />

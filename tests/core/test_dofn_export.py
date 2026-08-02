@@ -31,6 +31,7 @@ from beam_agents._protos import (
 )
 from beam_agents.core.dofn import _AgentDoFn
 from beam_agents.core.migration import CURRENT_STATE_SCHEMA_VERSION
+from beam_agents.core.snapshot import serialize_snapshot
 from tests.core._dofn_fakes import FakeBag, FakeSum, FakeTimer, FakeValue
 from tests.core._dofn_helpers import make_pong_provider, seq_agent
 
@@ -237,6 +238,35 @@ def test_an_export_produces_no_activation_outputs() -> None:
     assert [e.tag for e in tagged] == ["snapshots"]
     for tag in ("intents", "traces", "errors"):
         assert [e for e in tagged if e.tag == tag] == []
+
+
+# --- Requirement: `.snapshots` is a tagged output with an optional sink -------
+
+
+def test_the_message_bus_encoding_keys_by_entity_and_serializes_deterministically() -> None:
+    # Scenario: A configured snapshots sink receives serialized snapshots keyed
+    # by entity -- "message-bus schemes SHALL receive `(entity_key,
+    # deterministic proto bytes)` pairs keyed by `entity_key`". The key is what
+    # keeps one entity's snapshots in order through a single partition, and the
+    # bytes are what the replay CLI loads; both are asserted here, runner-free,
+    # because the only other place this encoder runs is inside `_WriteSnapshots`
+    # in a pipeline.
+    snapshot = _snapshots(_populated_driver().process(_export()))[0]
+
+    key, encoded = serialize_snapshot(snapshot)
+
+    assert key == _KEY
+    assert StateSnapshot.FromString(encoded) == snapshot
+
+
+def test_the_encoding_is_a_pure_function_of_the_snapshot() -> None:
+    # The byte-identity half of "A retried bundle re-emits a byte-identical
+    # snapshot", carried through the sink encoder rather than stopping at the
+    # message: what a retried bundle actually re-publishes is these bytes.
+    first = _snapshots(_populated_driver().process(_export()))[0]
+    second = _snapshots(_populated_driver().process(_export()))[0]
+
+    assert serialize_snapshot(first) == serialize_snapshot(second)
 
 
 def test_an_export_of_a_never_seen_key_emits_an_empty_snapshot() -> None:

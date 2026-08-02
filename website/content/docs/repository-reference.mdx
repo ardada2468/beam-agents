@@ -1,0 +1,56 @@
+---
+title: Repository reference docs
+summary: The reference documents under docs/ that have no dedicated page here yet, each with what it covers and where it is published.
+status: partial
+order: 8
+verifies:
+  - module: docs/api.md
+  - module: docs/batching.md
+  - module: docs/benchmarks.md
+  - module: docs/continuous_eval.md
+  - module: docs/index.md
+  - module: docs/memory.md
+  - module: docs/releasing.md
+  - module: docs/replay.md
+  - module: docs/security.md
+  - module: docs/sharding.md
+  - module: docs/state-compat.md
+  - module: docs/state-migration.md
+  - module: docs/yaml.md
+  - spec: openspec/specs/repo-scaffolding/spec.md
+  - test: tests/docs/test_fidelity_checks.py
+---
+
+The repository carries a second documentation tree under `docs/`, built with
+mkdocs and published at
+[ardada2468.github.io/beam-agents](https://ardada2468.github.io/beam-agents/).
+It is the reference layer: exhaustive, versioned with the code, and written for
+someone already inside the codebase. This site is the explanatory layer.
+
+Some of those documents already have a page here — errors, metrics, traces, the
+effector, testing and CI. The rest are listed below rather than summarized,
+because a summary that drifts is worse than a link that does not.
+
+| Document | Covers |
+|---|---|
+| `docs/index.md` | The reference tree's own entry point. |
+| `docs/api.md` | The public surface, name by name, as frozen for 1.0. |
+| `docs/batching.md` | Batch policies, including the adaptive policy and whole-batch suspension. |
+| `docs/memory.md` | The memory facade and the long-term stores behind it. |
+| `docs/replay.md` | The replay bundle format and the replay CLI. |
+| `docs/sharding.md` | Key sharding and what it costs. |
+| `docs/state-compat.md` | What keyed state promises across a version hop. |
+| `docs/state-migration.md` | The migration chain walk and how a step is written. |
+| `docs/security.md` | Intent signing, transport auth, and secret handling. |
+| `docs/yaml.md` | The YAML pipeline provider. |
+| `docs/benchmarks.md` | The benchmark harness and its gated baseline. |
+| `docs/continuous_eval.md` | Evaluating an agent continuously against live traffic. |
+| `docs/releasing.md` | The compatibility surface and the release procedure. |
+
+## Not yet implemented
+
+This page is marked **partial** on purpose: it is an index, not coverage. Each
+row above is a document that has earned a page on this site and does not have
+one yet. The site's own verifier is what keeps the list honest — a new document
+under `docs/` fails the build until some page here names it, and this page is
+where it lands until it gets a better home.

@@ -86,4 +86,33 @@
 # add-effector-security: the signing/verification paths, the redaction helpers,
 # and the effector's phase-zero dead-letter route are fully exercised by
 # offline unit tests. Measured on the combined tree: 0.9164.
-branch_rate = 0.9164
+# THIS NUMBER IS SCOPED TO THE OFFLINE LANE. Do not raise it to a full-lane
+# measurement.
+#
+# `.github/workflows/quality.yml` runs `make test-unit` and then
+# `make coverage-ratchet`. `make test-unit` selects
+# `not integration and not semantics and not dataflow and not smoke`, so the
+# coverage.xml the ratchet reads NEVER contains integration coverage.
+# scripts/coverage_ratchet.py compares that file's branch-rate against the value
+# below. Raising this to a full-lane number therefore does not tighten the gate —
+# it breaks it, permanently, with `branch coverage dropped from <full> to
+# <offline>` on every subsequent run, for no defect.
+#
+# Measured on the full lane (offline + integration, i.e.
+# `not semantics and not dataflow and not smoke and not spark`) during the
+# verify-live-infrastructure run on 2026-07-31: **0.9358**. That is ~1.9 points
+# above the offline lane, and it is the number the three live-client memory-store
+# backends contribute once they are reachable — the movement the comment above
+# anticipated ("Re-measure and raise this number when the integration lane's
+# coverage is folded in"). Folding it in requires the ratcheted coverage.xml to
+# come from the full lane, which is a workflow change: the quality job would need
+# the compose services the integration lane depends on. Until that happens, this
+# baseline stays offline-scoped and 0.9358 is recorded here as informational.
+#
+# close-core-mutation-gaps: 0.9180, still offline-scoped. The change adds no
+# `src/`, so the gain is purely reached branches: the flush path's three failure
+# exits, the store-lifecycle and summarizer wiring in `_activate`, `migrate_to_
+# current`'s multi-step chain walk, and the construction-time rejections in
+# `ActivationContext` were all previously reachable only from suites this lane
+# deselects, or from no test at all.
+branch_rate = 0.9180

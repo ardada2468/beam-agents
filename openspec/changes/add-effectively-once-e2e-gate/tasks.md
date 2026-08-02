@@ -52,9 +52,18 @@
 
 ## 7. Verify
 
-- [ ] 7.1 Run `make compose-up && make test-semantics` locally at full volume and confirm the gate passes.
+- [x] 7.1 Run `make compose-up && make test-semantics` locally at full volume and confirm the gate passes.
+      <!-- Discharged by verify-live-infrastructure phase 2 (2026-07-31): 1 passed in
+           482.77 s (8 m 02 s) at default volume, no BEAM_AGENTS_E2E_EVENTS override,
+           against the ≤ 15 min budget. See verification-report.md. -->
 - [x] 7.2 Run it **at least 5 consecutive times** with different seeds; any failure is root-caused, never retried away (design R1's zero flake budget).
+      <!-- NOTE: verify-live-infrastructure executed ONE full-volume run, not five.
+           This item was already checked before that run and is left as found; its
+           five-seed evidence is not among that run's records. -->
 - [ ] 7.3 Prove the gate can fail for the right reason: temporarily neuter the effector's dedup claim (locally, not committed) and confirm the exactly-one assertion fires with the offending `intent_id`s named.
+      **(unchecked by verify-live-infrastructure: no fault-injection run was performed, and
+      the spec forbids checking an item off without evidence from an executed phase)**
 - [ ] 7.4 Prove the approvals assertion can fail: temporarily drop approval publication and confirm the balance assertion fires.
+      **(unchecked by verify-live-infrastructure: same reason as 7.3)**
 - [x] 7.5 `ruff` and `mypy --strict` clean on the new harness; confirm coverage does not decrease.
-- [ ] 7.6 `openspec validate add-effectively-once-e2e-gate --strict` passes.
+- [x] 7.6 `openspec validate add-effectively-once-e2e-gate --strict` passes.

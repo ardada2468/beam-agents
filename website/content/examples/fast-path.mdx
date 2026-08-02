@@ -1,0 +1,147 @@
+---
+title: Fast path
+summary: One event in, one decision out inside a single activation, with per-key memory proving the ordering is not a race.
+status: stable
+order: 1
+verifies:
+  - symbol: beam_agents.RunAgent
+  - symbol: beam_agents.AgentConfig
+  - module: src/beam_agents/core/dofn.py
+  - module: src/beam_agents/core/transform.py
+  - module: src/beam_agents/memory/facade.py
+  - spec: openspec/specs/memory-facade/spec.md
+  - spec: openspec/specs/fake-llm/spec.md
+  - test: tests/docs/test_website_examples.py
+  - test: tests/core/test_dofn_activation.py
+  - test: tests/core/test_transform.py
+  - example: fast_path.py
+---
+
+The smallest pipeline that is still a real one. Three events arrive on two keys; each
+activation reads durable working memory, calls a model, writes memory back, and
+completes. Nothing suspends, nothing leaves the pipeline, and the whole run finishes
+offline on the `DirectRunner`.
+
+Read this one first. Every other example on this site is this shape plus one
+complication.
+
+## What the program does
+
+Four steps, in order:
+
+1. **Append the event to a bounded per-key ring** — `ctx.memory.append`.
+2. **Ask the model what to do** — `ctx.call_model`.
+3. **End the activation and emit bytes** — `Complete(output=...)`.
+4. **Assert the two keys never saw each other's memory** — `assert_that`, in `main`.
+
+If you are meeting the runtime for the first time,
+[getting started](/learn/getting-started) walks the same file as a tutorial. This page
+is the annotated read of it.
+
+## The agent
+
+An agent is an async function from an activation context to an outcome. There is no base
+class to inherit and no registration call.
+
+<Example file="fast_path.py" region="agent" />
+
+Three things in those few lines are load-bearing.
+
+**It is module-level, not a closure.** `RunAgent` holds the function inside a stateful
+`DoFn`, and Beam serializes that `DoFn` to ship it to workers. A module-level function
+pickles by reference; a closure over local state does not pickle at all. This is the
+first thing that bites people, and it fails at submission time rather than in the agent.
+
+**Memory is read and written through `ctx`, not through a client.** `ctx.memory` is a
+facade over one keyed protobuf blob. `append(..., max_items=32)` keeps a bounded ring —
+bounded because working memory carries a per-key cap, and an unbounded list eventually
+reaches it. [State and memory](/learn/state-and-memory) has the caps and the collection
+rules.
+
+**The write is staged, not applied.** Had this function raised on the line after the
+`append`, the append would not persist and the key's sequence counter would not advance.
+Every effect an activation produces is buffered in the context and committed atomically
+with the Beam bundle — [correctness invariant 1](/learn/correctness-invariants).
+
+`Complete(output=...)` ends the activation and emits on `.output`. The other outcome is
+`Suspend`, which is what [intents and resume](/examples/intents-and-resume) is about.
+
+## Supplying the model
+
+`AgentConfig` takes a **factory**, not a client instance.
+
+<Example file="fast_path.py" region="provider" />
+
+The factory runs worker-side, so connection pools are constructed where they are used
+rather than pickled across the wire. `FakeLLM` matches requests against ordered rules
+and records every call it receives, which is what lets an example be deterministic with
+no credentials and no network — see the [fake LLM spec](/specs/fake-llm).
+
+Swapping in a real provider is a change to this one function. Nothing in `triage` names
+a vendor.
+
+## Keying the input
+
+<Example file="fast_path.py" region="pipeline" />
+
+`RunAgent` does not key elements for you, and it does not guess. It checks at
+pipeline-construction time that its input is `PCollection[KV[bytes, AgentEnvelope]]` and
+raises `ValueError` otherwise. A stateful `DoFn` cannot accept anything else, and
+failing during submission beats failing on a worker part-way through a backfill.
+
+The key you choose *is* the unit of isolation: one memory blob, one sequence counter,
+one serialized stream of activations per key. Pick the entity the agent reasons
+about — an account, a session, an incident — not a request id.
+
+## What the assertion proves
+
+<Example file="fast_path.py" region="assertion" />
+
+`acct-1` sends two events and sees its ring one deep and then two deep. `acct-2` sends
+one event and starts from an empty ring. Two facts fall out of that:
+
+- **Memory is per key.** `acct-2` cannot read `acct-1`'s ring, and there is no
+  configuration that lets it.
+- **Per-key ordering is not a race.** A Beam stateful `DoFn` processes one element at a
+  time per key, so `acct-1`'s second activation observes the first one's committed
+  write. That is [correctness invariant 4](/learn/correctness-invariants), and it is why
+  no lock appears anywhere in the agent. Parallelism comes from having many keys, not
+  from interleaving one.
+
+## Run it
+
+```sh
+uv run python website/examples/fast_path.py
+```
+
+No credentials, no docker, no network. The repository runs this exact command from
+`tests/docs/test_website_examples.py` on every change, so the code above cannot quietly
+stop working — see [testing and CI](/docs/testing-and-ci).
+
+## What the fast path leaves out
+
+Everything an activation cannot do inside a single `process()` call:
+
+- **External writes.** An agent never performs one itself; it stages an intent and
+  suspends. → [intents and resume](/examples/intents-and-resume)
+- **Asking a person.** The same mechanism, plus a timer that decides what an unanswered
+  question means. → [approvals and timeout fallback](/examples/human-in-the-loop)
+- **Failure.** This program has no failing path, so `.errors` stays empty and
+  unexamined. → [the four outputs](/examples/four-outputs)
+- **Tools.** `triage` calls the model directly and looks nothing up.
+  → [read-only tools and side effects](/examples/read-only-tools)
+
+## The complete program
+
+<Example file="fast_path.py" />
+
+## Related
+
+- [Architecture](/learn/architecture) — where the fast path sits among the two execution
+  paths through `RunAgent`.
+- [Correctness invariants](/learn/correctness-invariants) — atomic commit and per-key
+  serialization, the two rules this example demonstrates.
+- [State and memory](/learn/state-and-memory) — what a key's blob holds and how it stays
+  bounded.
+- [`RunAgent`](/api/RunAgent) and [`AgentConfig`](/api/AgentConfig) in the API
+  reference.
