@@ -1,0 +1,80 @@
+---
+title: The console
+summary: A local viewer for what the runtime records — activations, span trees, errors by reason, and the approval queue — over one SQLite file, with no broker and no cloud project.
+status: experimental
+order: 9
+verifies:
+  - module: src/beam_agents/console/_app.py
+  - module: src/beam_agents/console/_store.py
+  - module: src/beam_agents/console/_sink.py
+  - module: docs/console.md
+  - module: docs/quickstart.md
+  - module: docs/deploying.md
+  - test: tests/console/test_app.py::test_the_liveness_endpoint_reports_healthy_before_any_ingest
+  - test: tests/console/test_app.py::test_the_read_router_is_mounted_under_api
+---
+
+The runtime already records everything worth looking at. `RunAgent` emits
+`TraceEvent`s with deterministic identity, `ActivationErrorRecord`s over a
+closed `reason` vocabulary, and `StateSnapshot`s for replay. Every one of those
+paths ends at a wire boundary — bytes on a topic, rows in BigQuery, spans at a
+collector — so looking at any of it has meant provisioning something first.
+
+The console is the reader that closes that loop: a WAL SQLite store, an HTTP
+read API, a live stream, and a browser UI, in one process over one file. No
+broker, no cloud project, no collector.
+
+```sh
+make console-up      # http://localhost:8787
+```
+
+That stack is two containers. One serves the API and the UI; the other runs a
+`DirectRunner` pipeline over the fake provider, pushing records in a loop, so
+you land on a populated console rather than an empty one.
+
+## Status
+
+`experimental` rather than `stable`: the console is implemented and covered by
+tests, but it has no capability spec under `openspec/specs/`, and a stable claim
+on this site has to be traceable to one. The read API's shape may still move.
+
+## What it is not
+
+**Not writable.** Every endpoint is read-only with respect to agent state.
+Nothing here can approve a suspension, retry an activation, or write to a
+running pipeline. The approval queue *shows* pending approvals; approving one
+goes through your approvals topic, as it always did.
+
+**Not authenticated.** There are no users and no tokens. Telemetry ingest causes
+no side effects, and the compensating control is that the service binds to
+loopback by default — the Docker image sets `0.0.0.0` because loopback inside a
+container namespace is reachable from nothing, which means publishing port 8787
+to a shared network publishes your traces to it.
+
+**Not long-horizon storage.** One SQLite file with a retention window. A
+production-rate pipeline will outrun a single writer, and the sink drops and
+counts rather than applying backpressure — visibly, in the UI, but it drops. The
+documented answer for production volume is to keep exporting to Kafka or
+BigQuery and let the console read a window of that.
+
+## Spans have no width, and the UI says so
+
+Every span the runtime emits satisfies `start_ms == end_ms`, because measuring
+elapsed time would put a wall-clock read in the hot path. So the trace view
+draws spans as ordered rules of uniform weight: position and nesting are real,
+and **width encodes nothing**. Durations appear as explicit numbers only where a
+real measurement exists — the `ActivationTally` figures that arrive as
+attributes, and the delta between an activation's start and end, which is
+meaningful only because a suspend and its resume are two separate clock reads.
+
+## Getting records in, and running it for real
+
+Five ingest paths, in increasing order of intrusiveness — OTLP, Kafka, BigQuery,
+an imported replay bundle, and the native `console://` scheme — are covered in
+the repository's `docs/console.md`.
+
+For running the whole thing against a real model provider rather than the
+scripted one, `docs/quickstart.md` is the ladder: Docker only, then a local
+checkout, then real Beam-on-Flink. For putting a pipeline on Dataflow —
+what the container image must contain, and how a model credential reaches a
+worker without ever becoming a template parameter — see `docs/deploying.md`.
