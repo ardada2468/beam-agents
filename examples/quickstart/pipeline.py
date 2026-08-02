@@ -169,9 +169,9 @@ def resolve_provider(choice: str) -> tuple[str, Callable[[], LLMClient], str]:
         f"No credential for the '{choice}' provider: {missing} is not set.\n"
         "This quickstart calls a real model on purpose. Either export a key:\n"
         "    export ANTHROPIC_API_KEY=sk-ant-...\n"
-        "or run it against the offline scripted provider by asking for that "
-        "explicitly:\n"
-        "    make quickstart PROVIDER=fake"
+        "or ask for the offline scripted provider explicitly:\n"
+        "    make quickstart PROVIDER=fake   (on the host)\n"
+        "    make console-up                 (in docker: the looping demo stack)"
     )
 
 
@@ -372,7 +372,12 @@ def main(argv: list[str] | None = None) -> int:
         outputs.output | "Print" >> beam.Map(lambda decision: print(f"decision : {decision!r}"))
 
     if console:
-        print(f"\nOpen {console.replace('console://', 'http://')} to see the run.")
+        # The delivery URI and the browser address are not the same string when
+        # this runs under compose: the sink reaches the console at `console:8787`
+        # on the compose network, which resolves to nothing in a browser. Report
+        # what it delivered to, then name the address a person can actually open.
+        print(f"\nDelivered to {console}.")
+        print("The console UI is at http://localhost:8787 — the port compose publishes.")
     return 0
 
 

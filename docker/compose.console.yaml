@@ -116,6 +116,52 @@ services:
     restart: on-failure
 
   # ---------------------------------------------------------------------------
+  # Optional: the quickstart, against a real model.
+  #
+  #   ANTHROPIC_API_KEY=sk-ant-... \
+  #     docker compose -f docker/compose.console.yaml --profile quickstart up quickstart
+  #
+  # or `make quickstart-docker`, which is the same command.
+  #
+  # Behind a profile because it needs a credential, and nothing else in this
+  # stack does: plain `up` has to stay the path that works with nothing
+  # configured at all.
+  #
+  # It runs `examples.quickstart` — the same module `make quickstart` runs on
+  # the host — so the "evaluate it in docker" path and the "develop against it"
+  # path cannot drift into testing different things.
+  # ---------------------------------------------------------------------------
+  quickstart:
+    profiles: ["quickstart"]
+    image: beam-agents-console:1.0.0
+    depends_on:
+      console:
+        condition: service_healthy
+    # `console:8787` — the service name, because this is a separate container.
+    # The module's own default names localhost, which is the host-run form.
+    command:
+      - python
+      - -m
+      - examples.quickstart
+      - --console
+      - console://console:8787
+    # List form, for the reason the console's block gives: an entry with no `=`
+    # is set in the container only when it is set on the host. An unset key is
+    # not a misconfiguration of this stack — the module refuses to run rather
+    # than silently downgrading to the scripted provider, and says which
+    # variable to export.
+    environment:
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+    # Same reasoning as `console-demo`: a batch producer, not a server, so the
+    # healthcheck it would inherit from the shared image can never pass.
+    healthcheck:
+      disable: true
+    # Runs once and exits. Restarting a finished quickstart would re-run it
+    # forever against a metered API.
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
   # Optional: the Kafka ingest path.
   #
   #   docker compose -f docker/compose.console.yaml --profile kafka up -d

@@ -13,7 +13,7 @@ COMPOSE_CONSOLE := docker compose -f docker/compose.console.yaml
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
 
-.PHONY: quickstart quickstart-flink help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build console-build console-up console-down console-logs console-frontend proto docs docs-serve build changelog changelog-draft
+.PHONY: quickstart quickstart-docker quickstart-flink help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build console-build console-up console-down console-logs console-frontend proto docs docs-serve build changelog changelog-draft
 
 BENCH_RESULTS := bench-results
 # Local-iteration knob only. CI pins the modules' own sampling constants by
@@ -232,6 +232,22 @@ console-up: ## Start the console at http://localhost:8787 with the demo pipeline
 # producer, and leaving it running would bury the handful of activations the
 # quickstart produces under a few hundred synthetic ones. The point here is to
 # watch *your* run arrive.
+# The docker form: no checkout, no Python toolchain, no `uv` — the whole
+# evaluation path is compose plus a key.
+#
+# Naming `quickstart` starts it and its dependencies and nothing else, so the
+# looping `console-demo` never comes up and the handful of activations this
+# produces are the only ones in the store. That is also why there is no
+# `--scale console-demo=0` here: compose refuses to scale a service that naming
+# another one has disabled, which fails the whole command.
+#
+# `--exit-code-from` makes the target's exit status the pipeline's own, so a
+# missing credential or a provider error is a failed `make`, not a green one
+# with a stack trace scrolled off the top.
+quickstart-docker: ## Same quickstart, run entirely in docker (needs an API key)
+	$(COMPOSE_CONSOLE) --profile quickstart up --build \
+		--abort-on-container-exit --exit-code-from quickstart quickstart
+
 PROVIDER ?= auto
 quickstart: ## Real model + real tools + HITL, streamed into the console (needs an API key)
 	$(COMPOSE_CONSOLE) up -d --build --scale console-demo=0

@@ -99,6 +99,20 @@ COPY src /src/src
 RUN pip install --no-cache-dir --no-deps /src \
  && rm -rf /src
 
+# The examples, importable under their own names.
+#
+# This image already runs a Beam pipeline — `console-demo` is a DirectRunner job
+# over the fake provider — so carrying the quickstart beside it is not a new
+# role for the image, it is the same role with a second pipeline that can reach
+# a real model. It is what lets somebody evaluate the library with
+# `docker compose` alone: no checkout, no Python toolchain, no `uv`.
+#
+# On `PYTHONPATH` rather than installed: Beam pickles by module reference, so
+# `examples.quickstart.pipeline` has to resolve under exactly that name in
+# whatever process runs the graph — here, this container.
+COPY examples /app/examples
+ENV PYTHONPATH=/app
+
 # The UI bundle, copied LAST so a frontend change rebuilds this layer and
 # nothing else.
 #

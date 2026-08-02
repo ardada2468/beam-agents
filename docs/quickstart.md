@@ -9,10 +9,11 @@ you can watch it arrive in.
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
-make quickstart
+make quickstart-docker      # docker only, nothing installed
+make quickstart             # or from a checkout, with uv
 ```
 
-That starts the console and runs the pipeline. Open
+Either one starts the console and runs the pipeline against it. Open
 [http://localhost:8787](http://localhost:8787) when it finishes.
 
 `OPENAI_API_KEY` works too. **There is no silent downgrade**: with no credential
@@ -44,14 +45,46 @@ model's judgement.
 
 ## The ladder
 
-Four rungs, in increasing order of what you have to provision. The **same
-module** runs on all of them; only Beam's runner flags change.
+Five rungs, in increasing order of what you have to provision. Rungs 0 to 2 are
+the **same module** and differ only in where it runs; rung 3 is a different
+pipeline, for the reason given there.
+
+### 0. Docker only — no checkout, no Python
+
+If you are evaluating rather than developing, this is the whole thing: Docker
+and a key. Nothing is installed on your machine, and the pipeline runs in a
+container beside the console rather than on your host.
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+make quickstart-docker
+```
+
+or without a checkout at all:
+
+```sh
+ANTHROPIC_API_KEY=sk-ant-... docker compose \
+  -f docker/compose.console.yaml --profile quickstart up --build quickstart
+```
+
+The console comes up first, the quickstart runs against it once and exits, and
+the records stay in the database volume. Open
+[http://localhost:8787](http://localhost:8787).
+
+It runs `examples.quickstart` — the same module rung 1 runs on the host — so the
+evaluation path and the development path cannot drift into testing different
+things. The credential is passed through from your environment and is never
+baked into the image.
+
+The service sits behind a `quickstart` profile because it is the only thing in
+this repo that needs a credential and reaches the internet. Plain
+`make console-up` stays the path that works with nothing configured.
 
 ### 1. Local, in process
 
-What `make quickstart` does. Real model, real tools, real HITL, real console —
-`DirectRunner` in your terminal. This is the one to start with, and the one to
-re-run when you change your agent.
+What `make quickstart` does. Same pipeline, run from your checkout with `uv`
+instead of in a container — the form to use while you are changing the agent,
+because there is no image to rebuild between runs.
 
 ### 2. Real distributed execution, on your laptop
 
@@ -130,7 +163,7 @@ See [the CI workflow map](ci.md) for what runs where.
 
 ## Costs and safety
 
-- Rungs 1 and 2 cost only model tokens. The quickstart uses Haiku (or
+- Rungs 0 to 2 cost only model tokens. The quickstart uses Haiku (or
   `gpt-4o-mini`) capped at 64 output tokens across three activations — a
   fraction of a cent.
 - Rung 3 provisions Dataflow workers and bills for them until the job is
