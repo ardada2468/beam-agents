@@ -79,36 +79,41 @@ Two constraints are worth knowing before you extend it, both from
   one means restarting the other, and the console is reached at
   `host.docker.internal:8787` rather than `localhost`.
 
-### 3. Real Dataflow
+### 3. Real Dataflow — a different pipeline, not this one
 
-Needs a GCP project with billing, the Dataflow and Artifact Registry APIs
-enabled, and a staging bucket. **This rung costs money** — the others do not.
+**This module does not go to Dataflow, and the ladder stops being one module
+here.** Its source is a `TestStream`, which scripts both clocks so the approval
+and the elapsed deadline happen in seconds rather than in real minutes. That is
+what makes rungs 1 and 2 self-contained, and it is exactly what Dataflow does
+not run: a streaming job there reads a real source. Pointing
+`--runner DataflowRunner` at this module does not produce a slower quickstart,
+it produces a submission failure.
 
-```sh
-uv run python -m examples.quickstart \
-  --provider anthropic \
-  --console console://YOUR-CONSOLE-HOST:8787 \
-  --runner DataflowRunner \
-  --project "$GOOGLE_CLOUD_PROJECT" \
-  --region us-central1 \
-  --temp_location gs://YOUR-BUCKET/tmp \
-  --sdk_container_image YOUR-REGION-docker.pkg.dev/YOUR-PROJECT/YOUR-REPO/beam-agents:latest
-```
+The Dataflow-shaped version of the same story is the fraud-triage **Flex
+Template**, which is the same agent with its source and sinks parameterised as
+Pub/Sub topics instead of scripted in:
 
-Two things differ from the local rungs and are easy to miss:
+- [Fraud triage on Dataflow](examples/fraud-triage-dataflow.md) — running it
+- [Wiring the image](deploying.md) — what the container must contain, and how
+  the model credential reaches a worker without ever being a template parameter
 
-- **The console must be reachable from Dataflow workers.** `localhost` is the
-  worker's own loopback. Either run the console somewhere the workers can reach
-  or — better for anything beyond a trial — export to Kafka or BigQuery and
-  point a local console at *that*; see
+**That rung costs money**, and the others do not: it provisions Dataflow workers
+and bills for them until the job is drained or cancelled. It also needs more
+than an API key — a project with billing, the Dataflow, Artifact Registry and
+Secret Manager APIs enabled, a staging bucket, an Artifact Registry repository,
+the image built and pushed, and the Pub/Sub topics created.
+
+Two things about it differ from the local rungs and are easy to miss:
+
+- **The console must be reachable from the workers.** `console://localhost:8787`
+  is the *worker's* own loopback, which is nothing. Export to Kafka or BigQuery
+  and point a local console at that instead; see
   [the console's ingest paths](console.md#getting-records-in).
-- **Your API key has to reach the workers.** It is read from the environment
-  inside `provider_factory`, so it must be present on the worker, not just on
-  the machine you submitted from.
-
-For a packaged, deployable version of a pipeline on Dataflow, the fraud-triage
-Flex Template is the worked example:
-[Fraud triage on Dataflow](examples/fraud-triage-dataflow.md).
+- **The credential must reach the worker, and must not reach the job
+  description.** `provider_factory` runs in the worker process, so an
+  environment variable set on your laptop is not there. Pass a Secret Manager
+  *version reference* as the parameter and fetch the value on the worker —
+  [deploying.md](deploying.md#the-model-credential) has the grants.
 
 ### 4. The full test tiers
 

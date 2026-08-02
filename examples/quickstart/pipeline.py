@@ -28,8 +28,9 @@ the offline provider explicitly with `--provider fake`. A quickstart that
 quietly ran a scripted model while you believed you were testing a real one
 would be worse than one that refuses.
 
-The runner is whatever Beam is told to use, so the same module is the local run,
-the Flink run, and the Dataflow run — see `docs/quickstart.md`. Every function a
+The runner is whatever Beam is told to use, so the same module is the local run
+and the Flink run — but not the Dataflow run: its `TestStream` source scripts
+both clocks and Dataflow reads a real source. See `docs/quickstart.md`. Every function a
 pipeline references is module-level so the runner can pickle it by reference.
 """
 
