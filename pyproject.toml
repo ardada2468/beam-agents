@@ -102,15 +102,41 @@ memory-stores = [
   "google-cloud-firestore",
   "sqlalchemy[asyncio]",
 ]
+# The console service (`beam_agents.console`, `beam-agents-console`). The store
+# is stdlib sqlite3, so this is the HTTP surface and nothing else. Core never
+# imports any of it: `import beam_agents.console` must succeed with none of this
+# installed, which the import-boundary test proves, and every name here is
+# imported inside the function that needs it rather than at module scope. The
+# console is a viewer over telemetry the runtime already emits — it is never in
+# an activation's path, so nothing in a pipeline install depends on it.
+console = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "sse-starlette>=2.1",
+]
+# The console's *pull* ingest sources: a consumer over a topic a pipeline already
+# writes with `traces_to="kafka://…"`, and a reader over a table it already
+# writes with `traces_to="bigquery://…"`. Separate from `console` because the
+# push paths (`console://`, OTLP) need neither, and "start it and look at it"
+# should not install two cloud clients. `google-cloud-bigquery` arrives with
+# `apache-beam[gcp]` in practice; it is named here so the dependency is declared
+# where it is used rather than inherited by accident.
+console-ingest = [
+  "aiokafka",
+  "google-cloud-bigquery",
+]
 
-# The two executables this package ships; the runtime itself is a library
+# The three executables this package ships; the runtime itself is a library
 # embedded in a Beam pipeline. The effector is a service that runs outside Beam;
 # the replay CLI is an operator tool that reconstructs one activation from an
-# exported StateSnapshot plus its trace and re-runs it locally. Neither is part
-# of the public API surface (`beam_agents/__init__.py` re-exports neither).
+# exported StateSnapshot plus its trace and re-runs it locally; the console is a
+# local viewer over the trace, error, and snapshot records the runtime already
+# emits. None is part of the public API surface (`beam_agents/__init__.py`
+# re-exports none of them).
 [project.scripts]
 beam-agents-effector = "beam_agents.effector.__main__:main"
 beam-agents-replay = "beam_agents.replay.__main__:main"
+beam-agents-console = "beam_agents.console.__main__:main"
 
 [dependency-groups]
 dev = [
@@ -158,6 +184,17 @@ test = [
   # import-boundary test still proves the subpackage imports without it.
   "sqlalchemy[asyncio]",
   "aiosqlite",
+  # The console's API, ingest-endpoint, and live-stream tests are plain offline
+  # unit tests: they drive the ASGI app through httpx's ASGITransport against a
+  # temp-file SQLite store, with no socket and no server process. Mirrored from
+  # the `console` extra rather than depending on it, exactly as `otlp` is above;
+  # the import-boundary test still proves `beam_agents.console` imports with
+  # none of it installed. `aiokafka` and `google-cloud-bigquery` are absent on
+  # purpose — the pull sources are driven by fakes offline, so their real
+  # clients belong only in the `integration` lane.
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "sse-starlette>=2.1",
 ]
 lint = [
   "ruff",
@@ -219,6 +256,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/beam_agents"]
+# The console's UI bundle is a build artifact, not source: `frontend/` is built
+# into `console/static/`, which `.gitignore` excludes and hatchling would
+# therefore skip. `artifacts` force-includes it *when it exists*, so a wheel
+# built after a frontend build ships the UI and one built from a clean checkout
+# ships an API-only console that says how to get the UI (design D9). Committing
+# a built bundle instead would put unreviewable minified JS under the same
+# pre-commit gates as source.
+artifacts = ["src/beam_agents/console/static/**"]
 
 [tool.ruff]
 line-length = 100
@@ -497,6 +542,7 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 module = [
     "examples.hello_world",
     "examples.fraud_triage",
+    "examples.quickstart.pipeline",
     "examples.fraud_triage_dataflow.launch",
     "examples.iot_reaction",
     "examples.slack_approval.agent",
@@ -617,6 +663,22 @@ disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 # lazily-imported opentelemetry-proto constructors reading as Any.
 [[tool.mypy.overrides]]
 module = "beam_agents.observability.otlp"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# The console sink is the OTLP exporter's shape against the same untyped Beam
+# API — unparameterized PTransform/PCollection, ParDo, metric handles — and its
+# resolver returns the same `beam.PTransform` the SinkResolver protocol declares.
+# The relaxation stops at this module: the rest of `beam_agents.console` never
+# touches Beam and stays fully strict.
+[[tool.mypy.overrides]]
+module = "beam_agents.console._sink"
+disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
+
+# The console's ingest tests drive the same untyped Beam surface when they build
+# a pipeline to prove the sink drops rather than raises, and the demo pipeline is
+# a plain Beam pipeline end to end.
+[[tool.mypy.overrides]]
+module = ["beam_agents.console._demo", "tests.console.test_sink", "tests.console.test_demo"]
 disable_error_code = ["no-untyped-call", "type-arg", "no-any-return"]
 
 # Beam's TestPipeline/Create are untyped; same relaxation the other

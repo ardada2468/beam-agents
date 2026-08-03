@@ -44,11 +44,14 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Quickstart: quickstart.md
   - Examples:
+      - Quickstart: examples/quickstart.md
       - Hello, world: examples/hello-world.md
       - Fraud triage: examples/fraud-triage.md
       - Fraud triage on Dataflow: examples/fraud-triage-dataflow.md
       - IoT reaction: examples/iot-reaction.md
+      - Console demo: examples/console-demo.md
   - API reference: api.md
   - Operating the runtime:
       - Beam YAML provider: yaml.md
@@ -59,5 +62,7 @@ nav:
       - Adaptive batching: batching.md
       - Runtime metrics: metrics.md
       - Trace delivery: traces.md
+      - The console: console.md
+      - Deploying to Dataflow: deploying.md
       - State export and replay: replay.md
       - Releasing: releasing.md

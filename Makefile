@@ -5,6 +5,10 @@ COMPOSE := docker compose -f docker/compose.yaml
 # leg (promote-spark-runner, design D2/D3) would be undone at the
 # infrastructure layer if a PR paid for Spark containers.
 COMPOSE_SPARK := docker compose -f docker/compose.yaml -f docker/compose.spark.yaml
+# The console stack is standalone, never an overlay: it shares no service with
+# $(COMPOSE) and no test tier requires it. `compose.console.yaml` sets its own
+# `name:` so the two projects cannot tear each other down.
+COMPOSE_CONSOLE := docker compose -f docker/compose.console.yaml
 # Lazily expanded (`=`, not `:=`): every target, including `help`, would
 # otherwise pay a `uv run` subprocess just to evaluate this.
 MUTATION_CHILDREN = $(shell uv run python -c 'import os; print(os.cpu_count() or 1)')
@@ -16,7 +20,7 @@ PNPM := pnpm --dir website
 # the SSR and a11y checks reads the same variable, so all three agree.
 SITE_BUILD_ENV := NEXT_DIST_DIR=.next-build
 
-.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-flink compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build proto docs docs-serve build changelog changelog-draft site-dev site-build site-check api-reference
+.PHONY: help bootstrap fmt lint type test-unit test-integration test-semantics test-semantics-offline test-conformance-flink test-conformance-spark test-dataflow test-smoke mutation coverage-ratchet bench bench-gate compose-up compose-up-core compose-up-flink compose-up-spark compose-down compose-down-spark compose-logs compose-logs-spark harness-build proto docs docs-serve build changelog changelog-draft site-dev site-build site-check api-reference quickstart quickstart-docker quickstart-flink console-build console-up console-down console-logs console-frontend
 
 BENCH_RESULTS := bench-results
 # Local-iteration knob only. CI pins the modules' own sampling constants by
@@ -244,6 +248,84 @@ compose-logs-spark: ## Collect the Spark overlay's service logs into LOGS_DIR
 	for svc in spark-jobserver beam-sdk-harness-spark; do \
 		$(COMPOSE_SPARK) logs --no-color --timestamps $$svc > $(LOGS_DIR)/$$svc.log 2>&1 || true; \
 	done
+
+# The console stack (docs/console.md). Separate from the compose-* targets on
+# purpose: nothing in the test suite needs it, and no CI lane starts it.
+console-build: ## Build the console image (UI bundle included)
+	$(COMPOSE_CONSOLE) build
+
+# `--build` by default, matching compose-up's reasoning: the image bakes in the
+# current `src/beam_agents` AND the current `frontend/`, so a stale image shows
+# yesterday's console. Both are cheap to rebuild — the Dockerfile's layer order
+# keeps a source-only change off the dependency-install layers.
+#
+# No `--wait`, deliberately, and it is not needed. `console-demo` disables the
+# healthcheck it would otherwise inherit from the shared image (it is a
+# producer, and the inherited probe would fail forever) — but compose refuses to
+# wait on a service with no healthcheck and fails the whole command with
+# "container ... has no healthcheck configured", so `--wait` here exits 1 on a
+# stack that came up perfectly. The guarantee `--wait` was carrying is already
+# in `compose.console.yaml`: `console-demo` declares
+# `depends_on: console: condition: service_healthy`, so `up -d` blocks until the
+# console reports healthy before it starts the demo, and returns 0.
+CONSOLE_UP_FLAGS ?= --build
+console-up: ## Start the console at http://localhost:8787 with the demo pipeline
+	$(COMPOSE_CONSOLE) up -d $(CONSOLE_UP_FLAGS)
+
+# The quickstart (docs/quickstart.md). Unlike every other example target, this
+# one calls a real provider over the network by default and refuses rather than
+# downgrading when no credential is set — see examples/quickstart/pipeline.py.
+#
+# `--scale console-demo=0`: the console's own stack ships a looping demo
+# producer, and leaving it running would bury the handful of activations the
+# quickstart produces under a few hundred synthetic ones. The point here is to
+# watch *your* run arrive.
+# The docker form: no checkout, no Python toolchain, no `uv` — the whole
+# evaluation path is compose plus a key.
+#
+# Naming `quickstart` starts it and its dependencies and nothing else, so the
+# looping `console-demo` never comes up and the handful of activations this
+# produces are the only ones in the store. That is also why there is no
+# `--scale console-demo=0` here: compose refuses to scale a service that naming
+# another one has disabled, which fails the whole command.
+#
+# `--exit-code-from` makes the target's exit status the pipeline's own, so a
+# missing credential or a provider error is a failed `make`, not a green one
+# with a stack trace scrolled off the top.
+quickstart-docker: ## Same quickstart, run entirely in docker (needs an API key)
+	$(COMPOSE_CONSOLE) --profile quickstart up --build \
+		--abort-on-container-exit --exit-code-from quickstart quickstart
+
+PROVIDER ?= auto
+quickstart: ## Real model + real tools + HITL, streamed into the console (needs an API key)
+	$(COMPOSE_CONSOLE) up -d --build --scale console-demo=0
+	uv run python -m examples.quickstart --provider $(PROVIDER)
+
+# Same module, submitted to the Beam-on-Flink stack rather than run in-process:
+# real distributed execution, real checkpointing, one job on a real JobManager.
+# Requires `make compose-up` first, and reaches the console on the host.
+quickstart-flink: ## Run the quickstart on the local Flink cluster (requires compose-up)
+	uv run python -m examples.quickstart --provider $(PROVIDER) \
+		--console console://host.docker.internal:8787 \
+		--runner PortableRunner \
+		--job_endpoint localhost:18099 \
+		--environment_type EXTERNAL \
+		--environment_config localhost:50000
+
+# No `-v`: the database volume is the point (design D6). `docker compose
+# -f docker/compose.console.yaml down -v` is the deliberate way to discard it.
+console-down: ## Tear down the console stack, keeping the database volume
+	$(COMPOSE_CONSOLE) down
+
+console-logs: ## Follow the console and demo-pipeline logs
+	$(COMPOSE_CONSOLE) logs -f console console-demo
+
+# The UI bundle without docker, for frontend iteration and for building a wheel
+# that ships the UI: hatchling force-includes `console/static/**` when it
+# exists, so running this before `make build` is what makes a local wheel
+# self-contained (design D9). Needs Node; nothing else in this Makefile does.
+console-frontend: ## Build the console UI bundle into the package (needs Node)
+	cd frontend && npm ci && npm run build
 
 proto: ## Regenerate protobuf Python bindings from protos/*.proto
 	scripts/gen_proto.sh

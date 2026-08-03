@@ -1,0 +1,238 @@
+/*
+ * Design tokens. Every color, size, and duration in the console resolves here.
+ *
+ * Direction: OpenAI's restraint for the chrome, Uber Base's density for the
+ * data. Explicitly excluded — gradients, glows, blurs, neon, and colored
+ * shadows. A telemetry viewer is read for hours by someone who is usually
+ * annoyed; the interface should be quiet and the data should be loud.
+ *
+ * Two rules the tokens enforce structurally:
+ *
+ * 1. Separation comes from hairline rules, not shadows. `--line` is the only
+ *    divider. There is exactly one shadow token and it is used only by things
+ *    that genuinely float above the page (drawer, menu, toast).
+ * 2. Status is carried by solid color plus a word, never by color alone —
+ *    a chip always has a label, so it survives both color blindness and a
+ *    grayscale screenshot in a bug report.
+ *
+ * Type is a system grotesk stack rather than a webfont. The console must render
+ * identically inside a container with no network access, and shipping a font
+ * binary to a repo that is otherwise pure Python is a worse trade than losing a
+ * little typographic personality. Personality is spent on the type *scale* and
+ * on the monospace/tabular treatment of every identifier and number instead.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* -- Neutrals: a true graphite ramp, no blue cast ------------------------ */
+  --ink: #0a0a0a;
+  --ink-2: #3d3d3f;
+  --muted: #6e6e73;
+  --faint: #9a9aa0;
+  --line: #e5e5e5;
+  --line-strong: #d0d0d0;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --surface-3: #f2f2f2;
+  --overlay: rgb(10 10 10 / 40%);
+
+  /* -- Status: solid, always paired with a label -------------------------- */
+  --ok: #1a7f37;
+  --ok-bg: #e8f4ec;
+  --warn: #9a6700;
+  --warn-bg: #fbf1dd;
+  --error: #c0342b;
+  --error-bg: #fbeae9;
+  --pending: #4b5563;
+  --pending-bg: #eef0f2;
+  --suspended: #6b4fbb;
+  --suspended-bg: #efeafa;
+  --info: #1f5fa8;
+  --info-bg: #e7effa;
+
+  /* Series colors for charts. Ordered by perceptual separation, not by hue
+     family, so the first three are distinguishable before the palette runs
+     out — which is the case that actually happens. */
+  --series-1: #0a0a0a;
+  --series-2: #1f5fa8;
+  --series-3: #9a6700;
+  --series-4: #6b4fbb;
+  --series-5: #1a7f37;
+  --series-6: #c0342b;
+
+  /* -- The single accent. Black in light, near-white in dark: Uber's primary
+     button, and the reason nothing else in the UI needs to be colored. ---- */
+  --accent: #0a0a0a;
+  --accent-ink: #ffffff;
+  --accent-hover: #2a2a2a;
+  --focus: #1f5fa8;
+
+  /* -- Type ---------------------------------------------------------------- */
+  --font-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Roboto Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+
+  /* A tight five-step scale. Anything not on it is a mistake. */
+  --text-xs: 0.6875rem; /* 11px — table meta, eyebrows, units */
+  --text-sm: 0.8125rem; /* 13px — the default. Dense tables live here. */
+  --text-md: 0.9375rem; /* 15px — body prose, form controls */
+  --text-lg: 1.25rem; /* 20px — section headings */
+  --text-xl: 1.75rem; /* 28px — page title */
+  /* Two display steps above the page title, for figures only — never prose.
+     The header above says the interface should be quiet and the data loud, but
+     a scale topping out at the page-title size cannot express that: a headline
+     figure and the word "Overview" came out identical, so every screen read as
+     uniformly important. These are the sizes a count may reach when it is the
+     thing somebody opened the page to read. */
+  --text-2xl: 2.25rem; /* 36px — a count inside the flow */
+  --text-display: 3.25rem; /* 52px — the one primary figure on a screen */
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --tracking-eyebrow: 0.06em;
+  /* Negative tracking is for large type only. At 13px it closes the counters
+     and costs legibility; at 36px and up, default tracking reads loose. */
+  --tracking-tight: -0.02em;
+  --tracking-display: -0.03em;
+
+  /* -- Space: an 8px grid, with a 4px half-step for control interiors ------ */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* -- Shape --------------------------------------------------------------- */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  /* The only shadow. Used by drawers, menus, and toasts — things that float.
+     Never by cards, panels, or table rows, which are separated by rules. */
+  --shadow-float: 0 8px 24px rgb(10 10 10 / 12%), 0 1px 2px rgb(10 10 10 / 8%);
+
+  /* -- Layout -------------------------------------------------------------- */
+  --rail-width: 240px;
+  --topbar-height: 52px;
+  /* 36, not 32. Dense is the point on a telemetry table, but at 32 a 13px row
+     had 9px of total leading, and rows that tight are read by losing your place
+     in them. This is still well under the 44–48px a general-purpose table would
+     take, and costs about one row per screen. */
+  --row-height: 36px;
+  --row-height-lg: 40px;
+  --content-max: 1440px;
+
+  /* -- Motion: state changes only. No ambient animation anywhere. ---------- */
+  --ease: cubic-bezier(0.2, 0, 0.13, 1);
+  --duration: 120ms;
+  --duration-slow: 200ms;
+
+  --z-drawer: 40;
+  --z-menu: 50;
+  --z-toast: 60;
+}
+
+/* Dark theme. Not an inversion — the ramp is rebuilt so that `--surface` is a
+   true near-black and the steps above it stay distinguishable, which a flipped
+   light ramp does not manage. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --ink: #f5f5f5;
+    --ink-2: #c8c8cc;
+    --muted: #97979d;
+    --faint: #6a6a70;
+    --line: #262628;
+    --line-strong: #3a3a3d;
+    --surface: #0a0a0a;
+    --surface-2: #131314;
+    --surface-3: #1c1c1e;
+    --overlay: rgb(0 0 0 / 60%);
+
+    --ok: #4ac26b;
+    --ok-bg: #10240f;
+    --warn: #d4a11e;
+    --warn-bg: #2a1f05;
+    --error: #f0685e;
+    --error-bg: #2d1210;
+    --pending: #9aa2ad;
+    --pending-bg: #1b1d20;
+    --suspended: #a48ae8;
+    --suspended-bg: #1d1730;
+    --info: #6ba4e8;
+    --info-bg: #101d2e;
+
+    --series-1: #f5f5f5;
+    --series-2: #6ba4e8;
+    --series-3: #d4a11e;
+    --series-4: #a48ae8;
+    --series-5: #4ac26b;
+    --series-6: #f0685e;
+
+    --accent: #fafafa;
+    --accent-ink: #0a0a0a;
+    --accent-hover: #d8d8d8;
+    --focus: #6ba4e8;
+
+    --shadow-float: 0 8px 24px rgb(0 0 0 / 55%), 0 1px 2px rgb(0 0 0 / 45%);
+  }
+}
+
+/* The explicit toggle wins over the media query in both directions. */
+:root[data-theme='dark'] {
+  --ink: #f5f5f5;
+  --ink-2: #c8c8cc;
+  --muted: #97979d;
+  --faint: #6a6a70;
+  --line: #262628;
+  --line-strong: #3a3a3d;
+  --surface: #0a0a0a;
+  --surface-2: #131314;
+  --surface-3: #1c1c1e;
+  --overlay: rgb(0 0 0 / 60%);
+
+  --ok: #4ac26b;
+  --ok-bg: #10240f;
+  --warn: #d4a11e;
+  --warn-bg: #2a1f05;
+  --error: #f0685e;
+  --error-bg: #2d1210;
+  --pending: #9aa2ad;
+  --pending-bg: #1b1d20;
+  --suspended: #a48ae8;
+  --suspended-bg: #1d1730;
+  --info: #6ba4e8;
+  --info-bg: #101d2e;
+
+  --series-1: #f5f5f5;
+  --series-2: #6ba4e8;
+  --series-3: #d4a11e;
+  --series-4: #a48ae8;
+  --series-5: #4ac26b;
+  --series-6: #f0685e;
+
+  --accent: #fafafa;
+  --accent-ink: #0a0a0a;
+  --accent-hover: #d8d8d8;
+  --focus: #6ba4e8;
+
+  --shadow-float: 0 8px 24px rgb(0 0 0 / 55%), 0 1px 2px rgb(0 0 0 / 45%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration: 0ms;
+    --duration-slow: 0ms;
+  }
+}

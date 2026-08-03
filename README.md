@@ -31,6 +31,34 @@ make bootstrap
 Requires Python `>=3.11,<3.13` (this repo pins `3.11` via `.python-version`)
 and [`uv`](https://docs.astral.sh/uv/).
 
+## See it run: the console
+
+The runtime records a lot — deterministic traces, errors over a closed reason
+vocabulary, state snapshots — and until now looking at any of it meant
+provisioning a collector or a BigQuery dataset first. The console is a local
+viewer over exactly those records: one process, one SQLite file, no broker and
+no cloud project.
+
+```sh
+make console-up       # build and start; http://localhost:8787
+make console-logs     # follow the console and the demo pipeline
+make console-down     # stop, keeping the database volume
+```
+
+That stack starts the console **and** a demo pipeline that keeps feeding it, so
+you land on a populated console with traffic still arriving rather than an empty
+one. The demo runs on `DirectRunner` over the fake provider: no API key, no
+broker, no network. It drives the awkward cases on purpose — suspensions,
+approvals and denials, tool errors, budget exhaustion, TTL wipes, dead-lettered
+intents — because those are what the error views and the approval queue exist
+to show.
+
+Pointing your own pipeline at it is one constructor argument, or zero if you are
+already exporting to OTLP, Kafka, or BigQuery. See
+[`docs/console.md`](docs/console.md) for the five ingest paths, the CLI
+reference, and the honest list of what the console deliberately does not do
+(no auth, trusted networks only, not an APM, not long-horizon storage).
+
 ## Running tests
 
 Four testing tiers, mirrored 1:1 by CI (see [`docs/ci.md`](docs/ci.md)):

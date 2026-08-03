@@ -1,0 +1,221 @@
+# The console stack: one command from a clean checkout to a populated console.
+#
+#   make console-up          # or: docker compose -f docker/compose.console.yaml up -d --build
+#   open http://localhost:8787
+#
+# Standalone, and deliberately NOT an overlay on `compose.yaml`. That stack
+# exists to run integration and semantics tests against Redpanda, Redis, and a
+# Beam-on-Flink pair; this one exists so somebody evaluating the library can see
+# what the runtime records without provisioning anything. They share no service,
+# no volume, and no lifecycle, and folding them together would make the
+# five-second "look at it" path pay for a Flink cluster.
+#
+# `name:` is load-bearing, not decoration. Compose derives a project name from
+# the compose file's directory, so both files here would otherwise share the
+# project `docker` — and `docker compose -f docker/compose.console.yaml down`
+# would tear down the Flink stack a contributor had running for a test.
+name: beam-agents-console
+
+services:
+  # The console: store, API, live stream, and the UI bundle baked into the image.
+  console:
+    build:
+      # Repository root: the image installs this tree's `pyproject.toml` and
+      # `src/`, and builds `frontend/` in a Node stage.
+      context: ..
+      dockerfile: docker/console.Dockerfile
+    image: beam-agents-console:1.0.0
+    ports:
+      # Not shifted off its default the way `compose.yaml`'s ports are. That
+      # convention exists so the test stack never collides with a service a
+      # contributor already runs; here the port IS the product — every snippet
+      # in `docs/console.md`, the `console://localhost:8787` sink URI, and the
+      # CLI's own default all say 8787, and shifting it would make the copied
+      # line wrong.
+      - "8787:8787"
+    volumes:
+      # The SQLite database, on a named volume so `down` + `up` lands on the
+      # records from last time. Persistence is the entire reason the store is a
+      # file rather than a ring buffer: a console that forgets on restart is
+      # useless for the failure it was opened to investigate (design D6).
+      # `docker compose down -v` is the deliberate way to discard it.
+      - console-db:/var/lib/beam-agents-console
+    # List form, not a mapping, because of the three pass-through entries at the
+    # bottom: an entry with no `=` is set in the container only when it is set
+    # in the host environment. A mapping cannot express "leave this unset", and
+    # handing the CLI an empty `--kafka-traces-from` would be a configuration
+    # error (exit 2) rather than a no-op.
+    environment:
+      - BEAM_AGENTS_CONSOLE_DB=/var/lib/beam-agents-console/console.db
+      # 0.0.0.0 rather than the CLI's loopback default: loopback inside the
+      # container's network namespace is reachable from nothing, published port
+      # included. See the caveat in `docs/console.md` — the console has no
+      # authentication, so this stack belongs on a trusted network.
+      - BEAM_AGENTS_CONSOLE_HOST=0.0.0.0
+      - BEAM_AGENTS_CONSOLE_PORT=8787
+      # 72h of history on a demo-rate stream is a few MB. Raise it if you are
+      # pointing a real pipeline here; the store reports what it holds.
+      - BEAM_AGENTS_CONSOLE_RETENTION_HOURS=${BEAM_AGENTS_CONSOLE_RETENTION_HOURS:-72}
+      - BEAM_AGENTS_CONSOLE_LOG_LEVEL=${BEAM_AGENTS_CONSOLE_LOG_LEVEL:-info}
+      # Optional pull-ingest configuration, passed through from the host
+      # environment when set. The `kafka` profile below is the local way to
+      # exercise the first two; a deployment already exporting with
+      # `traces_to="kafka://…"` or `"bigquery://…"` sets them to the same URI
+      # its pipeline already uses and changes nothing on the pipeline side.
+      - BEAM_AGENTS_CONSOLE_KAFKA_TRACES_FROM
+      - BEAM_AGENTS_CONSOLE_KAFKA_FROM_BEGINNING
+      - BEAM_AGENTS_CONSOLE_BIGQUERY_TRACES_FROM
+    # No `healthcheck:` block. The image's HEALTHCHECK is the only definition,
+    # and `condition: service_healthy` below reads it directly. Restating it
+    # here would mean two probes to keep in step — and the compose copy could
+    # not read `BEAM_AGENTS_CONSOLE_PORT`, so overriding the port would leave it
+    # probing 8787 forever.
+    restart: unless-stopped
+
+  # The demo pipeline. This service is the point of the stack.
+  #
+  # An empty console teaches nothing: every list is blank, every chart is an
+  # axis, and the reasonable conclusion is that the thing is broken. So the
+  # stack ships a producer. `_demo` runs a real `DirectRunner` pipeline over the
+  # fake provider — no API key, no broker, no egress — driving the scenarios
+  # that make the error views, the approval queue, and the model/tool
+  # breakdowns reachable: completions, suspensions, approvals and denials, tool
+  # errors, cache hits, budget exhaustion, TTL wipes, and dead letters.
+  #
+  # `--loop` keeps it running, so the live stream has something to stream and
+  # the UI is visibly *live* rather than a static import.
+  console-demo:
+    # Same image, no second build: the demo module ships inside the package.
+    image: beam-agents-console:1.0.0
+    depends_on:
+      console:
+        condition: service_healthy
+    # `console://console:8787` — the service name, not localhost: this is a
+    # separate container. `ConsoleSinkResolver` resolves the scheme; the sink
+    # drops-and-counts rather than failing an activation if the console goes
+    # away (design D3), so a restarted console never kills the producer.
+    command:
+      - python
+      - -m
+      - beam_agents.console._demo
+      - --console
+      - console://console:8787
+      - --loop
+    # Load-bearing: this service reuses the console image, and a container
+    # inherits its image's HEALTHCHECK. The demo is a producer, not a server —
+    # nothing answers /healthz inside it — so the inherited probe fails forever,
+    # the container is reported `unhealthy`, and `docker compose up --wait`
+    # (i.e. `make console-up`) exits non-zero on a stack that is working
+    # perfectly. Disabling it is the fix; adding a healthcheck the demo could
+    # pass would be inventing a liveness contract for a batch producer.
+    healthcheck:
+      disable: true
+    # Not `unless-stopped`: a demo that cannot reach the console should retry a
+    # few times and then stay dead visibly, rather than restarting forever and
+    # burying the reason in a scrolling log.
+    restart: on-failure
+
+  # ---------------------------------------------------------------------------
+  # Optional: the quickstart, against a real model.
+  #
+  #   ANTHROPIC_API_KEY=sk-ant-... \
+  #     docker compose -f docker/compose.console.yaml --profile quickstart up quickstart
+  #
+  # or `make quickstart-docker`, which is the same command.
+  #
+  # Behind a profile because it needs a credential, and nothing else in this
+  # stack does: plain `up` has to stay the path that works with nothing
+  # configured at all.
+  #
+  # It runs `examples.quickstart` — the same module `make quickstart` runs on
+  # the host — so the "evaluate it in docker" path and the "develop against it"
+  # path cannot drift into testing different things.
+  # ---------------------------------------------------------------------------
+  quickstart:
+    profiles: ["quickstart"]
+    image: beam-agents-console:1.0.0
+    depends_on:
+      console:
+        condition: service_healthy
+    # `console:8787` — the service name, because this is a separate container.
+    # The module's own default names localhost, which is the host-run form.
+    command:
+      - python
+      - -m
+      - examples.quickstart
+      - --console
+      - console://console:8787
+    # List form, for the reason the console's block gives: an entry with no `=`
+    # is set in the container only when it is set on the host. An unset key is
+    # not a misconfiguration of this stack — the module refuses to run rather
+    # than silently downgrading to the scripted provider, and says which
+    # variable to export.
+    environment:
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+    # Same reasoning as `console-demo`: a batch producer, not a server, so the
+    # healthcheck it would inherit from the shared image can never pass.
+    healthcheck:
+      disable: true
+    # Runs once and exits. Restarting a finished quickstart would re-run it
+    # forever against a metered API.
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Optional: the Kafka ingest path.
+  #
+  #   docker compose -f docker/compose.console.yaml --profile kafka up -d
+  #
+  # Off by default because "start it and look at it" must not pay for a broker.
+  # Under the profile the console can be pointed at a topic a pipeline is
+  # already writing:
+  #
+  #   BEAM_AGENTS_CONSOLE_KAFKA_TRACES_FROM=kafka://redpanda:9092/beam-agents-traces \
+  #     docker compose -f docker/compose.console.yaml --profile kafka up -d
+  #
+  # The console consumes from the end and commits no offsets, so pointing two
+  # consoles at one topic is safe and restarting never waits on a group
+  # rebalance.
+  #
+  # One service, deliberately: no companion one-shot topic-creator. Redpanda
+  # auto-creates a topic on first produce, and a service that creates the topic
+  # and exits would break `docker compose up --wait` — compose treats any
+  # container that has exited, including one that exited 0, as a failed wait, so
+  # the profile would report a red stack that is in fact working. Creating the
+  # topic up front is a one-liner in `docs/console.md` for anyone who wants it
+  # explicit.
+  # ---------------------------------------------------------------------------
+  redpanda:
+    profiles: ["kafka"]
+    # Digest-pinned to exactly the image `compose.yaml` pins, so a contributor
+    # running both stacks pulls one Redpanda rather than two.
+    image: redpandadata/redpanda:v24.2.27@sha256:0dfbbae80ddb2e6d8fa4780a2adb9f8322ee38e0cc81bac1e6feac4345d56a13
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      # `internal` for the console (which reaches the broker as redpanda:9092),
+      # `external` for a pipeline running on the host.
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:29092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:29092
+    ports:
+      # 29092, NOT the 19092 `compose.yaml` publishes. The two stacks are
+      # independent and a contributor may well have the Flink stack up; sharing
+      # the host port would make one of them fail to start with a bind error
+      # whose cause is in a different file.
+      - "29092:29092"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  # The console's SQLite database. Survives `down`; removed by `down -v`.
+  console-db:

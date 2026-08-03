@@ -1,0 +1,201 @@
+/*
+ * The flow diagram.
+ *
+ * Restraint is the whole point: the nodes are the loud thing on the page, so
+ * the edges are hairlines in the neutral ramp and the only colour on screen is
+ * the 3px spine identifying each state. That is the same discipline the rest of
+ * the console follows — separation from rules, never from shadow — applied to a
+ * drawing instead of a table.
+ *
+ * The diagram scales by viewBox rather than by media query, so there is exactly
+ * one layout to reason about. Below its comfortable width the figure scrolls
+ * horizontally inside its own box rather than shrinking the type to unreadable.
+ */
+
+.flow {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* The figure is wide by nature. Scroll it here rather than letting it push the
+   page into a horizontal scroll, which would move every other panel too. */
+.flow__svg {
+  display: block;
+  width: 100%;
+  min-width: 860px;
+  height: auto;
+}
+
+@media (max-width: 900px) {
+  .flow {
+    overflow-x: auto;
+  }
+}
+
+/* -- Edges ----------------------------------------------------------------- */
+
+.flow__edge {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-linecap: round;
+}
+
+.flow__edge--resume {
+  stroke-width: 1.25;
+  stroke-dasharray: 4 5;
+  stroke: var(--faint);
+}
+
+.flow__arrowhead {
+  fill: var(--faint);
+}
+
+.flow__edge-label {
+  fill: var(--faint);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  text-anchor: middle;
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+}
+
+/*
+ * The one animated element in the console.
+ *
+ * A short dash travelling along each edge, and only while the live stream is
+ * connected — so motion means "records are arriving", not "this page has an
+ * animation". It rides on top of the static edge at the same width, so when it
+ * stops the diagram is unchanged rather than visibly missing something.
+ */
+.flow__pulse {
+  fill: none;
+  stroke: var(--ink);
+  stroke-linecap: round;
+  stroke-dasharray: 14 210;
+  stroke-dashoffset: 224;
+  opacity: 0;
+}
+
+.is-live .flow__pulse {
+  opacity: 0.5;
+  animation: flow-travel 2.8s linear infinite;
+}
+
+@keyframes flow-travel {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-live .flow__pulse {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* -- Nodes ----------------------------------------------------------------- */
+
+.flow__node {
+  cursor: pointer;
+}
+
+.flow__box {
+  fill: var(--surface-2);
+  stroke: var(--line);
+  stroke-width: 1;
+  transition:
+    fill var(--duration) var(--ease),
+    stroke var(--duration) var(--ease);
+}
+
+.flow__node:hover .flow__box {
+  fill: var(--surface-3);
+  stroke: var(--line-strong);
+}
+
+/* Focus lands on the anchor; the ring is drawn on the box so it traces the
+   node's actual shape rather than the text bounding box. */
+.flow__node:focus {
+  outline: none;
+}
+
+.flow__node:focus-visible .flow__box {
+  stroke: var(--focus);
+  stroke-width: 2;
+}
+
+.flow__label {
+  fill: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+}
+
+/* The figure. Tabular so a count changing under the live stream does not
+   reflow its own digits, tight because at this size default tracking reads
+   loose — the two display rules from the token file, applied. */
+.flow__value {
+  fill: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 34px;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-display);
+}
+
+.flow__unit {
+  fill: var(--faint);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+
+/* -- The spine: the only colour in the drawing ----------------------------- */
+
+.flow__spine {
+  fill: var(--line-strong);
+}
+
+.flow__node--run .flow__spine {
+  fill: var(--info);
+}
+
+.flow__node--ok .flow__spine {
+  fill: var(--ok);
+}
+
+.flow__node--suspended .flow__spine {
+  fill: var(--suspended);
+}
+
+.flow__node--error .flow__spine {
+  fill: var(--error);
+}
+
+.flow__node--info .flow__spine {
+  fill: var(--info);
+}
+
+/* -- Footnote -------------------------------------------------------------- */
+
+.flow__note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-top: 1px solid var(--line);
+  padding: var(--space-3) var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  background: var(--surface-2);
+}
+
+.flow__note strong {
+  color: var(--ink-2);
+  font-weight: var(--weight-medium);
+}

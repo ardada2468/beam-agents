@@ -510,6 +510,28 @@ See [State export and replay](replay.md).
 
 ---
 
+## Console — `beam_agents.console`
+
+A local viewer over the trace, error, and snapshot records the runtime already emits. See [Console](console.md).
+
+Five names, deliberately: the console is a tool driven by a URI and a CLI, not a library callers compose against, so its store schema, route table, and query shapes stay private and free to move.
+
+| Name | Contract |
+| --- | --- |
+| `ConsoleStore` | The record store: a WAL SQLite file, idempotent on the trace dedup key. |
+| `ConsoleSinkResolver` | A `SinkResolver` adding `console://`, delegating every other scheme. |
+| `WriteToConsole` | Best-effort delivery of traces, errors, or snapshots to a console. |
+| `create_app` | Build the ASGI application over a store. |
+| `serve` | Open a store and run the console until interrupted. |
+
+| Name | Contract |
+| --- | --- |
+| `build_parser` | The `beam-agents-console` CLI parser. |
+| `main` | The CLI entry point. |
+| `DEFAULT_DATABASE` | The database path used when none is given. |
+
+---
+
 ## Test harness — `beam_agents.testing.chaos`
 
 The bundle-retry chaos wrapper behind the retry-determinism gate.

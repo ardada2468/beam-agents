@@ -1,0 +1,52 @@
+# Build-context exclusions for docker/console.Dockerfile ONLY.
+#
+# BuildKit prefers `<dockerfile>.dockerignore` over a context-root
+# `.dockerignore`, which is why this file is named after the Dockerfile instead
+# of sitting at the repository root: the console build is the only build in this
+# tree whose context contains a Node toolchain, and a root-level ignore file
+# would silently change what `docker/sdk-harness.Dockerfile` and
+# `examples/fraud_triage_dataflow/Dockerfile` see.
+#
+# Without this, `frontend/node_modules/` (~180 packages) and the locally built
+# `src/beam_agents/console/static/` bundle are uploaded to the daemon on every
+# build — and the second one is actively wrong: the image must serve the bundle
+# the pinned Node stage produced, never whatever a developer last built by hand.
+
+# Node toolchain output. `npm ci` runs inside the frontend stage.
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/screenshots/
+frontend/*.tsbuildinfo
+
+# A host-built UI bundle. The image's bundle comes from the frontend stage.
+src/beam_agents/console/static/
+
+# Python and tooling caches — never valid inputs to an image build.
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+mutants/
+.mutmut-cache
+
+# Repository material the console image never runs: docs, benchmarks, the spec
+# tree, git history, and the e2e gate's spool.
+.git/
+.github/
+site/
+docs/
+benchmarks/
+openspec/
+tests/
+bench-results/
+docker/e2e-spool/
+.claude/

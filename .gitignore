@@ -64,6 +64,19 @@ website/tsconfig.tsbuildinfo
 docker/e2e-spool/*
 !docker/e2e-spool/.gitkeep
 
+# The console UI bundle: built from frontend/ into the package by the Docker
+# build or `make console-build`, and force-included in the wheel when present.
+src/beam_agents/console/static/
+
+# The console frontend toolchain.
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/screenshots/
+
+# TypeScript incremental build state: regenerated on every build.
+frontend/*.tsbuildinfo
+
 # Scratch worktrees created by the agent harness when it runs work in
 # isolation. Transient by construction — each one is a checkout of a branch
 # that already lives in .git, so committing them would vendor the repository

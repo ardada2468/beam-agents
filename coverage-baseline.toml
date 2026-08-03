@@ -115,4 +115,24 @@
 # current`'s multi-step chain walk, and the construction-time rejections in
 # `ActivationContext` were all previously reachable only from suites this lane
 # deselects, or from no test at all.
-branch_rate = 0.9180
+#
+# Merge resolution (add-console vs main, both 0.9180 measured on their own
+# trees): the same rule as the two merge entries above — the rate is a ratio
+# over the whole project, so neither side's number survives and the combined
+# tree is re-measured rather than picked from a side. Measured on the merged
+# tree: **0.9096**.
+#
+# The movement is dilution, not regression. No existing module lost a covered
+# branch. The console is a large subsystem — 522 branches, and its own branch
+# coverage is 88.7%, below the project mean the pre-merge number described. For
+# scale that sits above `memory` (78.2%) and `model` (87.7%), both of which have
+# been in this baseline for releases. A whole-project ratio moves when you add a
+# well-tested component that is nonetheless below its average, and re-measuring
+# is the only honest reading of that.
+#
+# The uncovered remainder is concentrated in the ingest sources and the HTTP
+# sink's drop-and-count paths, which branch on transport failures the offline
+# lane cannot produce — the same shape as the live-client memory-store gap
+# described above, and it closes the same way: by folding the integration lane
+# into the ratcheted coverage.xml.
+branch_rate = 0.9096
