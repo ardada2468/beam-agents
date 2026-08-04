@@ -1,0 +1,72 @@
+---
+title: The YAML pipeline provider
+summary: Declare a RunAgent pipeline from a Beam YAML document — one constructor, module:object references, and the same four outputs as the Python surface.
+status: stable
+order: 11
+verifies:
+  - module: src/beam_agents/yaml/transform.py
+  - module: src/beam_agents/yaml/providers.yaml
+  - module: docs/yaml.md
+  - spec: openspec/specs/yaml-provider/spec.md
+  - test: tests/yaml/test_transform.py
+  - test: tests/yaml/test_refs.py
+  - test: tests/yaml/test_config_mapping.py
+  - test: tests/yaml/test_docs_example.py
+---
+
+A system-triggered agent pipeline is mostly plumbing: read a topic, key by
+entity, run the agent, drain the tagged outputs to sinks.
+[Beam YAML](https://beam.apache.org/documentation/sdks/yaml/) expresses
+exactly that shape declaratively, and beam-agents ships a provider so
+`RunAgent` is reachable from a YAML document. The whole integration surface is
+one fully-qualified constructor, `beam_agents.yaml.run_agent`, plus a shipped
+provider-listing file (`beam_agents.yaml.PROVIDER_LISTING`) a document can
+include instead of copying the mapping.
+
+YAML **names** an agent; it does not author one. A document points at an agent
+that lives in an importable Python package — the agent itself stays Python.
+That is the runtime-not-framework line, held in a declarative document.
+
+## References resolve at expansion, not in a bundle
+
+Agents, provider factories, decoders, HITL routes, and tool registries are
+named with the setuptools entry-point spelling — `module:object`. Every
+reference is resolved by import when the transform is constructed, at YAML
+expansion, before any runner is involved, so a typo'd module or attribute
+fails at the document with a `ValueError` naming it — not inside a bundle.
+Everything a reference resolves to must be picklable (module-level, never a
+closure), and the provider factory is probed for that at construction.
+
+An unrecognized config key is an error listing the accepted keys, not a
+default. Value checks are the same ones the Python surface runs, raised at
+document expansion.
+
+## Inputs and outputs
+
+Beam YAML pipelines carry schema'd rows, so the transform does the keying and
+enveloping itself: it reads `key_field` and `payload_field` off each row and
+builds the `KV[bytes, AgentEnvelope]` input the runtime requires. A row
+missing a configured field dead-letters onto `errors` naming the field; the
+rest of the bundle proceeds. Four named outputs come back, matching the Python
+surface's `RunAgentOutputs` — `output`, `intents`, `traces`, `errors` — and a
+downstream step must name the one it consumes.
+
+The full config-key table, the reference grammar, the sink URI grammar, and a
+complete pipeline document are in
+[`docs/yaml.md`](https://github.com/ardada2468/beam-agents/blob/main/docs/yaml.md).
+
+## A document carrying this provider is code
+
+Resolving a reference imports a module, and importing runs its top level. The
+provider refuses *dynamic code in the document* — references resolve only
+against installed modules; there is no `eval` arm, no inline source, no
+file-path arm — but a document with a `beam-agents` provider must be reviewed
+and provenance-tracked exactly like Python pipeline code. And keep secrets out
+of the document: `provider_config` values land in the pipeline's serialized
+configuration, so template or generate the document and keep keys in a secret
+store.
+
+## Related
+
+- [Architecture](/learn/architecture) — what `RunAgent` does with the input.
+- [Traces](/docs/traces) and [errors](/docs/errors) — the sink URI grammars.

@@ -12,8 +12,10 @@ impossible:
   written and unverifiable by anyone.
 - **Unsourced performance numbers.** Any `<n>x`, `<n>%`, `<n>ms`, `<n> QPS`
   outside a code fence needs a citation or an in-repo source. The latency
-  budget in `openspec/project.md` is a *budget*: no benchmark harness exists in
-  this repository, so no measured figure may be published.
+  budget in `openspec/project.md` is a *budget*; measured figures exist only in
+  the pyperf suite under `benchmarks/` and its gated baseline
+  (`benchmark-baseline.toml`, `docs/benchmarks.md`), so a number in prose must
+  be labelled as a budget or traceable to that source — never free-floating.
 - **Implied ASF governance.** This is an Apache-2.0 project built on Apache
   Beam. It is not an Apache Software Foundation project, and no phrasing may
   suggest otherwise.
@@ -157,9 +159,10 @@ def check_page(page: ContentPage) -> list[Finding]:
                 Finding(
                     page.rel,
                     number,
-                    f"[performance-claim] {match.group(0)!r}: no benchmark harness exists in "
-                    "this repository, so no measured performance figure may be published. "
-                    "Label it as an unmeasured design budget, cite a source, or remove it.",
+                    f"[performance-claim] {match.group(0)!r}: a bare performance figure "
+                    "is unverifiable as written. Label it as a design budget, attribute it "
+                    "to the benchmark suite's gated baseline (benchmarks/, "
+                    "benchmark-baseline.toml), cite a source, or remove it.",
                 )
             )
     return findings

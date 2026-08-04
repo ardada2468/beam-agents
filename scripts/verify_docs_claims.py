@@ -19,13 +19,21 @@ On top of resolution, four rules run:
 
 1. **Status semantics** (both directions). `stable` needs a spec and a test;
    `experimental` needs a test; `partial` must say what is missing; `planned`
-   must NOT name code that exists — so a page describing a shipped feature as
-   planned fails until it is reclassified.
-2. **Release state.** While `project.version` is `0.0.0`, no page may present a
-   registry install as a command that works today.
+   must declare the `symbol:`/`module:` it is waiting on and must NOT name code
+   that exists — so a page describing a shipped feature as planned fails until
+   it is reclassified, and a planned page with an empty `verifies:` list fails
+   because an empty list makes that inversion vacuous.
+2. **Release state.** Until the release tag `v{project.version}` exists in git
+   (checked via `git tag -l`, fail-closed when git is unavailable), no page may
+   present a registry install as a command that works today. The version string
+   alone is not release state: a version bump lands in `pyproject.toml` before
+   the tag is pushed, and the guard must hold across that window.
 3. **Citations.** A claim naming another project needs a dated `sources` entry.
 4. **Planned-page containment.** Planned pages must open with the
    not-implemented callout and must not embed executed examples.
+5. **Site constants.** `website/lib/site.ts` must declare the same
+   `PACKAGE_VERSION` as `pyproject.toml`, and its `IS_RELEASED` flag must match
+   the git-tag release state — the footer and hero render from those constants.
 
 Usage:  uv run python scripts/verify_docs_claims.py
 """
@@ -88,6 +96,30 @@ RELEASE_GATE = re.compile(r"when released", re.IGNORECASE)
 def package_version() -> str:
     with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
         return str(tomllib.load(handle)["project"]["version"])
+
+
+@cache
+def is_released() -> bool:
+    """Whether the declared version has actually been released.
+
+    Release state is the existence of the `v{version}` git tag — the event the
+    release workflow publishes on — not the version string. `pyproject.toml`
+    flips to the new version in the release PR *before* the tag is pushed, so a
+    guard keyed off `version != "0.0.0"` would switch itself off during exactly
+    the window it exists to cover. Fail closed: if git is unavailable or the
+    lookup errors, treat the package as unreleased.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "tag", "-l", f"v{package_version()}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 @cache
@@ -185,6 +217,13 @@ def check_assertions(page: ContentPage) -> list[Finding]:
             )
             continue
         key, value = next(iter(entry.items()))
+        # On a `planned` page, `symbol:`/`module:` entries name code that is
+        # expected NOT to exist yet — resolution is inverted by
+        # `_check_planned`, which fails the page the moment they appear.
+        # Resolving them here would make every honest planned assertion an
+        # error. Other kinds (spec/test/example) still resolve normally.
+        if page.status == "planned" and key in ("symbol", "module"):
+            continue
         findings.extend(_resolve_assertion(page, line, key, str(value)))
     return findings
 
@@ -292,13 +331,26 @@ def check_status_semantics(page: ContentPage) -> list[Finding]:
 
 
 def _check_planned(page: ContentPage, line: int, entries: list[dict[str, object]]) -> list[Finding]:
-    """A planned page must not describe code that exists.
+    """A planned page must declare what it is waiting on, and none of it may exist.
 
     This is the inverted check that keeps status honest in the other direction:
     when the feature ships, the page fails until someone reclassifies it, so a
-    roadmap entry cannot quietly understate the project either.
+    roadmap entry cannot quietly understate the project either. An empty
+    `verifies:` list would make that inversion vacuous — nothing declared,
+    nothing to fire when the code lands — so it is a hard failure: a planned
+    page must name the `symbol:` or `module:` whose appearance obsoletes it.
     """
     findings: list[Finding] = []
+    if not any(set(entry) & {"symbol", "module"} for entry in entries):
+        findings.append(
+            Finding(
+                page.rel,
+                line,
+                "status `planned` requires at least one `symbol:` or `module:` assertion "
+                "naming what the page is waiting on — an empty `verifies` list makes the "
+                "planned/shipped inversion unenforceable",
+            )
+        )
     for entry in entries:
         for key, value in entry.items():
             if key == "symbol" and resolve_symbol(str(value)) is None:
@@ -343,8 +395,13 @@ def _check_planned(page: ContentPage, line: int, entries: list[dict[str, object]
 
 
 def check_release_state(page: ContentPage) -> list[Finding]:
-    """No page may present a registry install as working while unreleased."""
-    if package_version() != "0.0.0":
+    """No page may present a registry install as working while unreleased.
+
+    Keyed off :func:`is_released` — the existence of the `v{version}` release
+    tag — never off the version string. The guard must stay armed between the
+    version bump and the tag push.
+    """
+    if is_released():
         return []
     findings: list[Finding] = []
     for number, text in page.body_lines():
@@ -357,8 +414,8 @@ def check_release_state(page: ContentPage) -> list[Finding]:
             Finding(
                 page.rel,
                 number,
-                "presents a registry install of `beam-agents` as available, but "
-                f"pyproject declares version {package_version()} and the package is not "
+                "presents a registry install of `beam-agents` as available, but no "
+                f"`v{package_version()}` release tag exists and the package is not "
                 'published. Put it under a "when released" heading, or install from source.',
             )
         )
@@ -475,7 +532,10 @@ def check_coverage() -> list[Finding]:
                         covered_modules.add(str(entry[key]))
         for number, text in page.body_lines():
             del number
-            for match in re.finditer(r"(docs/[a-z_]+\.md|openspec/specs/[a-z-]+/spec\.md)", text):
+            # Hyphens are legal in doc filenames (docs/state-compat.md,
+            # docs/state-migration.md); excluding them made those two
+            # impossible to credit by prose mention.
+            for match in re.finditer(r"(docs/[a-z_-]+\.md|openspec/specs/[a-z-]+/spec\.md)", text):
                 covered_modules.add(match.group(1))
 
     for doc in sorted((REPO_ROOT / "docs").glob("*.md")):
@@ -502,6 +562,59 @@ def check_coverage() -> list[Finding]:
     return findings
 
 
+def check_site_constants() -> list[Finding]:
+    """`website/lib/site.ts` must agree with the repository about the release.
+
+    The footer and the landing hero render `PACKAGE_VERSION` and `IS_RELEASED`
+    from that file, and its docstring promises this script checks them. Two
+    facts are held to ground truth: the version string must equal
+    `pyproject.toml`'s, and the release flag must equal the git-tag release
+    state (see :func:`is_released`).
+    """
+    site_ts = REPO_ROOT / "website" / "lib" / "site.ts"
+    rel = "website/lib/site.ts"
+    if not site_ts.exists():
+        return [Finding(rel, 1, "file does not exist, but the site renders from it")]
+    text = site_ts.read_text(encoding="utf-8")
+    findings: list[Finding] = []
+
+    version_match = re.search(r"export const PACKAGE_VERSION = '([^']*)'", text)
+    if version_match is None:
+        findings.append(Finding(rel, 1, "no `export const PACKAGE_VERSION = '…'` declaration"))
+    elif version_match.group(1) != package_version():
+        findings.append(
+            Finding(
+                rel,
+                text[: version_match.start()].count("\n") + 1,
+                f"PACKAGE_VERSION is '{version_match.group(1)}' but pyproject.toml "
+                f"declares {package_version()}",
+            )
+        )
+
+    released_match = re.search(r"export const IS_RELEASED(?:: boolean)? = (true|false)", text)
+    if released_match is None:
+        findings.append(
+            Finding(
+                rel,
+                1,
+                "no literal `export const IS_RELEASED = true|false` declaration — the flag "
+                "must be an explicit literal this check can hold to the git tag state, not "
+                "an expression derived from the version string",
+            )
+        )
+    elif (released_match.group(1) == "true") != is_released():
+        state = "exists" if is_released() else "does not exist"
+        findings.append(
+            Finding(
+                rel,
+                text[: released_match.start()].count("\n") + 1,
+                f"IS_RELEASED is {released_match.group(1)}, but the release tag "
+                f"`v{package_version()}` {state}",
+            )
+        )
+    return findings
+
+
 def main() -> int:
     pages = load_pages()
     if not pages:
@@ -518,6 +631,7 @@ def main() -> int:
         findings.extend(check_release_state(page))
         findings.extend(check_citations(page))
     findings.extend(check_coverage())
+    findings.extend(check_site_constants())
 
     if findings:
         print(f"claim verification failed: {len(findings)} finding(s)\n", file=sys.stderr)

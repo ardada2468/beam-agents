@@ -56,14 +56,20 @@ make test-unit
 
 ## Optional extras
 
-Three extras exist, and each is genuinely optional — the core install works
+Nine extras exist, and each is genuinely optional — the core install works
 without any of them.
 
 | Extra | Provides | Pulls in |
 |---|---|---|
 | `langgraph` | The `beam_agents.adapters.langgraph` adapter and `LangGraphAgent` | `langgraph>=1.0,<2`, `langchain-core>=1.0,<2` |
+| `pydantic-ai` | The `beam_agents.adapters.pydantic_ai` adapter and `PydanticAIAgent` | `pydantic-ai-slim>=2.21,<3` |
+| `adk` | The `beam_agents.adapters.adk` adapter and `AdkAgent` | `google-adk>=2.6,<3` |
 | `effector` | The reference effector service and its IO clients | `aiokafka`, `google-cloud-pubsub`, `redis`, `google-cloud-bigtable` |
 | `otlp` | The `otlp://` trace sink | `opentelemetry-proto>=1.20` |
+| `vllm` | The in-process engine behind `VllmSidecarProvider` (the endpoint provider needs no extra) | `vllm>=0.6` |
+| `memory-stores` | The long-term `MemoryStore` backends: Bigtable, Redis, Firestore, SQL | `google-cloud-bigtable`, `redis`, `google-cloud-firestore`, `sqlalchemy[asyncio]` |
+| `console` | The agent console's API server | `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `sse-starlette>=2.1` |
+| `console-ingest` | The console's Kafka and BigQuery ingestion | `aiokafka`, `google-cloud-bigquery` |
 
 From a source checkout:
 
@@ -71,7 +77,8 @@ From a source checkout:
 uv sync --extra langgraph
 ```
 
-`LangGraphAgent` is exported lazily. Without the extra, accessing it raises an
+The adapter entry points — `LangGraphAgent`, `PydanticAIAgent`, `AdkAgent` —
+are exported lazily. Without the matching extra, accessing one raises an
 `ImportError` naming the extra to install rather than a bare
 `ModuleNotFoundError`.
 

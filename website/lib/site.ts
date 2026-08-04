@@ -6,6 +6,15 @@
  * particular, because they are what install instructions depend on.
  */
 
+/**
+ * WARNING — no production host has been chosen for this site. The GitHub Pages
+ * host (ardada2468.github.io/beam-agents) serves the mkdocs tree, not this
+ * Next.js site. Until a domain is picked, the fallback stays `localhost`, which
+ * means canonical URLs, the sitemap origin, and `metadataBase` are all wrong in
+ * any real deployment unless `NEXT_PUBLIC_SITE_URL` is set in the build
+ * environment. Choosing a host is a project decision, not a code change; when
+ * it lands, replace this fallback.
+ */
 export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000').replace(
   /\/$/,
   '',
@@ -24,13 +33,20 @@ export const REPO_REF = 'main';
 export const LICENSE = 'Apache-2.0';
 
 /**
- * The declared package version. `0.0.0` means unreleased, and the install
- * page's shape depends on it — see the release-state check in
- * `scripts/verify_docs_claims.py`.
+ * The declared package version, mirroring `pyproject.toml`.
+ * `scripts/verify_docs_claims.py` fails the check when the two drift.
  */
-export const PACKAGE_VERSION = '0.0.0';
+export const PACKAGE_VERSION = '1.0.0';
 
-export const IS_RELEASED = PACKAGE_VERSION !== '0.0.0';
+/**
+ * Release state is deliberately NOT derived from the version string: the
+ * version bumps in the release PR before the `v1.0.0` tag is pushed, and
+ * during that window the package is declared but unpublished. This flips to
+ * `true` at tag time, by hand, and `scripts/verify_docs_claims.py` holds it to
+ * the actual `git tag -l v{version}` state — so flipping it early, or
+ * forgetting to flip it after the tag, fails the build.
+ */
+export const IS_RELEASED = false;
 
 export function repoFileUrl(path: string, line?: number): string {
   const anchor = line !== undefined ? `#L${line}` : '';

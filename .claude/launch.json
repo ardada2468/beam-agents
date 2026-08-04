@@ -4,9 +4,13 @@
     {
       "name": "website",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--dir", "website", "dev"],
-      "autoPort": true,
-      "port": 3000
+      "runtimeArgs": [
+        "--dir",
+        "website",
+        "dev"
+      ],
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }
