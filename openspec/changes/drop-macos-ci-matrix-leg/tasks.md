@@ -55,8 +55,10 @@ in §1, so task 3.3's assertion is already established independent of the PR run
 
 ## 6. Spec archive coordination
 
-- [ ] 6.1 Before archiving, re-read `openspec/specs/repo-scaffolding/spec.md` and check whether `enforce-mutation-gate-on-core` has already archived its edit to the *GitHub Actions workflows mirror the testing tiers* requirement
-- [ ] 6.2 If it has, copy its `quality.yml`/`nightly.yml` mutation-gate clauses verbatim into this change's `MODIFIED` block before archiving, so the full-body replacement does not revert them (design D4)
+- [x] 6.1 Before archiving, re-read `openspec/specs/repo-scaffolding/spec.md` and check whether `enforce-mutation-gate-on-core` has already archived its edit to the *GitHub Actions workflows mirror the testing tiers* requirement
+  - *Checked (2026-08-03):* it has — `enforce-mutation-gate-on-core` archived as `archive/2026-08-04-enforce-mutation-gate-on-core` and its mutation-gate clauses are in the main spec. `add-docs-website` has also archived since (as `archive/2026-08-04-add-docs-website`), so the same requirement additionally carries `website.yml` and its two scenarios.
+- [x] 6.2 If it has, copy its `quality.yml`/`nightly.yml` mutation-gate clauses verbatim into this change's `MODIFIED` block before archiving, so the full-body replacement does not revert them (design D4)
+  - *Done (2026-08-03):* the `quality.yml`/`nightly.yml` mutation-gate clauses and their three scenarios copied verbatim into this change's `MODIFIED` block, and — same D4 reasoning, discovered at copy time — `add-docs-website`'s landed `website.yml` sentence and its two scenarios folded in as well ("four workflows" → "five", and the no-macOS scenario's "all four workflow files" → "all five"). The block is now the current main-spec text plus exactly this change's macOS edits, so archiving it cannot revert either landed change. §6.3–6.4 remain for actual archive time, which waits on §7.
 - [ ] 6.3 Run `openspec validate drop-macos-ci-matrix-leg` and archive
 - [ ] 6.4 After archiving, diff the resulting main spec against both changes' deltas to confirm neither change's clauses were lost
 
