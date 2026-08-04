@@ -125,6 +125,10 @@ mypy's file set, held to the same `--strict` bar as `src/` and `tests/`.
 ## The release artifact
 
 The nightly job uploads `bench-results/*.json` plus `bench-report.md` as one
-artifact named **`benchmark-report`**. Each release attaches the most recent
-green report; the attach step belongs to the release process, which consumes
-this artifact by that stable name.
+artifact named **`benchmark-report`**. The consumer lives in
+`release.yml`'s publish job: it locates the most recent nightly run on `main`
+whose `bench` *job* concluded green (via the jobs API — sibling nightly jobs
+can be red independently), downloads this artifact by that stable name, and
+attaches `bench-report.md` and `bench-results.zip` to the GitHub Release. It
+fails closed: no green bench run in the last 30 nightly runs fails the
+release before anything is published. See [Releasing](releasing.md).

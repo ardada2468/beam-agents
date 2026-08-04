@@ -48,9 +48,11 @@ types map onto.
 
 ## Releasing
 
-The project is pre-1.0 (`0.MINOR.PATCH`): a MINOR release may add features and
-may break the documented compatibility surface; a PATCH release carries fixes
-and docs only. The version is a single static string in `pyproject.toml` and
+The project is versioned `MAJOR.MINOR.PATCH` — semver over the frozen public
+surface (`public-surface.toml`): a MINOR release may add features and open or
+close deprecation windows; a PATCH release carries fixes and docs only; a
+frozen name is never removed without the deprecation window below. The
+version is a single static string in `pyproject.toml` and
 must agree with both the release tag and `uv.lock` — which is why a version
 bump is the one routine reason to run `uv lock`.
 
@@ -110,10 +112,10 @@ name (reviewers check that the `__getattr__` shim and the warning exist), and
 closing it one minor later removes the shim. Neither can happen silently — CI
 cannot know whether a window elapsed, but it guarantees no removal is invisible.
 
-**Pre-1.0 exemption.** The bulk privatization performed by `add-1-0-api-freeze`
-itself is exempt: it landed in the 0.x line, before the surface was declared
-frozen, and pruning accidental names cheaply is exactly what pre-1.0 semantics
-are for. Once 1.0 ships, no further exemptions.
+**The one historical exemption.** The bulk privatization performed by
+`add-1-0-api-freeze` itself was exempt: it landed in the 0.x line, before the
+surface was declared frozen, and pruning accidental names cheaply was exactly
+what pre-1.0 semantics were for. From 1.0 on, no further exemptions.
 
 ## Makefile is the CI/local contract
 

@@ -51,8 +51,16 @@ nav:
       - Fraud triage: examples/fraud-triage.md
       - Fraud triage on Dataflow: examples/fraud-triage-dataflow.md
       - IoT reaction: examples/iot-reaction.md
+      - Slack approval: examples/slack-approval.md
       - Console demo: examples/console-demo.md
+      - Continuous evaluation: continuous_eval.md
   - API reference: api.md
+  - Building on the runtime:
+      - Framework adapters: adapters.md
+      - Human-in-the-loop: hitl.md
+      - Model providers: providers.md
+      - Memory: memory.md
+      - Hot keys and sharding: sharding.md
   - Operating the runtime:
       - Beam YAML provider: yaml.md
       - CI workflow map: ci.md
@@ -65,4 +73,8 @@ nav:
       - The console: console.md
       - Deploying to Dataflow: deploying.md
       - State export and replay: replay.md
+      - State compatibility: state-compat.md
+      - State schema migration: state-migration.md
+      - Benchmarks: benchmarks.md
+      - Benchmarks vs. Flink Agents: benchmarks/0.3.0-vs-flink-agents.md
       - Releasing: releasing.md
