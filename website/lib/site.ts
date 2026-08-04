@@ -7,15 +7,13 @@
  */
 
 /**
- * WARNING — no production host has been chosen for this site. The GitHub Pages
- * host (ardada2468.github.io/beam-agents) serves the mkdocs tree, not this
- * Next.js site. Until a domain is picked, the fallback stays `localhost`, which
- * means canonical URLs, the sitemap origin, and `metadataBase` are all wrong in
- * any real deployment unless `NEXT_PUBLIC_SITE_URL` is set in the build
- * environment. Choosing a host is a project decision, not a code change; when
- * it lands, replace this fallback.
+ * The production origin is `https://beamagent.org` (Cloudflare-managed domain,
+ * chosen 2026-08-04). It is the default so canonical URLs, the sitemap origin,
+ * and `metadataBase` are right in any production build; local dev and preview
+ * deployments override it with `NEXT_PUBLIC_SITE_URL`. The GitHub Pages host
+ * (ardada2468.github.io/beam-agents) serves the mkdocs tree, not this site.
  */
-export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000').replace(
+export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://beamagent.org').replace(
   /\/$/,
   '',
 );
