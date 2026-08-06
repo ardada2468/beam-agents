@@ -6,9 +6,16 @@ order: 7
 verifies:
   - module: src/beam_agents/core/dofn.py
   - module: docker/compose.yaml
+  - module: docker/compose.spark.yaml
+  - module: benchmarks/_harness.py
+  - module: benchmark-baseline.toml
+  - module: docs/benchmarks.md
+  - module: docs/deploying.md
   - spec: openspec/specs/repo-scaffolding/spec.md
+  - spec: openspec/specs/spark-runner-support/spec.md
   - test: tests/conformance/test_direct.py
   - test: tests/conformance/test_flink.py
+  - test: tests/conformance/test_spark_selection.py
 ---
 
 Support claims are cheap to make and hard to check, so this page states only
@@ -28,17 +35,19 @@ what the repository actually exercises, and where.
 
   The last row is the reason this diagram exists. Spark sits *outside* the
   tested group, with no connector at all, so the picture agrees with the
-  landing page and with the table below: nothing here runs against Spark. A
-  fourth identical row inside the group would be a support claim, and this page
-  exists to not make one. Note the separation is not drawn as a dashed line —
-  dashed means "leaves through the message bus and comes back" everywhere else
-  on this site, and re-using it for "unverified" would break that key.
+  landing page and with the table below: a weekly Spark leg stands the stack
+  up, but every conformance cell on it is currently a declared skip, so no
+  scenario actually executes there. A fourth identical row inside the group
+  would be a support claim, and this page exists to not make one. Note the
+  separation is not drawn as a dashed line — dashed means "leaves through the
+  message bus and comes back" everywhere else on this site, and re-using it
+  for "unverified" would break that key.
 */}
 
 <Diagram
   title="Where a beam-agents pipeline runs"
-  desc="Three bands. The first holds what is identical on every runner: your agent, the RunAgent transform, keyed state held as protobuf, and intent ids derived from key, seq and step index. It feeds the second band, what the runner must supply in return: a stateful DoFn over KV input, both event-time and processing-time timers, and bundle retry semantics matching the ones the guarantees are stated against. That feeds the third band, the runners this repository exercises: DirectRunner by the unit tier and the conformance matrix on every pull request, Flink by a Dockerised mini-cluster on every pull request, and Dataflow against the real service nightly. Spark is drawn below that group, unconnected, because no test in this repository runs against it."
-  caption="Spark sits outside the group and has no connector. The project's stated v1.0 target lists it as best-effort, and nothing in this repository exercises it — so it is drawn as an untested target rather than a fourth supported one."
+  desc="Three bands. The first holds what is identical on every runner: your agent, the RunAgent transform, keyed state held as protobuf, and intent ids derived from key, seq and step index. It feeds the second band, what the runner must supply in return: a stateful DoFn over KV input, both event-time and processing-time timers, and bundle retry semantics matching the ones the guarantees are stated against. That feeds the third band, the runners this repository exercises: DirectRunner by the unit tier and the conformance matrix on every pull request, Flink by a Dockerised mini-cluster on every pull request, and Dataflow against the real service nightly. Spark is drawn below that group, unconnected, because although a weekly leg stands up the Spark stack, every conformance scenario on it is currently a declared skip and none executes."
+  caption="Spark sits outside the group and has no connector. A weekly leg runs against a real Spark stack, but a recorded Beam Spark portable-runner gap — no bundle checkpoint handler for the streaming ingest source — leaves every conformance cell a declared skip, so Spark is drawn as an unverified target rather than a fourth supported one."
   viewBox="0 0 600 664"
   minWidth={592}
 >
@@ -68,7 +77,7 @@ what the repository actually exercises, and where.
   <DgNode x={32} y={408} w={536} h={44} label="DirectRunner" sub="UNIT TIER + CONFORMANCE, EVERY PR" />
   <DgNode x={32} y={462} w={536} h={44} label="Flink" sub="MINI-CLUSTER IN DOCKER, EVERY PR" />
   <DgNode x={32} y={516} w={536} h={44} label="Dataflow" sub="REAL DATAFLOW, NIGHTLY ONLY" />
-  <DgNode x={32} y={596} w={536} h={44} soft label="Spark" sub="NOT EXERCISED — NO TEST IN THIS REPOSITORY" />
+  <DgNode x={32} y={596} w={536} h={44} soft label="Spark" sub="WEEKLY LEG — EVERY CONFORMANCE CELL CURRENTLY SKIPS" />
 </Diagram>
 
 ## What runs where today
@@ -78,7 +87,7 @@ what the repository actually exercises, and where.
 | DirectRunner | The whole unit tier, plus the conformance matrix's DirectRunner leg | Offline, every PR |
 | Flink | Mini-cluster via testcontainers; the conformance matrix's Flink leg and the effectively-once end-to-end gate | Docker-backed, every PR |
 | Dataflow | `-m dataflow` tests against real Dataflow with FakeLLM over HTTP | Nightly only |
-| Spark | Nothing in this repository | Not exercised |
+| Spark | A weekly leg (`docker/compose.spark.yaml`) stands up the stack, but every conformance cell is a declared skip — Beam's Spark portable runner registers no bundle checkpoint handler, which the streaming ingest source requires | Weekly; zero scenarios currently execute |
 
 The project's stated v1.0 target is DirectRunner, Dataflow, and Flink, with
 Spark best-effort. That is a goal, and the table above is the current evidence
@@ -102,17 +111,35 @@ There is no `MapState` or `OrderedListState` in Beam Python user state, which
 is why bounded maps live inside protobuf blobs, and no portable async DoFn,
 which is why the runtime runs a bridge thread per DoFn instance.
 
+## Overhead is measured, not assumed
+
+The project states a design budget for runtime overhead — p50 under 15 ms and
+p99 under 60 ms per activation, excluding model and tool time — and the
+repository carries the instrument that renders the verdict: an offline pyperf
+suite under `benchmarks/` (`make bench`), gated against
+`benchmark-baseline.toml` by `make bench-gate`. The suite, its dimensions, and
+what each deliberately excludes are documented in
+[`docs/benchmarks.md`](https://github.com/ardada2468/beam-agents/blob/main/docs/benchmarks.md).
+This site publishes no figures of its own — the gated baseline in the
+repository is the source of record.
+
+## Deploying
+
+What has to be true of the container image before Dataflow workers can run an
+agent against a real model provider is documented in
+[`docs/deploying.md`](https://github.com/ardada2468/beam-agents/blob/main/docs/deploying.md),
+alongside [the quickstart](https://github.com/ardada2468/beam-agents/blob/main/docs/quickstart.md)'s
+laptop → local Flink → Dataflow ladder.
+
 ## Not yet implemented
 
-- **Spark is not exercised at all.** No test in this repository runs against
-  Spark. Treat "best-effort" as "unverified".
-- **No published benchmark.** The project states a design budget for runtime
-  overhead — p50 under 15 ms and p99 under 60 ms per activation, excluding
-  model and tool time. There is no benchmark harness in this repository, so
-  that budget is an unmeasured target and no measured figure is published
-  anywhere on this site.
-- **No deployment guide.** Running this on Dataflow or a production Flink
-  cluster is exercised by tests, not documented as an operational procedure.
+- **No conformance scenario executes on Spark.** The weekly leg exists and
+  runs, but a runner-level gap (no bundle checkpoint handler in Beam's Spark
+  portable runner) currently skips every cell. Treat "best-effort" as
+  "unverified".
+- **No production Flink deployment guide.** `docs/deploying.md` covers the
+  Dataflow image path; running against a production Flink cluster is exercised
+  by tests, not documented as an operational procedure.
 
 ## Related
 

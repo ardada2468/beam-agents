@@ -1,14 +1,26 @@
 ---
 title: State and memory
-summary: What the runtime stores per key, how it is bounded, and when it is collected.
-status: partial
+summary: What the runtime stores per key, how it is bounded, when it is collected — and the durable long-term tier behind it.
+status: stable
 order: 5
 verifies:
+  - symbol: beam_agents.memory.LongtermMemory
+  - symbol: beam_agents.memory.stores.MemoryStore
   - module: src/beam_agents/memory/facade.py
+  - module: src/beam_agents/memory/compaction.py
+  - module: src/beam_agents/memory/stores/base.py
+  - module: src/beam_agents/memory/stores/bigtable.py
+  - module: src/beam_agents/memory/stores/firestore.py
+  - module: src/beam_agents/memory/stores/redis.py
+  - module: src/beam_agents/memory/stores/sql.py
   - module: src/beam_agents/core/dofn.py
+  - module: docs/memory.md
   - spec: openspec/specs/memory-facade/spec.md
+  - spec: openspec/specs/memory-stores/spec.md
   - test: tests/memory/test_facade_caps.py
   - test: tests/memory/test_facade_ring.py
+  - test: tests/memory/test_facade_longterm.py
+  - test: tests/memory/stores/test_inmemory.py
   - test: tests/core/test_dofn_ttl.py
   - example: fast_path.py
 ---
@@ -88,26 +100,47 @@ practical consequence is the upgrade rule: **additive proto changes only**. A
 breaking change requires a `state_schema_version` bump, lazy migration, and a
 golden-blob compatibility test.
 
-## Not yet implemented
+## Long-term memory
 
-The long-term `MemoryStore` — the durable store behind working memory,
-intended to back Bigtable, Redis, Firestore, and SQLAlchemy — **does not exist
-in the current code**. `src/beam_agents/memory/` contains `facade.py` and
-nothing else.
+Working memory is not the only memory. Behind the facade sits a second,
+durable tier — the long-term `MemoryStore` — reached explicitly through
+`ctx.memory.longterm` and enabled only when `AgentConfig.longterm_memory`
+carries a backend URI. Four backends ship in the `memory-stores` extra —
+Bigtable, Redis, Firestore, and any SQLAlchemy async URL — plus an in-process
+`memory://` reference store for tests, and every backend passes one shared
+conformance suite (`tests/memory/stores/_conformance.py`).
 
-What that means concretely:
+The two tiers stay deliberately separate — nothing is promoted, demoted, or
+hydrated between them automatically:
 
-- Working memory is the only memory. It lives in Beam keyed state, is bounded
-  by the caps above, and is wiped by the TTL timer.
-- There is no cross-key or cross-pipeline retrieval, no vector store, no
-  history beyond the ring buffers you maintain yourself.
-- The documented exception to invariant 5 for "idempotent upserts to the
-  long-term MemoryStore keyed by `(key, seq)`" describes an interface that has
-  no implementation yet.
+- Working memory is one key in one pipeline, capped and TTL-wiped as above.
+  Long-term rows are per *entity*, durable across pipelines, and never
+  touched by the runtime's GC — retention is an operator concern, handled
+  with each backend's native mechanism.
+- `save` stages an upsert and performs no I/O; staged rows flush only after
+  the agent returns successfully, on the commit tail. `search` is an
+  entity-scoped, ordered, bounded key-prefix scan — deliberately not vector
+  or semantic search.
+- The documented exception to invariant 5 — "idempotent upserts to the
+  long-term `MemoryStore` keyed by `(key, seq)`" — is this tier, implemented:
+  each backend applies a write iff the incoming `seq` is `>=` the stored one,
+  enforced by that backend's own atomic primitive, so a replayed activation
+  converges on byte-identical rows
+  (`tests/semantics/test_longterm_retry_determinism.py` forces exactly that
+  sequence).
 
-See [the roadmap](/roadmap) for what is planned, clearly marked as not built.
+Compaction is what keeps a long-lived key under the working-tier caps:
+`DropOldestCompactor` (the default) evicts LRU entries synchronously inside a
+memory write, and the opt-in `SummarizeCompactor` folds a ring's older items
+into a summary entry through `ctx.call_model`, so even compaction's model
+calls stay replay-cached.
+
+The full contract — the blind-upsert discipline, provisioning, and retention —
+is on [the memory-stores page](/docs/memory-stores) and in
+[`docs/memory.md`](https://github.com/ardada2468/beam-agents/blob/main/docs/memory.md).
 
 ## Next
 
 - [Correctness invariants](/learn/correctness-invariants) — why staging exists.
+- [The memory-stores page](/docs/memory-stores) — the durable tier in full.
 - [The memory-facade spec](/specs/memory-facade) — the requirements verbatim.

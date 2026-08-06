@@ -45,7 +45,14 @@ A claim on this site that nothing enforces is a defect.
 
 ## Install
 
-The package is unreleased; the install story is source-based, exactly as the
+Once `v1.0.0` is published to PyPI, the install is the ordinary one:
+
+```sh
+pip install beam-agents
+```
+
+Until then — and always, for working on the runtime itself — install from
+source, exactly as the
 [repository README](https://github.com/ardada2468/beam-agents#readme)
 describes:
 
@@ -55,14 +62,19 @@ cd beam-agents
 uv sync --all-groups
 ```
 
-Requires Python `>=3.11,<3.13` and [`uv`](https://docs.astral.sh/uv/).
+Requires Python `>=3.11,<3.13`; the source install additionally needs
+[`uv`](https://docs.astral.sh/uv/). The adapters, the effector, and the other
+optional pieces are extras (`beam-agents[langgraph]`, `[pydantic-ai]`, `[adk]`,
+`[effector]`, …) — each page below names the extra it needs.
 
 ## Start here
 
-The three examples are real, runnable Beam pipelines on the real runtime,
-driven by a scripted `FakeLLM` so they run offline with no API keys and no
-docker. The code each page shows is included verbatim from `examples/` — the
+The seven example programs are real, runnable Beam pipelines on the real
+runtime. The code each page shows is included verbatim from `examples/` — the
 same file CI executes in [`tests/examples/`](https://github.com/ardada2468/beam-agents/tree/main/tests/examples).
+
+Four are hermetic — driven by a scripted `FakeLLM`, so they run offline with
+no API keys and (except the console demo's viewer) no docker:
 
 - [Hello, world](examples/hello-world.md) — the minimal fast path: one event,
   one model call, one output.
@@ -70,6 +82,18 @@ same file CI executes in [`tests/examples/`](https://github.com/ardada2468/beam-
   the fail-closed timeout.
 - [IoT reaction](examples/iot-reaction.md) — keyed rolling memory on a stream,
   with no model calls for quiet readings.
+- [Console demo](examples/console-demo.md) — one command that exercises the
+  whole error-and-approval vocabulary and feeds the [console](console.md).
+
+Three deliberately touch the world outside, because "does it work against the
+real thing" is a question too:
+
+- [Quickstart](examples/quickstart.md) — a real provider over the network,
+  streaming into a running console ([the task-oriented guide](quickstart.md)).
+- [Slack approval](examples/slack-approval.md) — a worked approval surface
+  closing the HITL loop through Slack.
+- [Fraud triage on Dataflow](examples/fraud-triage-dataflow.md) — the same
+  fraud agent packaged as a Dataflow Flex Template.
 
 Then the operator pages: [CI workflow map](ci.md), [running the
 effector](effector.md), [the errors output](errors.md), [runtime

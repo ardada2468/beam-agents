@@ -1,6 +1,6 @@
 {
   "name": "beam-agents-website",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Documentation site for beam-agents. Content fidelity is enforced by scripts/ in the repository root; see website/README.md.",

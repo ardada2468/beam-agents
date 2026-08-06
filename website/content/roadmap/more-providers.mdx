@@ -1,9 +1,10 @@
 ---
-title: Vertex and vLLM providers
-summary: Model providers for Vertex AI and vLLM, including a GPU-worker sidecar. Named in the architecture notes; no code exists.
+title: Vertex AI provider
+summary: A model provider for Vertex AI. Named in the architecture notes; no code exists.
 status: planned
-order: 4
-verifies: []
+order: 1
+verifies:
+  - module: src/beam_agents/model/vertex.py
 ---
 
 <Callout kind="not-implemented">
@@ -12,15 +13,17 @@ repository. This is a description of intent, published so the project's directio
 legible — not documentation of a feature you can use.
 </Callout>
 
-The architecture notes describe four providers — Anthropic, OpenAI-compatible, Vertex,
-and vLLM — with vLLM available either as an endpoint or as a GPU-worker sidecar managed
-through `beam.utils.shared.Shared`.
+The architecture notes describe four providers — Anthropic, OpenAI-compatible,
+Vertex, and vLLM. Three of the four ship; Vertex is the one that does not.
 
-**What exists today:** `src/beam_agents/model/` contains `anthropic.py`, `openai_compat.py`,
-and `fake.py`, plus the client, facade, and replay cache. There is no `vertex.py` and no
-`vllm.py`.
+**What exists today:** `src/beam_agents/model/` contains `anthropic.py`,
+`openai_compat.py`, `vllm.py`, and `fake.py`, plus the client, facade, and
+replay cache. vLLM is covered both as a served endpoint
+(`VllmEndpointProvider`) and as a GPU-worker sidecar (`VllmSidecarProvider`,
+engine installed from the `vllm` extra) — see
+[the install page's extras table](/learn/install). There is no `vertex.py`.
 
-Note that an OpenAI-compatible endpoint covers a good deal of what a vLLM deployment would
-need in practice, since vLLM serves an OpenAI-compatible API — but that is a workaround
-using an existing provider, not the described integration, and it comes with none of the
-sidecar lifecycle management.
+Until it exists, a Vertex-hosted model is reachable only where Vertex exposes
+an OpenAI-compatible surface the existing `openai_compat` provider can speak
+to — a workaround using an existing provider, not the described integration,
+and it comes with none of Vertex's native auth or endpoint handling.

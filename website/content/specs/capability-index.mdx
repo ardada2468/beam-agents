@@ -1,0 +1,93 @@
+---
+title: Capability spec index
+summary: The capability specifications promoted at 1.0 that have no dedicated page here yet, each with where it lives in the repository.
+status: partial
+order: 99
+verifies:
+  - spec: openspec/specs/adaptive-batching/spec.md
+  - spec: openspec/specs/agent-context/spec.md
+  - spec: openspec/specs/docs-api-reference/spec.md
+  - spec: openspec/specs/docs-content-fidelity/spec.md
+  - spec: openspec/specs/docs-examples/spec.md
+  - spec: openspec/specs/docs-site/spec.md
+  - spec: openspec/specs/effector-dedup/spec.md
+  - spec: openspec/specs/effector-execution/spec.md
+  - spec: openspec/specs/effector-security/spec.md
+  - spec: openspec/specs/effector-service/spec.md
+  - spec: openspec/specs/errors-sink/spec.md
+  - spec: openspec/specs/eval-pipeline-example/spec.md
+  - spec: openspec/specs/key-sharding/spec.md
+  - spec: openspec/specs/model-providers/spec.md
+  - spec: openspec/specs/mutation-gate/spec.md
+  - spec: openspec/specs/public-api/spec.md
+  - spec: openspec/specs/replay-cli/spec.md
+  - spec: openspec/specs/retry-determinism-gate/spec.md
+  - spec: openspec/specs/run-agent-transform/spec.md
+  - spec: openspec/specs/runnable-examples/spec.md
+  - spec: openspec/specs/runtime-metrics/spec.md
+  - spec: openspec/specs/state-guarantees/spec.md
+  - spec: openspec/specs/state-migration/spec.md
+  - spec: openspec/specs/state-snapshot-export/spec.md
+  - spec: openspec/specs/stateful-agent-runtime/spec.md
+  - spec: openspec/specs/token-budgets/spec.md
+  - spec: openspec/specs/trace-events/spec.md
+  - spec: openspec/specs/trace-exporters/spec.md
+  - spec: openspec/specs/write-intents-sink/spec.md
+  - test: tests/docs/test_fidelity_checks.py
+---
+
+The capability specs the implementation is written against live under
+`openspec/specs/` in the repository. A handful have a dedicated page in this
+section, rendered verbatim. The rest — most of them promoted from archived
+change folders as part of the 1.0 consolidation — are listed here by path
+rather than summarized, because a summary that drifts is worse than a link
+that does not.
+
+Each name links to the spec file itself on the `main` branch. The requirements
+are stated there in `SHALL` form, scenario by scenario; nothing on this page
+adds to or interprets them.
+
+| Capability | Specification |
+|---|---|
+| `adaptive-batching` | [`openspec/specs/adaptive-batching/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/adaptive-batching/spec.md) |
+| `agent-context` | [`openspec/specs/agent-context/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/agent-context/spec.md) |
+| `docs-api-reference` | [`openspec/specs/docs-api-reference/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/docs-api-reference/spec.md) |
+| `docs-content-fidelity` | [`openspec/specs/docs-content-fidelity/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/docs-content-fidelity/spec.md) |
+| `docs-examples` | [`openspec/specs/docs-examples/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/docs-examples/spec.md) |
+| `docs-site` | [`openspec/specs/docs-site/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/docs-site/spec.md) |
+| `effector-dedup` | [`openspec/specs/effector-dedup/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/effector-dedup/spec.md) |
+| `effector-execution` | [`openspec/specs/effector-execution/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/effector-execution/spec.md) |
+| `effector-security` | [`openspec/specs/effector-security/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/effector-security/spec.md) |
+| `effector-service` | [`openspec/specs/effector-service/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/effector-service/spec.md) |
+| `errors-sink` | [`openspec/specs/errors-sink/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/errors-sink/spec.md) |
+| `eval-pipeline-example` | [`openspec/specs/eval-pipeline-example/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/eval-pipeline-example/spec.md) |
+| `key-sharding` | [`openspec/specs/key-sharding/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/key-sharding/spec.md) |
+| `model-providers` | [`openspec/specs/model-providers/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/model-providers/spec.md) |
+| `mutation-gate` | [`openspec/specs/mutation-gate/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/mutation-gate/spec.md) |
+| `public-api` | [`openspec/specs/public-api/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/public-api/spec.md) |
+| `replay-cli` | [`openspec/specs/replay-cli/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/replay-cli/spec.md) |
+| `retry-determinism-gate` | [`openspec/specs/retry-determinism-gate/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/retry-determinism-gate/spec.md) |
+| `run-agent-transform` | [`openspec/specs/run-agent-transform/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/run-agent-transform/spec.md) |
+| `runnable-examples` | [`openspec/specs/runnable-examples/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/runnable-examples/spec.md) |
+| `runtime-metrics` | [`openspec/specs/runtime-metrics/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/runtime-metrics/spec.md) |
+| `state-guarantees` | [`openspec/specs/state-guarantees/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/state-guarantees/spec.md) |
+| `state-migration` | [`openspec/specs/state-migration/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/state-migration/spec.md) |
+| `state-snapshot-export` | [`openspec/specs/state-snapshot-export/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/state-snapshot-export/spec.md) |
+| `stateful-agent-runtime` | [`openspec/specs/stateful-agent-runtime/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/stateful-agent-runtime/spec.md) |
+| `token-budgets` | [`openspec/specs/token-budgets/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/token-budgets/spec.md) |
+| `trace-events` | [`openspec/specs/trace-events/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/trace-events/spec.md) |
+| `trace-exporters` | [`openspec/specs/trace-exporters/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/trace-exporters/spec.md) |
+| `write-intents-sink` | [`openspec/specs/write-intents-sink/spec.md`](https://github.com/ardada2468/beam-agents/blob/main/openspec/specs/write-intents-sink/spec.md) |
+
+## Not yet implemented
+
+This page is marked **partial** on purpose: it is an index, not coverage. Each
+row is a capability spec that has not yet earned a rendered page in this
+section. The site's own verifier keeps the list honest — a spec under
+`openspec/specs/` fails the build until some page here names it, and this page
+is where one lands until it gets a better home.
+
+## Related
+
+- [How changes get made here](/specs/spec-driven-development) — the workflow
+  the specs come from.

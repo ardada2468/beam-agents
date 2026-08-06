@@ -1,0 +1,60 @@
+name: frontend
+
+# The console UI (frontend/) is a Vite + React SPA with its own npm lockfile,
+# entirely separate from the pnpm-managed docs site under website/. Its whole
+# verification surface today is lint + typecheck + build — there is no test
+# suite yet — so this workflow is exactly those three scripts behind `npm ci`.
+# Path-filtered: nothing outside frontend/ can change what these steps see,
+# so unlike website.yml there is no reason to trigger on src/ or docs/.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # frontend/ has no .nvmrc and package.json declares no engines range, so
+      # the version is pinned here: 22, the same line website/.nvmrc pins for
+      # the docs site. If frontend/ ever grows its own .nvmrc, switch this to
+      # node-version-file the way website.yml does.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      # `build` runs `tsc -b` before vite, so it subsumes typecheck — kept as
+      # separate steps anyway for step-level failure attribution, matching how
+      # release.yml keeps lint/type/test distinguishable.
+      - name: Build
+        run: npm run build

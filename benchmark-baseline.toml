@@ -20,6 +20,23 @@ invariance_tolerance_ms = 10.0
 # baseline is a gate that is not gating — so the first hosted-runner run after
 # adding a benchmark is red by construction until its median is committed.
 #
-# NOT yet seeded: numbers measured on developer hardware must not be committed
-# (the gate runs on CI hardware; see docs/benchmarks.md for the procedure).
+# Seeded 2026-08-03 from the scheduled nightly `bench` job run 30806138398
+# (ubuntu-latest GitHub-hosted runner, main @ e5cf356). Every value below is
+# the seed instruction that run's red gate printed, copied verbatim per the
+# procedure above. Absolute budget on the same run: overhead_50ms p50
+# 0.8517 ms (< 15 ms), p99 0.9767 ms (< 60 ms), 1000 samples.
 [medians_ms]
+noop_throughput = 0.2167
+overhead_50ms = 0.8517
+overhead_500ms = 1.3781
+overhead_2000ms = 2.9010
+suspension_roundtrip = 0.5172
+state_commit_1kib = 0.2267
+state_commit_16kib = 0.2300
+state_commit_64kib = 0.2360
+state_commit_100kib = 0.2462
+encode_1kib = 0.0006
+encode_16kib = 0.0015
+encode_64kib = 0.0122
+encode_100kib = 0.0103
+runinference_delta = 0.6431

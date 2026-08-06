@@ -162,15 +162,16 @@ def test_status_outside_the_closed_set_fails(tmp_path: Path) -> None:
 
 @pytest.fixture
 def unreleased(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin the checker's view of `project.version` to the pre-release value.
+    """Pin the checker's view of the release state to `unreleased`.
 
-    The rule is *conditional on* the declared version, so the tests state that
-    version rather than reading it. Asserting the repository's real one instead
-    made these cases silently stop exercising the rule the moment a version was
-    declared — which is exactly when a registry install starts being a claim
-    worth checking.
+    The rule is *conditional on* the release tag existing, so the tests state
+    that condition rather than reading the real repository's tags. Keying the
+    fixture off the version string instead is the historical bug this guards
+    against: the check switched itself off the moment `pyproject.toml` bumped
+    to `1.0.0`, which happens *before* the tag is pushed — exactly the window
+    the rule exists to cover.
     """
-    monkeypatch.setattr(verify_docs_claims, "package_version", lambda: "0.0.0")
+    monkeypatch.setattr(verify_docs_claims, "is_released", lambda: False)
 
 
 def test_unqualified_registry_install_fails_while_unreleased(
@@ -191,15 +192,50 @@ def test_registry_install_under_a_when_released_heading_passes(
     assert verify_docs_claims.check_release_state(page) == []
 
 
-def test_registry_install_passes_once_a_version_is_declared(
+def test_registry_install_passes_once_the_release_tag_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The other side of the same rule: the check exists to stop a page claiming
-    # a distribution that does not exist, so a declared version retires it
+    # a distribution that does not exist, so a pushed release tag retires it
     # rather than leaving `pip install beam-agents` permanently forbidden.
-    monkeypatch.setattr(verify_docs_claims, "package_version", lambda: "1.0.0")
+    monkeypatch.setattr(verify_docs_claims, "is_released", lambda: True)
     page = make_page("\nInstall it:\n\n    pip install beam-agents\n", tmp_path)
     assert verify_docs_claims.check_release_state(page) == []
+
+
+def test_a_declared_version_alone_does_not_retire_the_install_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unreleased: None
+) -> None:
+    # Regression: the guard used to early-return when `project.version` moved
+    # off `0.0.0`, silently disabling itself during the bump-to-tag window.
+    monkeypatch.setattr(verify_docs_claims, "package_version", lambda: "1.0.0")
+    page = make_page("\nInstall it:\n\n    pip install beam-agents\n", tmp_path)
+    findings = verify_docs_claims.check_release_state(page)
+    assert len(findings) == 1
+    assert "v1.0.0" in findings[0].message
+
+
+def test_planned_page_with_an_empty_verifies_list_fails(tmp_path: Path) -> None:
+    # Regression: `verifies: []` made the planned/shipped inversion vacuous —
+    # nothing declared, nothing to fire when the code landed.
+    body = '<Callout kind="not-implemented">Not built.</Callout>'
+    page = make_page("\n" + body, tmp_path, status="planned", verifies=[])
+    findings = verify_docs_claims.check_status_semantics(page)
+    assert any("empty `verifies` list" in f.message for f in findings)
+
+
+def test_planned_page_declaring_an_absent_module_passes(tmp_path: Path) -> None:
+    # The honest planned page: it names the module whose appearance obsoletes
+    # it, and `check_assertions` must not fault the module for not existing.
+    body = '<Callout kind="not-implemented">Not built.</Callout>'
+    page = make_page(
+        "\n" + body,
+        tmp_path,
+        status="planned",
+        verifies=[{"module": "src/beam_agents/model/vertex.py"}],
+    )
+    assert verify_docs_claims.check_assertions(page) == []
+    assert verify_docs_claims.check_status_semantics(page) == []
 
 
 # --- Requirement: citations -------------------------------------------------

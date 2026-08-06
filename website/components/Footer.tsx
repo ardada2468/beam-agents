@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { SECTIONS } from '@/lib/sections';
 import {
   ASF_DISCLAIMER,
+  IS_RELEASED,
   LICENSE,
   PACKAGE_VERSION,
   REPO_URL,
@@ -20,10 +21,11 @@ import {
  * the standing half of it, and it may not be moved off a page.
  *
  * The three facts on the left are the ones a reader needs before deciding what
- * to do with the project — what version exists, under what licence, and where
- * the source is — so they are set as a definition list on a hairline grid
- * rather than run together as a byline. `0.0.0` reads as unreleased and says
- * so; `scripts/verify_docs_claims.py` checks that against the package.
+ * to do with the project — what version is declared, under what licence, and
+ * where the source is — so they are set as a definition list on a hairline
+ * grid rather than run together as a byline. The version alone would overstate
+ * things while nothing is on PyPI, so `IS_RELEASED` qualifies it, and
+ * `scripts/verify_docs_claims.py` holds both constants to the repository.
  */
 
 /**
@@ -39,7 +41,7 @@ const EXTRA_LINKS = [
 
 export function Footer() {
   const facts: readonly { term: string; value: ReactNode }[] = [
-    { term: 'Version', value: `${PACKAGE_VERSION} · unreleased` },
+    { term: 'Version', value: `${PACKAGE_VERSION}${IS_RELEASED ? '' : ' · not yet published'}` },
     { term: 'License', value: LICENSE },
     { term: 'Source', value: <a href={REPO_URL}>github.com/ardada2468/beam-agents</a> },
   ];
