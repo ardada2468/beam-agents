@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change add-fake-llm-provider. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: LLM request value type
 
 The system SHALL provide an `LlmRequest` frozen, hashable value type carrying the provider-neutral request material: `model_id` (`str`), `messages`, `tools_schema`, and `sampling_params`. These are the same four request components `beam_agents.model.compute_cache_key` hashes (the activation-scoped `key`/`seq` are supplied separately by the caller, not by the request). Instances MUST be immutable and MUST NOT carry provider connection details, credentials, or transport state.
@@ -47,9 +45,9 @@ The system SHALL define an `LLMClient` typing `Protocol` with a single coroutine
 - **WHEN** `complete(request)` is called
 - **THEN** it returns an awaitable that resolves to an `LlmResponse`, never a plain (already-computed) value
 
-### Requirement: Typed provider-error taxonomy
+### Requirement: Typed provider-error taxonomy for retry decisions
 
-The system SHALL define a provider-error taxonomy the loop driver classifies for retry and backoff decisions: a `ProviderError` base and three subclasses — `RateLimitError` (provider signalled HTTP 429, with an optional `retry_after_ms`), `ServerError` (provider signalled 5xx, carrying the numeric `status`), and `ProviderTimeout` (the provider did not respond within its deadline). All are exceptions raised out of `LLMClient.complete`; none is returned as a value. The taxonomy MUST let a caller distinguish retryable transport failures from other errors without string-matching messages.
+The system SHALL define a provider-error taxonomy the loop driver classifies for retry and backoff decisions. A `ProviderError` base collects the three **retryable** subclasses — `RateLimitError` (provider signalled HTTP 429, with an optional `retry_after_ms`), `ServerError` (provider signalled 5xx, carrying the numeric `status`), and `ProviderTimeout` (the provider did not respond within its deadline). The taxonomy SHALL additionally define one **non-retryable** typed error, `ProviderRequestError` (carrying the numeric `status`), for client-side failures — a non-`429` `4xx` response or an undecodable success body — that a caller MUST NOT retry. `ProviderRequestError` SHALL NOT be a subclass of `ProviderError`, so an `except ProviderError` retry handler does not catch it and it propagates immediately (mirroring how `CircuitOpenError`/`UnmatchedRequestError` sit deliberately outside the retryable base). All are exceptions raised out of `LLMClient.complete`; none is returned as a value. The taxonomy MUST let a caller distinguish retryable transport failures from non-retryable client failures by type, without string-matching messages.
 
 #### Scenario: Rate-limit error carries 429 semantics
 
@@ -66,7 +64,12 @@ The system SHALL define a provider-error taxonomy the loop driver classifies for
 - **WHEN** a provider raises `ProviderTimeout`
 - **THEN** it is an instance of `ProviderError` and is neither a `RateLimitError` nor a `ServerError`
 
-#### Scenario: Base type catches all provider failures
+#### Scenario: Base type catches all retryable provider failures
 
 - **WHEN** any of `RateLimitError`, `ServerError`, or `ProviderTimeout` is raised
 - **THEN** a single `except ProviderError` handler catches it
+
+#### Scenario: Non-retryable request error is outside the retryable base
+
+- **WHEN** a provider raises `ProviderRequestError(status=400)`
+- **THEN** it exposes `status == 400`, it is NOT an instance of `ProviderError`, and an `except ProviderError` retry handler does not catch it (so it propagates without retry)

@@ -5,36 +5,73 @@ annotated `vX.Y.Z` tag — and nothing else. Everything between that tag and
 PyPI is automated by [`.github/workflows/release.yml`](https://github.com/ardada2468/beam-agents/blob/main/.github/workflows/release.yml),
 verified, and fails closed.
 
-## Pre-1.0 versioning policy
+## Versioning policy
 
-The project is versioned `0.MINOR.PATCH`. Plain semver leaves "what may break
-when" undefined before 1.0, so this is the rule:
+From `1.0.0` the project is versioned `MAJOR.MINOR.PATCH`, semver over a
+frozen public surface:
 
 | release | may contain                                                              |
 | ------- | ------------------------------------------------------------------------ |
-| `0.MINOR.0` | new features, and breaking changes to the compatibility surface — every break carries a `breaking` changelog entry naming the migration |
-| `0.x.PATCH` | defect fixes and documentation only; the compatibility surface does not change |
+| `MINOR` (`X.Y.0`) | new features and new deprecations; the removal of a name whose deprecation window has elapsed — every break carries a `breaking` changelog entry naming the migration |
+| `PATCH` (`X.Y.Z`) | defect fixes and documentation only; the compatibility surface does not change (machine-checked — see the fragment table below) |
 
-There is **no 1.0 API-stability commitment yet**. `0.x` deliberately promises
-less than a stable release: a MINOR bump is allowed to break you, as long as
-the changelog tells you how to migrate.
+The frozen surface is [`public-surface.toml`](https://github.com/ardada2468/beam-agents/blob/main/public-surface.toml):
+one entry per public module, holding the public top-level names it declares
+and its `__all__`. It is generated, never hand-edited, and
+`tests/test_public_surface.py` re-derives it from the sources on every
+`make test-unit` run and compares by exact equality in *both* directions — an
+unreviewed addition and an unreviewed removal both fail. Regenerating the
+snapshot is the API review: the diff must land in the same PR as the code
+that moved a name.
+
+**The deprecation window.** A frozen public name may not be removed or renamed
+without a window of **at least one minor release**:
+
+- During the window the old name MUST keep working and MUST emit a
+  `DeprecationWarning` naming the replacement (or stating there is none) and
+  the first release that may remove it.
+- The deprecated name is served from a module-level `__getattr__` calling
+  `beam_agents._deprecation.deprecated_attribute` — the PEP 562 pattern
+  `beam_agents/__init__.py` already uses for lazy adapter classes — which
+  keeps it out of the module namespace. Both edges of the window are therefore
+  `public-surface.toml` snapshot diffs: opening it removes a declared name
+  (reviewers check that the shim and the warning exist), and closing it one
+  minor later removes the shim. Neither can happen silently.
+- The removal release carries a `breaking` fragment naming the migration.
+
+The mechanics, with the shim code to copy, are in
+[`CONTRIBUTING.md`](https://github.com/ardada2468/beam-agents/blob/main/CONTRIBUTING.md).
+
+### The 0.x line (history)
+
+Before 1.0 the project was versioned `0.MINOR.PATCH` under a deliberately
+weaker rule: a `0.MINOR.0` release could break the compatibility surface
+without any deprecation window, as long as the break carried a `breaking`
+changelog entry naming the migration, and a `0.x.PATCH` release carried fixes
+and documentation only. That regime ended at `1.0.0`; it is recorded here
+because the `0.x` sections of `CHANGELOG.md` were written against it.
 
 ### The compatibility surface
 
 These, and only these, are under the policy:
 
-1. **The public API** — exactly what `beam_agents/__init__.py` re-exports
-   (`RunAgent`, `AgentConfig`, `RunAgentOutputs`, `HitlPolicy`, `Deny`, `Drop`,
-   `Escalate`, `FallbackContext`, the adapter classes). Everything else is
-   private.
+1. **The public API** — exactly the names `public-surface.toml` records, for
+   every public module. At the root that is the sixteen names
+   `beam_agents/__init__.py` re-exports: `AdkAgent`, `AgentConfig`, `Deny`,
+   `Drop`, `Escalate`, `FallbackContext`, `HitlPolicy`, `LangGraphAgent`,
+   `PydanticAIAgent`, `RunAgent`, `RunAgentOutputs`, `ShardKeys`,
+   `StreamAgent`, `shard_key`, `tool`, `unshard_key`. Everything
+   underscore-prefixed, and everything outside the snapshot, is private.
 2. **The wire and state protobuf schemas.** Changes are additive-only within a
    MINOR line. A `state_schema_version` bump is by definition MINOR-requiring:
    it ships with its lazy migration and a `breaking` entry in the same release,
    because an in-flight pipeline's `--update` compatibility depends on it.
 3. **The `beam-agents-effector` CLI** — its flags and its exit behaviour.
-4. **The published extras and the console-script name** — `effector`,
-   `langgraph`, `otlp`, `vllm`, and `beam-agents-effector`. Adding an extra is
-   `added`; renaming or removing one is `breaking`.
+4. **The published extras and the console-script names** — the nine extras
+   (`effector`, `langgraph`, `pydantic-ai`, `adk`, `otlp`, `vllm`,
+   `memory-stores`, `console`, `console-ingest`) and the three scripts
+   (`beam-agents-effector`, `beam-agents-replay`, `beam-agents-console`).
+   Adding an extra is `added`; renaming or removing one is `breaking`.
 5. **The supported Python range** (`requires-python`) and the supported-runner
    list (DirectRunner, Dataflow, Flink supported; Spark best-effort).
    Narrowing either is `breaking`.
@@ -92,21 +129,38 @@ Before opening the release PR:
       no required-check enforcement to inherit, so this is a human check.
 - [ ] No open latency-budget regression. The runtime overhead budget (p50
       < 15 ms, p99 < 60 ms per activation, excluding LLM and tool time) is a
-      release blocker. This is not yet machine-checked; it needs the bench
-      harness to produce a stable baseline number first.
+      release blocker, machine-checked twice over: `make bench-gate`
+      (`scripts/bench_gate.py`) enforces the absolute budget plus the
+      per-benchmark ratchet against `benchmark-baseline.toml` — seeded
+      2026-08-03 from scheduled nightly run 30806138398 (`ubuntu-latest`) —
+      and the release workflow itself refuses to publish without a recent
+      green `bench` run (see "What the tag triggers"). What remains a human
+      check is only that the *latest* nightly bench is the one you expect.
 - [ ] `changelog.d/` reads like release notes for a user, not a work log.
 
 The release PR:
 
 1. Bump `[project].version` in `pyproject.toml`.
-2. `uv lock` — then confirm `uv sync --locked` still succeeds.
-3. `make changelog VERSION=X.Y.Z` — assembles the pending fragments into a
+2. Sweep the version-coupled references — this exact gap has been rediscovered
+   at three consecutive milestones, so it is a checklist step, not tribal
+   knowledge. `grep -rn` for the outgoing version and update:
+   - `docs/yaml.md` — the `beam-agents==X.Y.Z` provider pins (test-guarded);
+   - `src/beam_agents/yaml/providers.yaml` and
+     `src/beam_agents/yaml/__init__.py` — the same pin in the provider
+     listing's comment and the module docstring;
+   - `docs/replay.md` — the version the transcript shows
+     `beam-agents-replay` printing (the CLI prints the installed
+     `importlib.metadata` version);
+   - `website/lib/site.ts` — `PACKAGE_VERSION`;
+   - `uv.lock` — handled by step 3, listed here so the sweep is complete.
+3. `uv lock` — then confirm `uv sync --locked` still succeeds.
+4. `make changelog VERSION=X.Y.Z` — assembles the pending fragments into a
    dated `CHANGELOG.md` section and deletes the fragments it consumed. Preview
    first with `make changelog-draft`, which writes nothing.
-4. `make build && uv run python scripts/check_wheel.py dist` locally if you
+5. `make build && uv run python scripts/check_wheel.py dist` locally if you
       want to eyeball the artifact. Local builds are for inspection only;
       nothing outside `release.yml` uploads.
-5. Open, review, squash-merge.
+6. Open, review, squash-merge.
 
 Then tag the squash-merge commit:
 
@@ -129,9 +183,18 @@ fully passes:
    and contains no test/docker/CI content) → the offline gate roster
    (`make lint type test-unit test-semantics-offline` plus the semantics-tier
    partition check) re-run on the exact tagged ref → upload `dist/`.
-2. **`publish`** (`environment: pypi`, `id-token: write`): download the
-   artifact, publish via PyPI **trusted publishing**, and create the GitHub
-   Release for the tag with that version's `CHANGELOG.md` section as its body.
+2. **`publish`** (`environment: pypi`, `id-token: write`): before publishing
+   anything, locate the most recent nightly run on `main` whose **`bench` job**
+   concluded green — read via the jobs API, not the run conclusion, since the
+   sibling `dataflow`/`smoke` jobs can be red independently — and download its
+   `benchmark-report` artifact. **No green bench run in the last 30 nightly
+   runs fails the release here**, before anything reaches PyPI: the latency
+   budget is a release blocker, and a green bench job is exactly a run
+   `scripts/bench_gate.py` passed against the seeded
+   `benchmark-baseline.toml`. Then download the build artifact, publish via
+   PyPI **trusted publishing**, and create the GitHub Release for the tag with
+   that version's `CHANGELOG.md` section as its body and `bench-report.md`
+   plus `bench-results.zip` attached.
 
 The docker-backed gates (the effectively-once e2e gate, the adapter conformance
 matrix's Flink leg) are deliberately not re-run here: they are required checks
@@ -173,7 +236,11 @@ python -c "import beam_agents; print(beam_agents.RunAgent)"
 beam-agents-effector --help
 ```
 
-…and repeat for each extra (`beam-agents[effector]`, `[langgraph]`, `[otlp]`).
+…and repeat for each of the nine extras (`beam-agents[effector]`,
+`[langgraph]`, `[pydantic-ai]`, `[adk]`, `[otlp]`, `[vllm]`,
+`[memory-stores]`, `[console]`, `[console-ingest]`), plus
+`beam-agents-replay --help` and `beam-agents-console --help` for the other
+two console scripts.
 
 ## If a release goes wrong
 

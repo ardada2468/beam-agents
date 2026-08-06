@@ -7,8 +7,9 @@ RunAgent(my_agent)`), not an agent-authoring framework. See
 governing principles.
 
 **Documentation:** <https://ardada2468.github.io/beam-agents/> — the rendered
-[`docs/`](docs/) tree plus three runnable, offline, FakeLLM-driven examples
-([`examples/`](examples/)), built strictly by the `docs` workflow. Build it
+[`docs/`](docs/) tree plus seven runnable example programs
+([`examples/`](examples/)), most of them offline and FakeLLM-driven, built
+strictly by the `docs` workflow. Build it
 locally with `make docs` or browse it live with `make docs-serve`.
 
 Documentation site: [`website/`](website/) — run it with `make site-dev`. Its

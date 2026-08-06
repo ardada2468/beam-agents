@@ -11,7 +11,7 @@
 # `beam_agents.yaml.PROVIDER_LISTING` is this file's path inside the installed
 # wheel. The `type: python` provider below carries no `packages:`, so Beam
 # resolves the constructor in the launch environment; add
-# `config: {packages: ["beam-agents==0.1.0"]}` to have Beam install beam-agents
+# `config: {packages: ["beam-agents==1.0.0"]}` to have Beam install beam-agents
 # into a managed environment instead (see docs/yaml.md).
 - type: python
   transforms:

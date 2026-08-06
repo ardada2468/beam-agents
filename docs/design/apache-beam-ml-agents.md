@@ -9,7 +9,7 @@ blocks the announcement, and the companion
 implementation is assumed; every term specific to it is defined at or before
 its first use.
 
-**Describes:** `beam-agents` 0.1.0 (the version of the implementation this
+**Describes:** `beam-agents` 1.0.0 (the version of the implementation this
 document distills; recorded so a reader can check the claims against a tag).
 
 **Asks of the community:** design feedback on the shape below; a sponsoring
@@ -469,16 +469,18 @@ The dev@ announcement is blocked on every box below.
       harness workload against its nearest reproducible Flink Agents
       equivalent, pinned versions, disclosed environment, full methodology
       including every dimension where the comparison is not like-for-like, and
-      **all** completed runs reported — including unfavorable ones. Pending:
-      0.3.0 has not shipped.
+      **all** completed runs reported — including unfavorable ones. The 0.3.0
+      release published the methodology; measured figures are still pending
+      the CI-hardware baseline.
 - [ ] **Conformance matrix results.** The scenarios × adapters × runner legs
       actually green at the release candidate, with the declared skip inventory
-      attached. Pending: to be captured from the 0.3.0 release run.
+      attached. Pending: to be captured from the next release run.
 - [ ] **Benchmark baseline seeded from CI hardware.** Required before any
-      overhead figure may be quoted anywhere in this document. Pending: the
-      baseline's medians table is deliberately empty.
-- [ ] **Design-partner usage.** Summarized from the 0.3.0 feedback triage, with
-      dispositions. Pending: 0.3.0 has not shipped.
+      overhead figure may be quoted anywhere in this document. The medians table
+      in `benchmark-baseline.toml` is now seeded; the figures quoted here must
+      come from the CI-hardware nightly run that gates against it.
+- [ ] **Design-partner usage.** Summarized from post-release feedback triage,
+      with dispositions. Pending: no triage summary exists yet.
 - [ ] **Final consistency pass.** Re-diff §6 and §8 against the implementation's
       constitution and update the version this document declares it describes.
 

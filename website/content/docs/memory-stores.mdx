@@ -1,0 +1,113 @@
+---
+title: Long-term memory stores
+summary: The durable MemoryStore tier behind working memory — Bigtable, Redis, Firestore, and SQL backends, seq-guarded upserts, and what retention still is not.
+status: partial
+order: 10
+verifies:
+  - symbol: beam_agents.memory.stores.MemoryStore
+  - symbol: beam_agents.memory.stores.InMemoryMemoryStore
+  - symbol: beam_agents.memory.LongtermMemory
+  - module: src/beam_agents/memory/stores/base.py
+  - module: src/beam_agents/memory/stores/bigtable.py
+  - module: src/beam_agents/memory/stores/firestore.py
+  - module: src/beam_agents/memory/stores/redis.py
+  - module: src/beam_agents/memory/stores/sql.py
+  - module: src/beam_agents/memory/compaction.py
+  - module: docs/memory.md
+  - spec: openspec/specs/memory-facade/spec.md
+  - spec: openspec/specs/memory-stores/spec.md
+  - spec: openspec/specs/memory-compaction/spec.md
+  - test: tests/memory/stores/test_inmemory.py
+  - test: tests/memory/stores/test_factory.py
+  - test: tests/memory/stores/test_sql.py
+  - test: tests/memory/test_facade_longterm.py
+  - test: tests/memory/test_compaction.py
+---
+
+beam-agents has two memory tiers, and they are separate on purpose: nothing is
+promoted, demoted, or hydrated between them automatically. Working memory is
+Beam keyed state, scoped to one key in one pipeline, capped at 1 MiB, and
+reclaimed by the TTL timer — that tier is
+[the state and memory page](/learn/state-and-memory). This page is the other
+tier: the durable `MemoryStore` behind `ctx.memory.longterm`, scoped to an
+entity and persistent across pipelines.
+
+## Enabling it
+
+The tier is off by default. It exists only when `AgentConfig.longterm_memory`
+carries a backend URI, validated at construction time without importing any
+client library:
+
+| URI | Backend |
+|---|---|
+| `memory://` | In-process reference store (tests, single-worker dev) |
+| `redis://<url>` | Redis — per-entity hash, Lua compare-and-set |
+| `bigtable://<project>/<instance>/<table>` | Bigtable — `CheckAndMutateRow` guard |
+| `firestore://<project>/<collection>` | Firestore — transactional guard |
+| anything else | A SQLAlchemy async URL (`postgresql+asyncpg://…`, `sqlite+aiosqlite://…`) |
+
+The client libraries ship in the `memory-stores` extra. Unset, no store is
+constructed, no external I/O happens, and `ctx.memory.longterm` raises an
+error naming the config field.
+
+## The API, and what it guarantees
+
+`ctx.memory.longterm` offers `load`, `save`, and `search`. `save` stages an
+upsert and performs no I/O — staged rows flush only after the agent returns
+successfully, and a flush failure fails the activation closed. `search` is a
+**key-prefix scan**: entity-scoped, ordered by key ascending, always bounded
+by `limit`, with prefix metacharacters treated literally. It is deliberately
+not vector or semantic search — retrieval strategy belongs to the agent
+framework, and embedding calls inside an activation have no
+replay-determinism story.
+
+Every backend passes one shared conformance suite
+(`tests/memory/stores/_conformance.py`): load-after-save round-trips the full
+record, a replayed flush converges on the byte-identical row, a stale `seq`
+can never regress a newer row, and prefix search returns ordered, bounded,
+entity-scoped results.
+
+## Why in-pipeline writes are allowed here
+
+[Correctness invariant 5](/learn/correctness-invariants) says external writes
+never execute inside the pipeline — with exactly one documented exception:
+*idempotent upserts to the long-term MemoryStore keyed by `(key, seq)`*. This
+tier is that exception, implemented, and it earns it with two mechanisms:
+staged writes that flush only on the commit tail, and a seq-guarded upsert
+(`>=` on the stored seq) enforced by each backend's own atomic primitive. A
+bundle that flushed and then failed to commit re-runs deterministically and
+re-flushes byte-identical rows. The retry-determinism gate
+(`tests/semantics/test_longterm_retry_determinism.py`) forces exactly that
+sequence and asserts it.
+
+The discipline that makes the window harmless is normative: a long-term write
+must be computed from replay-stable inputs, never conditioned on a
+same-activation long-term read of the same key. The full rule, with its
+do/don't pair, is in
+[`docs/memory.md`](https://github.com/ardada2468/beam-agents/blob/main/docs/memory.md).
+
+## Compaction
+
+Working memory's 1 MiB cap is enforced by a two-tier compaction scheme in
+`beam_agents.memory.compaction`: `DropOldestCompactor` (the default) evicts
+LRU entries synchronously inside a memory write, never calling a model;
+`SummarizeCompactor` (opt-in) folds a ring's older items into a summary entry
+inside the activation, through `ctx.call_model` only, so its model calls stay
+replay-cached. Keys under `protected_prefixes` — a suspended adapter's resume
+state — are never evicted.
+
+## Not yet implemented
+
+- **No runtime retention.** The runtime does not garbage-collect long-term
+  rows; growth is an operator concern, handled with each backend's native
+  mechanism (Bigtable `maxage`, Redis `EXPIRE`, Firestore TTL policies, a
+  scheduled SQL job). A portable runtime retention policy is deferred until a
+  deployment needs one.
+- **No vector or semantic search.** `search` is a key-prefix scan by design;
+  nothing embeds, ranks, or scores.
+
+## Related
+
+- [State and memory](/learn/state-and-memory) — the working tier.
+- [The memory-facade spec](/specs/memory-facade) — the facade contract.
+- [Install — the extras table](/learn/install) — the `memory-stores` extra.

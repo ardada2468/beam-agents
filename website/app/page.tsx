@@ -5,6 +5,7 @@ import { Example } from '@/components/Example';
 import { PipelineDiagram } from '@/components/PipelineDiagram';
 import {
   absoluteUrl,
+  IS_RELEASED,
   LICENSE,
   PACKAGE_VERSION,
   REPO_URL,
@@ -90,7 +91,7 @@ const BUILT = [
 ] as const;
 
 const NOT_BUILT = [
-  'Any published release — 1.0.0 is declared, but no tag has been pushed to PyPI',
+  'Any published release — 1.0.0 is declared, but no v1.0.0 tag exists and nothing is on PyPI',
   'A Vertex AI provider',
   'Spark beyond the weekly conformance leg — no per-PR job exercises it',
 ] as const;
@@ -129,8 +130,11 @@ export default function Home() {
           call to action are a second, and the widest gap on the page separates
           the two. */}
       <section className="shell band band--lead">
+        {/* `IS_RELEASED` is held to the real git-tag state by the verifier, so
+            this badge cannot claim a release before the tag exists. */}
         <p className="eyebrow">
-          Pre-release · v{PACKAGE_VERSION} · {LICENSE} · Python 3.11–3.12
+          v{PACKAGE_VERSION}
+          {IS_RELEASED ? '' : ' · pre-release, not yet on PyPI'} · {LICENSE} · Python 3.11–3.12
         </p>
 
         <h1 className="display mt-5 max-w-[15ch]">An agent is a Beam transform.</h1>

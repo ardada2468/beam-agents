@@ -116,6 +116,10 @@ jobs:
       id-token: write
       # contents: creating the GitHub Release for the tag.
       contents: write
+      # actions: `gh run list` / `gh run download` read the nightly bench
+      # job's conclusion and its `benchmark-report` artifact (same repo, so
+      # GITHUB_TOKEN carries this once granted).
+      actions: read
     steps:
       # Checkout FIRST: it cleans the workspace (including ignored paths), so
       # downloading dist/ before it would silently wipe the artifact.
@@ -125,6 +129,60 @@ jobs:
         with:
           name: distributions
           path: dist/
+
+      # The benchmark-harness contract: each release attaches the most recent
+      # *green* benchmark report, and there is no release without one — the
+      # runtime latency budget is a release blocker. "Green" means the nightly
+      # `bench` JOB concluded successfully, not the whole run: the dataflow and
+      # smoke tiers can be red for reasons that say nothing about latency, and
+      # nightly uploads the artifact `if: always()`, so neither the run's
+      # conclusion nor the artifact's mere existence is the right filter — the
+      # bench job's own conclusion is, read via the jobs API. This runs BEFORE
+      # the PyPI publish step so a missing report fails the release while
+      # nothing irreversible has happened (PyPI filenames are immutable).
+      - name: Locate the most recent green benchmark report
+        id: bench
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=""
+          for id in $(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow nightly.yml \
+              --branch main \
+              --limit 30 \
+              --json databaseId \
+              --jq '.[].databaseId'); do
+            conclusion="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "bench")][0].conclusion // empty')"
+            if [ "$conclusion" = "success" ]; then
+              run_id="$id"
+              break
+            fi
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::No nightly run on main (last 30 checked) has a green 'bench' job. The latency budget is a release blocker: produce a green bench run (workflow_dispatch nightly.yml) and re-run this job."
+            exit 1
+          fi
+          echo "Using benchmark report from nightly run ${run_id}"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+      # The artifact layout mirrors nightly's upload paths: bench-report.md at
+      # the root, the pyperf JSONs under bench-results/. The report attaches
+      # as-is; the JSONs are zipped so the release carries one raw-data asset,
+      # not one file per benchmark. `test -s` and `zip` both fail the job if
+      # the artifact does not have the shape nightly promises.
+      - name: Download the benchmark report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ steps.bench.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name benchmark-report \
+            --dir benchmark-report
+          test -s benchmark-report/bench-report.md
+          (cd benchmark-report && zip -r ../bench-results.zip bench-results)
 
       - name: Publish to PyPI (trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -155,7 +213,9 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes-file release-notes.md
+            --notes-file release-notes.md \
+            'benchmark-report/bench-report.md#Benchmark report (most recent green nightly bench)' \
+            'bench-results.zip#Benchmark raw results (pyperf JSON)'
 
   # Rehearsal target for `workflow_dispatch`. Same artifact, same verification,
   # a second trusted-publisher binding — so the OIDC exchange, the upload, and

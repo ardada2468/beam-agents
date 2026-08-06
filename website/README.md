@@ -11,10 +11,10 @@ make site-check    # every gate (needs Node *and* the uv environment)
 
 ## Why this is not an ordinary docs site
 
-The project is pre-release: `project.version` is `0.0.0`, nothing is published
-to PyPI, and `openspec/project.md` describes an architecture that is only
-partly built. A site written the usual way would present the intended design as
-shipped reality. So the content contract is enforced mechanically:
+The project is pre-release: `project.version` is `1.0.0` but no `v1.0.0` tag
+has been cut, so nothing is published to PyPI. A site written the usual way
+would present the declared version as a shipped release. So the content
+contract is enforced mechanically:
 
 | Rule                                                                             | Enforced by                                                  |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------ |

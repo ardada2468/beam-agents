@@ -323,14 +323,14 @@ See [Memory](memory.md).
 | --- | --- |
 | `HitlPolicy` | Suspension timeout, intent TTL, approval channel, and the route taken on timeout. |
 | `Route` | The routing function type: `FallbackContext -> Deny \| Drop \| Escalate`. |
-| `Deny` | Emit a denial payload downstream. |
-| `Drop` | Discard the timed-out suspension. |
-| `Escalate` | Route the timeout to `.errors`. |
+| `Deny` | Emit deterministic denial bytes on the main output and end the suspension. |
+| `Drop` | Emit nothing; record the timeout on `.errors` and end the suspension. |
+| `Escalate` | Stage a fresh approval intent on an escalation channel and extend the deadline. Bounded by `max_escalations`. |
 | `deny` | The default route: always `Deny`. |
 | `intent_expired` | Whether an intent's `expires_at` has passed, given a clock reading. |
 | `refuse_expired` | The effector-side guard: refuse an intent past its TTL (invariant 6, second layer). |
 | `HITL_TIMEOUT_OUTPUT` | The payload a default `Deny` emits: `b"__hitl_timeout__"`. |
-| `REASON_HITL_TIMEOUT` | The error reason an `Escalate` produces. |
+| `REASON_HITL_TIMEOUT` | The error reason a `Drop` (or a raising route function) records on `.errors`. |
 | `DEFAULT_HITL_TIMEOUT_MS` | Default suspension timeout. |
 | `DEFAULT_INTENT_TTL_MS` | Default intent TTL. |
 | `DEFAULT_APPROVAL_CHANNEL` | Default approval channel name. |
