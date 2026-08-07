@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from tests.dataflow._update.poll import JobStatus
+from tests.dataflow._update.poll import InfraFailure, JobStatus
 
 LOGGER = logging.getLogger("beam_agents.update_compat")
 
@@ -218,6 +218,50 @@ def guaranteed_teardown(
 # -- Pub/Sub --------------------------------------------------------------------
 
 
+#: The role granting the project-level Pub/Sub permissions both nightly gates
+#: need (create/delete per-run topics and subscriptions, publish, pull). Named
+#: in the failure message because the operator reads the message, not this file.
+PUBSUB_ROLE = "roles/pubsub.editor"
+
+
+def is_permission_denied(error: BaseException) -> bool:
+    """Is this a 403 from a Google client?
+
+    Recognized by the `code` attribute `google.api_core` puts on every
+    `GoogleAPICallError` rather than by importing the exception class: this
+    module is imported in the offline unit lane, where the GCP clients are not
+    installed, and an import there to classify an error would be a new way for
+    the lane to break.
+    """
+    return getattr(error, "code", None) == 403
+
+
+@contextlib.contextmanager
+def permission_errors_as_infra(operation: str, resource: str) -> Iterator[None]:
+    """Report a denied Pub/Sub call as the environment failure it is.
+
+    Both nightly gates provision per-run topics before they test anything, so an
+    unconfigured service account fails them at the first call — with a raw
+    `PermissionDenied` proto dump that reads like a product defect. `InfraFailure`
+    is the class the triage contract reserves for exactly this (see
+    `poll.py`): the run says nothing about compatibility or packaging, and the
+    fix is a grant, not a code change.
+    """
+    try:
+        yield
+    except Exception as exc:
+        if not is_permission_denied(exc):
+            raise
+        raise InfraFailure(
+            f"Pub/Sub denied {operation} for {resource} (403). The nightly service "
+            f"account is missing project-level Pub/Sub permissions: grant it "
+            f"{PUBSUB_ROLE} on the project (see docs/ci.md, 'What the nightly "
+            f"service account must be able to do'). This run says nothing about "
+            f"update compatibility or template packaging.\n"
+            f"  error: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 class PubSub:
     """The Pub/Sub calls the gate makes: provision, publish, pull, delete.
 
@@ -234,40 +278,47 @@ class PubSub:
         self._timeout_s = timeout_s
 
     def create_topic(self, name: str) -> None:
-        self._publisher.create_topic(request={"name": name}, timeout=self._timeout_s)
+        with permission_errors_as_infra("create topic", name):
+            self._publisher.create_topic(request={"name": name}, timeout=self._timeout_s)
 
     def create_subscription(self, name: str, topic: str) -> None:
-        self._subscriber.create_subscription(
-            request={"name": name, "topic": topic, "ack_deadline_seconds": 60},
-            timeout=self._timeout_s,
-        )
+        with permission_errors_as_infra("create subscription", name):
+            self._subscriber.create_subscription(
+                request={"name": name, "topic": topic, "ack_deadline_seconds": 60},
+                timeout=self._timeout_s,
+            )
 
     def delete_topic(self, name: str) -> None:
-        self._publisher.delete_topic(request={"topic": name}, timeout=self._timeout_s)
+        with permission_errors_as_infra("delete topic", name):
+            self._publisher.delete_topic(request={"topic": name}, timeout=self._timeout_s)
 
     def delete_subscription(self, name: str) -> None:
-        self._subscriber.delete_subscription(
-            request={"subscription": name}, timeout=self._timeout_s
-        )
+        with permission_errors_as_infra("delete subscription", name):
+            self._subscriber.delete_subscription(
+                request={"subscription": name}, timeout=self._timeout_s
+            )
 
     def publish(self, topic: str, data: bytes) -> None:
-        self._publisher.publish(topic, data).result(timeout=self._timeout_s)
+        with permission_errors_as_infra("publish to", topic):
+            self._publisher.publish(topic, data).result(timeout=self._timeout_s)
 
     def pull(self, subscription: str, *, max_messages: int = 100) -> list[bytes]:
         """One non-blocking-ish pull, acked. Callers poll under a deadline."""
-        response = self._subscriber.pull(
-            request={"subscription": subscription, "max_messages": max_messages},
-            timeout=self._timeout_s,
-        )
-        received = list(response.received_messages)
-        if received:
-            self._subscriber.acknowledge(
-                request={
-                    "subscription": subscription,
-                    "ack_ids": [message.ack_id for message in received],
-                },
+        with permission_errors_as_infra("pull from", subscription):
+            response = self._subscriber.pull(
+                request={"subscription": subscription, "max_messages": max_messages},
                 timeout=self._timeout_s,
             )
+        received = list(response.received_messages)
+        if received:
+            with permission_errors_as_infra("acknowledge on", subscription):
+                self._subscriber.acknowledge(
+                    request={
+                        "subscription": subscription,
+                        "ack_ids": [message.ack_id for message in received],
+                    },
+                    timeout=self._timeout_s,
+                )
         return [message.message.data for message in received]
 
 
