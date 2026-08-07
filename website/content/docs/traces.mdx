@@ -52,7 +52,6 @@ trace.
   desc="A trace is identified by the entity key and the activation sequence number. Its root is the activation span, which carries both the ACTIVATION_START and the ACTIVATION_END event because the two bracket one attempt and share a span id. Hanging under that root are the first attempt's child spans: LLM_CALL, one per model call whether it reached the provider or hit the replay cache; TOOL_CALL, one per inline read-only tool; INTENT_EMITTED, one per staged ToolIntent; and SUSPENDED, which records the deadline and the pending intent ids. The resume attempt gets its own activation span nested under the first attempt's, rather than starting a second trace, with its own children such as a further LLM_CALL made once the tool result arrives. The whole set is staged during the activation and emitted on the .traces PCollection at commit, from where AgentConfig.traces_to ships it to one sink: otlp:// over OTLP/HTTP, which is best-effort; or bigquery:// as flat rows, kafka:// as deterministic proto bytes, or pubsub:// as deterministic proto bytes, all three of which are lossless at-least-once. ACTIVATION_START alone is not exported over OTLP, because it shares its span id with ACTIVATION_END and OTLP names a span by trace id and span id."
   caption="Every child event's parent is the activation span of the attempt it happened in, and a resume's activation span is a child of the first attempt's — so one suspended-and-resumed activation is a single two-level trace. ACTIVATION_START stays off the OTLP wire because ACTIVATION_END carries strictly more on the same span id; both remain on .traces for every other consumer."
   viewBox="0 0 620 390"
-  minWidth={560}
 >
   <DgText x={16} y={26} variant="faint">ONE TRACE PER (ENTITY_KEY, SEQ)</DgText>
 
@@ -178,7 +177,6 @@ because the spans it staged are discarded along with its other effects.
   desc="One activation forks into two possible outcomes. If it commits, the span set it staged is emitted whole and the entire set reaches the .traces output. If it raises part-way through, the staged spans are discarded and never emitted; instead a FailureContext holding only position scalars — the step index, the name of the last staged event, and counts of staged intents and model calls — is built directly from the failure. That context produces two records: one ERROR event on .traces, and one activation_error dead letter on .errors. Nothing leaves the discarded box, because a failed activation's effects stay discarded even for telemetry."
   caption="The spans a failed activation staged go with everything else it staged, so a query counting LLM_CALL events is counting committed model calls only. Its single ERROR event is synthesized from position scalars — step index, last staged event name, counts — never from the rolled-back effects."
   viewBox="0 0 620 368"
-  minWidth={560}
 >
   <DgNode x={210} y={24} w={200} h={42} label="one activation" sub="TWO POSSIBLE OUTCOMES" />
   <DgEdge d="M310,66 V88" arrow={false} />

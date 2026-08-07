@@ -21,19 +21,18 @@ import { Diagram, DgEdge, DgNode, DgText } from '@/components/Diagram';
  * import: seven of these landed in the same batch, and every extra line in the
  * shared component map is a merge conflict someone has to resolve by hand.
  *
- * Geometry note that governs every number below: these render inside `.prose`,
- * which is capped at a 72ch measure — about 600 CSS pixels, at every viewport
- * from a laptop up. So both diagrams are authored 600 units wide and grow
- * downward. A wider `viewBox` would have scrolled sideways on a 27-inch
- * display, which reads as a mistake rather than as a deliberately large
- * drawing. They still scroll on a phone, which is the point of `minWidth`.
+ * Geometry note that governs every number below: a figure gets the full article
+ * column, which is about 660px on a laptop and wider still on a tablet, where
+ * the two side gutters are gone. So both diagrams are authored 600 units wide
+ * and grow downward. A wider `viewBox` would have scrolled sideways on a
+ * 27-inch display, which reads as a mistake rather than as a deliberately large
+ * drawing. They still scroll on a phone, and `Diagram` holds the floor at this
+ * width so the type never scales below the size it is drawn at.
  */
 
 const W = 600;
 const MARGIN = 14;
 const RIGHT = W - MARGIN;
-// Below this the drawing would scale text under ~10px, so it scrolls instead.
-const MIN_WIDTH = 580;
 
 /* -- diagram 1: what one key holds ----------------------------------------- */
 
@@ -153,7 +152,6 @@ export function StateCells() {
       }
       caption="Everything here is scoped to one entity key; Beam serializes activations per key, so no two of them contend for it. The two timers are the part worth staring at: both are decided in the same commit, and then measured against different clocks that nothing keeps in step."
       viewBox={`0 0 ${W} 578`}
-      minWidth={MIN_WIDTH}
     >
       <DgText x={MARGIN} y={18} variant="faint">
         FIVE STATE CELLS · ONE SET PER ENTITY KEY
@@ -238,7 +236,6 @@ export function StateWriteLifecycle() {
       }
       caption="Staged writes are not state. They become state at the commit, all at once, and a failed activation simply never gets there. The TTL wipe is the one path that destroys committed state, and it is unconditional — which is why it reports the suspension it destroyed on the way past."
       viewBox={`0 0 ${W} 598`}
-      minWidth={MIN_WIDTH}
     >
       <DgText x={MARGIN} y={18} variant="faint">
         WHILE ONE ACTIVATION RUNS

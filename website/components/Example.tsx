@@ -50,8 +50,14 @@ export async function Example({
   const href = repoFileUrl(`website/examples/${file}`);
   return (
     <figure className="dg-figure">
+      {/* Long lines scroll here, so the box is keyboard-reachable and named —
+          without a tabindex a reader who does not use a pointer has no way to
+          reach the end of a line that overflows on a phone. */}
       <div
         className="dg-scroll [&_pre]:border-0! [&_pre]:bg-transparent! [&_pre]:p-0! [&_pre]:text-[0.845rem]! [&_pre]:leading-[1.65]!"
+        tabIndex={0}
+        role="region"
+        aria-label={`Example source, ${file}${region ? ` (region: ${region})` : ''}`}
         data-example={file}
         data-lines={lines ? 'true' : undefined}
         dangerouslySetInnerHTML={{ __html: html }}

@@ -120,7 +120,6 @@ export function HitlApprovalSequence() {
       }
       caption="Time runs down, participants run across. Nothing is blocked during the wait — the activation ends and a Continuation in keyed state is all that survives it. The lower band is the fail-closed outcome, not a variation on the upper one."
       viewBox={`0 0 640 ${BOTTOM + 24}`}
-      minWidth={620}
     >
       {/* --- the time axis, so "down" is not left to inference --- */}
       <DgText x={2} y={LIFE_TOP + 8} anchor="start" variant="faint">

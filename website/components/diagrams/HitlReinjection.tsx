@@ -81,7 +81,6 @@ export function HitlReinjection() {
       }
       caption="One value, derived once from the activation's position, is what lets the outbox deduplicate and the resume find its continuation. Nothing in that derivation reads a clock, which is also why a caller can compute the id before the pipeline runs."
       viewBox="0 0 640 320"
-      minWidth={620}
     >
       {/* --- out: the intent leaves ------------------------------------------- */}
 

@@ -19,7 +19,9 @@ import type { ReactNode } from 'react';
  *    it has to carry the same information the picture does, not name it.
  * 3. **It scrolls rather than squashing.** A diagram scaled to 360px wide is
  *    unreadable, so wide ones scroll inside their own box and the page never
- *    scrolls sideways.
+ *    scrolls sideways. The floor is the `viewBox`'s own width — see
+ *    `legibleFloor` — so no caller can author a diagram into being shrunk
+ *    below the size its labels were drawn at.
  *
  * Geometry is authored against the `viewBox`, in the same coordinate space as
  * `PipelineDiagram`, and every colour comes from a design token (see
@@ -56,28 +58,51 @@ export interface DiagramProps {
   caption?: string;
   /** SVG user-space box the children are drawn in. */
   viewBox: string;
-  /**
-   * Smallest width the drawing stays legible at. Below this the figure
-   * scrolls. Defaults to a value that suits a single-row diagram.
-   */
-  minWidth?: number;
   children: ReactNode;
 }
 
-export function Diagram({ title, desc, caption, viewBox, minWidth = 620, children }: DiagramProps) {
+/**
+ * The width the drawing may never render below, in CSS pixels.
+ *
+ * It is the `viewBox`'s own width, so one user-space unit is at worst one CSS
+ * pixel and the labels are never smaller than the size they were authored at.
+ * This used to be a per-call-site prop, and almost every call site set it
+ * *below* its own `viewBox` width — 560 under a 620-wide box, 560 under a
+ * 640-wide one. That does not make a diagram fit; it silently rescales it, and
+ * the 9.5px qualifier labels were landing at 8.3–8.9px on a phone and, because
+ * the reading measure is narrower than these diagrams are wide, on a 1024px
+ * tablet too. Deriving the floor from the geometry means a diagram cannot be
+ * authored into that state.
+ *
+ * Above the floor the SVG still scales up with its column; below it the figure
+ * scrolls, which is what `.dg-scroll` is for.
+ */
+function legibleFloor(viewBox: string): number {
+  const width = Number(viewBox.trim().split(/[\s,]+/)[2]);
+  return Number.isFinite(width) && width > 0 ? width : 620;
+}
+
+export function Diagram({ title, desc, caption, viewBox, children }: DiagramProps) {
   const id = idFor(title);
   const titleId = `${id}-title`;
   const descId = `${id}-desc`;
 
   return (
     <figure className="dg-figure">
-      <div className="dg-scroll">
+      {/*
+        A region that scrolls has to be reachable by keyboard, so it takes a
+        tabindex and an accessible name — the same treatment `rehypeScrollable
+        Tables` gives a wide table. axe's `scrollable-region-focusable` rule
+        cannot see this one, because jsdom has no layout and so never observes
+        the overflow.
+      */}
+      <div className="dg-scroll" tabIndex={0} role="region" aria-label={`${title} (scrollable)`}>
         <svg
           viewBox={viewBox}
           role="img"
           aria-labelledby={`${titleId} ${descId}`}
           preserveAspectRatio="xMidYMid meet"
-          style={{ minWidth }}
+          style={{ minWidth: legibleFloor(viewBox) }}
         >
           <title id={titleId}>{title}</title>
           <desc id={descId}>{desc}</desc>

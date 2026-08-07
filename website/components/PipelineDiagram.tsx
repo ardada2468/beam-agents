@@ -64,7 +64,15 @@ export function PipelineDiagram() {
       </label>
 
       <figure className="pipeline mt-4">
-        <div className="pipe-scroll">
+        {/* Below ~880px this box scrolls, so it is focusable and named. A
+            reader on a phone — or on a keyboard — has to be able to reach the
+            four output rails on its right-hand side. */}
+        <div
+          className="pipe-scroll"
+          tabIndex={0}
+          role="region"
+          aria-label="Pipeline diagram (scrollable)"
+        >
           {/*
             The viewBox is cropped to the drawn content (x 32..937, y 71..368)
             plus ~10 units of margin, rather than the round 0 0 1000 400 it

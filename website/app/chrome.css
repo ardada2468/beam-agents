@@ -14,6 +14,69 @@
  * capped at 2px, which is the landing page's own limit.
  */
 
+/*
+ * The primary nav, as one row that scrolls rather than a block that wraps.
+ *
+ * Seven links wrapping freely is what made the sticky header four rows tall on
+ * a phone. As a rail it is always one row, and it bleeds out to the shell's
+ * content edge so the scroll runs margin to margin instead of stopping short
+ * inside the gutter — the same reverse-gutter trick `.rule-grid` uses.
+ *
+ * The right-hand edge fades while there is more to reach, using the
+ * `local`/`scroll` background pair from `diagram.css`: the scrollbar itself is
+ * hidden here, because a permanent 15px trough under the header is a heavier
+ * price than the affordance is worth, and the fade says the same thing.
+ *
+ * The vertical padding is not decoration — it is what makes each link a target
+ * a thumb can hit, and it is inside the scroll box so it costs the header no
+ * extra height.
+ */
+.nav-rail {
+  display: flex;
+  align-items: center;
+  gap: 0 1.25rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  margin-inline: calc(var(--gutter) * -1);
+  padding-inline: var(--gutter);
+  background:
+    linear-gradient(to left, var(--paper) 40%, transparent),
+    linear-gradient(to left, color-mix(in srgb, var(--ink) 14%, transparent), transparent 10px);
+  background-repeat: no-repeat;
+  background-size:
+    24px 100%,
+    10px 100%;
+  background-position: right center;
+  background-attachment: local, scroll;
+}
+
+.nav-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-rail > a {
+  padding-block: 0.4rem;
+}
+
+/* Once the row fits beside the wordmark it is an ordinary group of links. */
+@media (min-width: 48rem) {
+  .nav-rail {
+    flex-wrap: wrap;
+    /* Tightened from the narrow state's 1.25rem so the whole bar — wordmark,
+       seven links, and the controls — is one row from `lg` up with room to
+       spare, rather than flipping to two within a pixel of it. `--header-h`
+       switches on that same breakpoint and has to be able to trust it. */
+    gap: 0.25rem 1.05rem;
+    overflow-x: visible;
+    margin-inline: 0;
+    padding-inline: 0;
+    background: none;
+  }
+}
+
 /* The reading column. `.shell` is the full page width; this is the measure. */
 .shell-narrow {
   max-width: 54rem;
@@ -64,6 +127,88 @@
   border-top: 1px solid var(--rule);
   border-radius: 0;
   padding: 1.1rem 0 0;
+}
+
+/*
+ * A disclosure.
+ *
+ * The site's answer to a menu on the widths that cannot spare a gutter — see
+ * `components/CompactNav.tsx`. Built out of the same parts as everything else:
+ * a hairline box, an `.eyebrow` for the label, and no shadow. The marker is
+ * drawn as a rotating chevron rather than left as the platform triangle, which
+ * is the one piece of default browser chrome that would otherwise appear on
+ * this site.
+ */
+.disclosure {
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--paper);
+}
+
+.disclosure__summary {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  /* A comfortable target on a phone: the row is 44px tall at this padding. */
+  padding: 0.8rem 0.9rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure__summary::after {
+  content: '';
+  width: 0.42rem;
+  height: 0.42rem;
+  margin-inline-start: auto;
+  border-right: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+  transform: translateY(-0.12rem) rotate(45deg);
+  transition: transform 0.15s ease;
+}
+
+.disclosure[open] > .disclosure__summary::after {
+  transform: translateY(0.06rem) rotate(-135deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure__summary::after {
+    transition: none;
+  }
+}
+
+.disclosure__summary:hover {
+  background: var(--paper-2);
+}
+
+.disclosure__count {
+  font-size: 0.6875rem;
+  color: var(--ink-3);
+}
+
+.disclosure__body {
+  border-top: 1px solid var(--rule);
+  padding-block: 0.3rem;
+}
+
+.disclosure__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  /* 40px minimum, so two adjacent entries are not one target on a phone. */
+  padding: 0.55rem 0.9rem;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.disclosure__row:hover {
+  background: var(--paper-2);
+  text-decoration: none;
 }
 
 /*

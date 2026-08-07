@@ -66,7 +66,13 @@ export function Footer() {
               {SITE_TAGLINE}
             </p>
 
-            <dl className="mt-6 grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-6">
+            {/* The repository URL is one unbreakable token about 200px wide, and
+                the term column plus its gutter takes 112px of a 320px screen.
+                Left alone it pushed every page on the site three pixels wider
+                than the viewport. The term column narrows with the screen and
+                the value is allowed to break mid-token, which between them fit
+                it without hyphenating the version or the licence name. */}
+            <dl className="mt-6 grid grid-cols-[minmax(4rem,5.5rem)_minmax(0,1fr)] gap-x-4 sm:gap-x-6">
               {facts.map((fact) => (
                 <Fragment key={fact.term}>
                   <dt
@@ -77,7 +83,11 @@ export function Footer() {
                   </dt>
                   <dd
                     className="border-t py-2.5 text-[0.85rem] leading-5"
-                    style={{ borderColor: 'var(--rule)', color: 'var(--ink-2)' }}
+                    style={{
+                      borderColor: 'var(--rule)',
+                      color: 'var(--ink-2)',
+                      overflowWrap: 'anywhere',
+                    }}
                   >
                     {fact.value}
                   </dd>

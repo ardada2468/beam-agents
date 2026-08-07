@@ -47,7 +47,6 @@ the `effector` extra.
   desc="A horizontal rule separates the Beam pipeline above from everything outside it below. Above the rule, RunAgent suspends an activation and mints an intent_id that is uuid5-derived from the entity key, the sequence number, and the step index. The .intents output crosses the rule downward into an outbox topic keyed by entity_key. Below the rule, the effector — a separate service that imports no Beam — consumes the outbox, writes a claim on intent_id into a dedup store, invokes your side-effecting tool at most one dispatch per intent_id, and writes the terminal result back into that store before publishing to a results topic, also keyed by entity_key. A redelivery carrying the same intent_id goes to the dedup store rather than to the tool, and is collapsed there once the terminal result is durable. The published result crosses the rule back upward into the pipeline and resumes the suspended activation on the same key."
   caption="The effector runs on the far side of a process boundary, so the loop closes through the message bus rather than through the DAG. intent_id is uuid5-derived from entity_key, seq, and step_index — a pure function of the activation's position — so a replayed bundle re-mints the byte-identical id and the dedup store collapses the duplicate instead of executing it again."
   viewBox="0 0 620 604"
-  minWidth={620}
 >
   {/* --- above the rule: inside the pipeline --- */}
   <DgText x={20} y={26} variant="faint">IN THE PIPELINE</DgText>

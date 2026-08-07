@@ -42,7 +42,18 @@
   --s-traces: #3c5c78;
   --s-errors: #9e2a18;
 
-  --measure: 72ch;
+  /*
+   * The reading measure.
+   *
+   * Stated in `rem` rather than in `ch`, because `ch` is the width of a zero —
+   * a wide glyph in a proportional face — and 72 of them came to 792px, which
+   * sets 85 to 93 characters a line, not 72. That is well past the width a
+   * reader can return from one line to the next without losing the place, and
+   * it landed hardest on a tablet, where the article has the whole page to
+   * itself and nothing else was holding the text in. 42rem measures about 72
+   * characters in this face, which is what the name always claimed.
+   */
+  --measure: 42rem;
 
   /*
    * The page gutter, named because two things need to agree on it: `.shell`,
@@ -168,9 +179,31 @@
   --note-fg: #a9c8ee;
 }
 
+/*
+ * The sticky header's height, named because the page has to scroll clear of it.
+ *
+ * `scroll-padding-top` was a flat 5rem, which is the header's height only once
+ * the nav sits beside the wordmark. Below that the header is two rows, and
+ * every in-page anchor — every table-of-contents link, every heading someone
+ * arrives at from search — landed with its heading hidden underneath the bar.
+ * Deriving the offset from one declared height is what keeps the two from
+ * drifting apart again.
+ */
+:root {
+  /* Two rows: the wordmark and controls, then the nav rail. */
+  --header-h: 6.35rem;
+}
+
+/* One row, from the width the whole bar fits on one — see `.nav-rail`. */
+@media (min-width: 64rem) {
+  :root {
+    --header-h: 3.7rem;
+  }
+}
+
 html {
   scroll-behavior: smooth;
-  scroll-padding-top: 5rem;
+  scroll-padding-top: calc(var(--header-h) + 1rem);
   -webkit-text-size-adjust: 100%;
 }
 
@@ -258,9 +291,32 @@ a:hover {
   text-wrap: pretty;
 }
 
+/*
+ * Monospace runs.
+ *
+ * Everything set in this face on this site is a name with no spaces in it — an
+ * import path, a repository path, a code literal, a test id — and to a line
+ * breaker that is one unbreakable token. A token wider than the viewport does
+ * not merely overflow its own box: it sets the page's minimum width, so the
+ * whole document goes wider than the screen. `body` hides that overflow, which
+ * is worse than showing it, because the page then scrolls sideways by an amount
+ * nothing on screen explains. `/api/PydanticAIAgent` was 60px past a phone's
+ * viewport for exactly this reason, and the footer's repository URL put every
+ * page on the site three pixels over at 320px.
+ *
+ * `anywhere` rather than `break-word` is the operative choice: only `anywhere`
+ * shrinks the intrinsic minimum, which is the measurement that was pushing the
+ * page wide. There is no wrong place to wrap a dotted path, and the alternative
+ * is a sideways scroll on every page that names one.
+ *
+ * Somewhere a token has to stay whole — a table cell, a chip — the rule there
+ * is `white-space: nowrap`, which wins over this and lets its own container
+ * scroll instead.
+ */
 .mono {
   font-family: var(--font-mono);
   font-variant-ligatures: none;
+  overflow-wrap: anywhere;
 }
 
 /* Hairline rules do the dividing. No cards, no shadows. */
@@ -474,8 +530,31 @@ a:hover {
 
 /* --- Prose ----------------------------------------------------------------- */
 
+/*
+ * The measure belongs to the text, not to the column.
+ *
+ * `.prose` used to be capped at `--measure` itself, which meant a diagram, a
+ * wide table, or a long code line was boxed into 72 characters' worth of width
+ * no matter how much room the page had. On a tablet — where the two side
+ * gutters are gone and the article has the whole shell to itself — the figures
+ * were still being squeezed into a laptop's reading column and then scaled
+ * down below the size they were drawn at.
+ *
+ * So the cap moves to the children that are prose, and the blocks that carry
+ * their own geometry take the column they are actually given. Paragraph
+ * measure is unchanged; everything that was being squeezed stops being
+ * squeezed.
+ */
 .prose {
+  max-width: none;
+}
+
+.prose > * {
   max-width: var(--measure);
+}
+
+.prose > :is(.dg-figure, .table-scroll, .pipe-pause-scope, pre) {
+  max-width: none;
 }
 
 .prose > * + * {
@@ -573,10 +652,40 @@ a:hover {
  * so `.prose > table` has to carry both itself — hence the `display: block`,
  * which is what lets a table scroll at all.
  */
+/*
+ * A wide table scrolls in its own box, with the same edge affordance the
+ * figures use (see `.dg-scroll` in `diagram.css` for how the gradient pair
+ * works). On a phone a reference table is almost always wider than the screen,
+ * and nothing else on the page says so.
+ */
 .table-scroll {
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   border: 1px solid var(--rule);
   border-radius: 3px;
+  background:
+    linear-gradient(to right, var(--paper) 30%, transparent),
+    linear-gradient(to left, var(--paper) 30%, transparent),
+    linear-gradient(to right, color-mix(in srgb, var(--ink) 12%, transparent), transparent 12px),
+    linear-gradient(to left, color-mix(in srgb, var(--ink) 12%, transparent), transparent 12px);
+  background-color: var(--paper);
+  background-repeat: no-repeat;
+  background-size:
+    28px 100%,
+    28px 100%,
+    12px 100%,
+    12px 100%;
+  background-position:
+    left center,
+    right center,
+    left center,
+    right center;
+  background-attachment: local, local, scroll, scroll;
+}
+
+.table-scroll:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
 }
 
 .prose table {

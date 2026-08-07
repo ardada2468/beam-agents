@@ -15,12 +15,52 @@
   margin: 1.6rem 0;
 }
 
+/*
+ * The scrolling frame.
+ *
+ * The inline padding is the diagram's own margin, and on a narrow screen it is
+ * width the drawing does not have to spare — every pixel spent here is a pixel
+ * the reader has to swipe back. It tightens to a hairline's worth on a phone
+ * and relaxes to the drawn value once there is room.
+ *
+ * The two gradients are a scroll affordance that costs no JavaScript. The pair
+ * pinned with `background-attachment: local` scrolls with the content and so
+ * covers the shadow beneath it exactly when there is nothing more to see in
+ * that direction; the `scroll`-attached pair stays put. The net effect is a
+ * soft edge on whichever side has content off-screen, and none on a diagram
+ * that fits — which is the only honest way to say "there is more this way"
+ * without measuring anything.
+ */
 .dg-scroll {
   overflow-x: auto;
   overscroll-behavior-x: contain;
   border: 1px solid var(--rule);
-  background: var(--paper);
-  padding: 0.9rem 1rem;
+  background:
+    linear-gradient(to right, var(--paper) 30%, transparent),
+    linear-gradient(to left, var(--paper) 30%, transparent),
+    linear-gradient(to right, color-mix(in srgb, var(--ink) 12%, transparent), transparent 12px),
+    linear-gradient(to left, color-mix(in srgb, var(--ink) 12%, transparent), transparent 12px);
+  background-color: var(--paper);
+  background-repeat: no-repeat;
+  background-size:
+    28px 100%,
+    28px 100%,
+    12px 100%,
+    12px 100%;
+  background-position:
+    left center,
+    right center,
+    left center,
+    right center;
+  background-attachment: local, local, scroll, scroll;
+  padding: 0.9rem clamp(0.5rem, 2.5vw, 1rem);
+}
+
+/* The focus ring belongs to the whole frame, not to a rounded inset of it. */
+.dg-scroll:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+  border-radius: 0;
 }
 
 .dg-figure svg {
@@ -35,6 +75,10 @@
   line-height: 1.45;
   color: var(--ink-3);
   max-width: 62ch;
+  /* A repository path is one unbreakable token, and these captions are mostly
+     provenance links. Left alone it sets the figure's minimum width and pushes
+     the page wider than a 320px screen. */
+  overflow-wrap: anywhere;
 }
 
 /* --- geometry -------------------------------------------------------------- */

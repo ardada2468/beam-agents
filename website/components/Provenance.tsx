@@ -43,11 +43,19 @@ export function Provenance({
 }) {
   if (verifies.length === 0 && sources.length === 0) return null;
 
+  // Every string in this block is machine-checked text rather than authored
+  // prose — symbol paths, test ids, URLs, and citation claims that quote an API
+  // call verbatim. Those arrive as single unbreakable tokens of up to ninety
+  // characters, and one of them is enough to set the page's minimum width and
+  // drag the whole document past a 320px viewport, which is what
+  // `/comparison/flink-agents` was doing. `anywhere` rather than `break-word`,
+  // because only `anywhere` lowers the intrinsic minimum that the grid track is
+  // sized from.
   return (
     <section
       aria-labelledby="provenance"
       className="panel--flush mt-14"
-      style={{ maxWidth: 'var(--measure)' }}
+      style={{ maxWidth: 'var(--measure)', overflowWrap: 'anywhere' }}
     >
       <h2 id="provenance" className="eyebrow">
         What backs this page

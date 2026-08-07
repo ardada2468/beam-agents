@@ -74,7 +74,6 @@ to install.
   desc="Three tiers. The authoring tier holds four ways to write an agent: LangGraph, a plain async function matching the reference protocol, Google ADK, and Pydantic AI. The adapter tier holds three boxes: LangGraphAgent, which supplies the per-activation checkpointer and the tool node; AdkAgent, which supplies the per-key session service and the tool shims; and PydanticAIAgent, which supplies the runtime toolset and message history. The plain async function passes straight down past this tier, needing no adapter. The runtime tier is a single bar, the RunAgent transform, which gives keyed state, the replay cache, intents and per-key ordering to everything above it."
   caption="Only the adapter tier is framework-specific. Whatever reaches RunAgent gets the same keyed state, replay cache and intent path — and every registered adapter is held to the same seven lifecycle scenarios before it can claim that."
   viewBox="0 0 600 316"
-  minWidth={592}
 >
   {/* Tier names are faint labels above each band rather than headings, so the
       three tiers read as one drawing and not as three sections. */}

@@ -15,9 +15,19 @@ import { SearchBox } from './SearchBox';
  * because a header that floated over the content would be the one card on the
  * site.
  *
- * It wraps rather than collapsing into a menu below `sm`: every section stays
- * reachable with no JavaScript, which is the same constraint
- * `scripts/check_site_ssr.mjs` holds the rest of the site to.
+ * It never collapses into a menu: every section stays reachable with no
+ * JavaScript, which is the same constraint `scripts/check_site_ssr.mjs` holds
+ * the rest of the site to.
+ *
+ * How it survives a narrow screen is the whole of the layout below. Wrapping
+ * the seven nav links freely, which is what it used to do, made the header four
+ * rows and 153px tall at 320px — and it is sticky, so that was a fifth of a
+ * phone's viewport permanently spent on chrome, with the in-page anchor offset
+ * (`--header-h` in `globals.css`) 70px short of the truth. Instead the links
+ * become one horizontally scrollable rail on its own row, which is a fixed two
+ * rows however many sections there are, and the header settles at 93px. The
+ * order utilities are what put that rail last on a narrow screen and back in
+ * the middle on a wide one, from one source order.
  *
  * `<header>` and `<nav aria-label="Main">` are the page's banner and primary
  * navigation landmarks, and `app/layout.tsx`'s skip link jumps past them to
@@ -29,7 +39,7 @@ export function Header() {
       className="sticky top-0 z-20 border-b"
       style={{ borderColor: 'var(--rule)', background: 'var(--paper)' }}
     >
-      <div className="shell flex min-h-[3.5rem] flex-wrap items-center gap-x-7 gap-y-2.5 py-2.5">
+      <div className="shell flex min-h-[3.5rem] flex-wrap items-center gap-x-4 gap-y-1.5 py-2.5 sm:gap-x-6">
         <Link
           href="/"
           className="mono text-[0.95rem] font-medium tracking-tight no-underline"
@@ -38,10 +48,7 @@ export function Header() {
           {SITE_NAME}
         </Link>
 
-        <nav
-          aria-label="Main"
-          className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[0.9rem]"
-        >
+        <nav aria-label="Main" className="nav-rail order-3 w-full md:order-none md:w-auto">
           {SECTIONS.filter((section) => section.inNav).map((section) => (
             <Link
               key={section.slug}
@@ -57,11 +64,19 @@ export function Header() {
           </Link>
         </nav>
 
-        <div className="ml-auto flex items-center gap-4">
+        {/* Below `sm` this group takes the rest of the first row rather than a
+            fixed width, and the search field inside it flexes to fill what is
+            left. Sized fixed, the wordmark and a 144px field did not fit a
+            320px screen together, and the group dropped to a row of its own —
+            a third row, on the one width that can least afford it. */}
+        <div className="order-2 ml-auto flex min-w-0 flex-1 items-center gap-3 sm:flex-none sm:gap-4 md:order-4">
           <SearchBox />
+          {/* The repository is linked from the hero and from every page's
+              footer. On a phone the header has three controls' worth of room
+              and search and the theme are the two that are only here. */}
           <a
             href={REPO_URL}
-            className="text-[0.9rem] whitespace-nowrap no-underline"
+            className="hidden text-[0.9rem] whitespace-nowrap no-underline sm:inline"
             style={{ color: 'var(--ink-2)' }}
           >
             GitHub

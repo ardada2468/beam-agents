@@ -71,7 +71,6 @@ An activation is one execution of the agent, for one key, inside one
   desc="One pre-keyed element — a key and an AgentEnvelope — and the keyed state for that key, holding working memory, the LLM replay cache, any continuation and seq, are read into an AgentContext, which is the only surface the agent touches: memory, the model, read-only tools, act() for side effects and emit() for outputs. The agent runs against that context and returns an Outcome, either Complete or Suspend. Four named outputs leave: .output for terminal agent outputs, .intents for side-effect requests, .traces for observability records and .errors for dead letters. Everything the activation staged is written back to keyed state in one step, atomically with the Beam bundle; a dead letter on .errors means no outcome was produced and nothing was committed."
   caption="One key, one element, one process() call. State is read once at the top and written once at the bottom — the agent itself never touches Beam state, and the four outputs are the only things that leave."
   viewBox="0 0 640 412"
-  minWidth={560}
 >
   <DgNode x={16} y={26} w={280} h={46} label="KV[key, AgentEnvelope]" sub="ONE ELEMENT, ONE KEY" />
   <DgNode

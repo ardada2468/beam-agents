@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { allPages, findPage, isIndexable } from '@/lib/content';
 import { renderMdx } from '@/lib/mdx';
 import { absoluteUrl, SITE_NAME } from '@/lib/site';
+import { CompactNav } from '@/components/CompactNav';
 import { Sidebar } from '@/components/Sidebar';
 import { hasTableOfContents, TableOfContents } from '@/components/TableOfContents';
 import { StatusBadge } from '@/components/StatusBadge';
@@ -59,6 +60,14 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
  * contents, so the reading measure does not jump between pages; only the
  * gutter's contents and its hairline come and go with it.
  *
+ * Three columns need about 1280px to be worth having. Below that they come off
+ * one at a time rather than both at once: the contents gutter goes at `xl` and
+ * the section gutter at `lg`, which gives the article the whole of a tablet's
+ * width instead of leaving it in a laptop-sized reading column with two empty
+ * gutters beside it. Whichever gutter is gone reappears as a collapsed
+ * disclosure above the article, so no width loses the navigation entirely —
+ * see `CompactNav`.
+ *
  * The header deliberately carries no bottom rule. The first `.prose h2` already
  * draws one, so adding a second here would stack two rules a few lines apart.
  */
@@ -85,9 +94,9 @@ export default async function ContentPage({ params }: { params: Promise<Params> 
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
 
-      <div className="grid gap-x-8 gap-y-10 py-10 sm:py-12 lg:grid-cols-[14rem_minmax(0,1fr)_13rem]">
+      <div className="grid gap-x-8 gap-y-10 py-10 sm:py-12 lg:grid-cols-[13rem_minmax(0,1fr)] xl:grid-cols-[14rem_minmax(0,1fr)_12rem] xl:gap-x-7">
         <aside
-          className="hidden lg:block lg:border-r lg:pr-8"
+          className="hidden lg:block lg:border-r lg:pr-8 xl:pr-7"
           style={{ borderColor: 'var(--rule)' }}
         >
           <div className="sticky top-20">
@@ -120,13 +129,15 @@ export default async function ContentPage({ params }: { params: Promise<Params> 
             </p>
           </header>
 
+          <CompactNav sectionSlug={section} current={slug} headings={page.headings} />
+
           <div className="prose">{body}</div>
           <Provenance verifies={page.frontmatter.verifies} sources={page.frontmatter.sources} />
         </article>
 
         {hasTableOfContents(page.headings) ? (
           <aside
-            className="hidden lg:block lg:border-l lg:pl-8"
+            className="hidden xl:block xl:border-l xl:pl-7"
             style={{ borderColor: 'var(--rule)' }}
           >
             <div className="sticky top-20">

@@ -41,15 +41,54 @@
   position: relative;
 }
 
+/*
+ * The same scrolling frame the static diagrams use, for the same reason: 820
+ * units of topology do not fit a phone, and scaling them to fit puts the 9.5px
+ * qualifier labels at four pixels. The edge shadows are the `local`/`scroll`
+ * background pair from `diagram.css` — they appear only on the side that has
+ * content off-screen, so a desktop reader who sees the whole diagram sees no
+ * decoration at all.
+ */
 .pipe-scroll {
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  background:
+    linear-gradient(to right, var(--paper) 30%, transparent),
+    linear-gradient(to left, var(--paper) 30%, transparent),
+    linear-gradient(to right, color-mix(in srgb, var(--ink) 12%, transparent), transparent 12px),
+    linear-gradient(to left, color-mix(in srgb, var(--ink) 12%, transparent), transparent 12px);
+  background-color: var(--paper);
+  background-repeat: no-repeat;
+  background-size:
+    28px 100%,
+    28px 100%,
+    12px 100%,
+    12px 100%;
+  background-position:
+    left center,
+    right center,
+    left center,
+    right center;
+  background-attachment: local, local, scroll, scroll;
 }
 
+.pipe-scroll:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/*
+ * The floor is the viewBox's own width, so the drawing is never scaled below
+ * the size it was authored at — the same rule `Diagram` derives for the static
+ * figures. At the old 820px it was rendering at 0.89, which put the 9.5px
+ * qualifier labels ("FLATTEN", "DEDUP BY INTENT_ID") at 8.4px on a phone, on a
+ * tablet, and on a 1024px laptop alike. Above the floor it scales up with the
+ * page as before.
+ */
 .pipeline svg {
   display: block;
   width: 100%;
-  min-width: 820px;
+  min-width: 926px;
   height: auto;
 }
 

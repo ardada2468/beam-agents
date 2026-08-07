@@ -53,7 +53,6 @@ specific failures it has, and when they matter enough to justify a pipeline.
   desc="Two stacked panels. Beside the runtime: a queue that redelivers on failure feeds a worker process holding the agent and its framework, and the worker forks into a state store that commits separately and an external API where the effect runs. A rectangle labelled retry boundary encloses all three, so a redelivery re-runs the worker, the state write and the API call. Inside the runtime: events feed the RunAgent transform, which stages every effect and forks into keyed state that commits with the bundle and an intents output. A rectangle labelled retry boundary encloses the transform and its keyed state only. The intents output leaves that rectangle to an outbox topic that deduplicates by intent id, and then to an effector — a separate service, outside the boundary, where the effect runs. Its result re-enters on the same key."
   caption="Same work, same shape, one difference: in the upper panel the retry boundary contains the external effect, and in the lower one the effect is the single thing left outside it."
   viewBox="0 0 600 852"
-  minWidth={592}
 >
   {/* ---- panel A: the framework beside the runtime ---- */}
   <DgText x={16} y={26} variant="title">Beside the runtime</DgText>

@@ -63,7 +63,6 @@ conformance cell a declared skip, so nothing on it actually executes.
   desc="Three bands. The first holds what is identical on every runner: your agent, the RunAgent transform, keyed state held as protobuf, and intent ids derived from key, seq and step index. It feeds the second band, what the runner must supply in return: a stateful DoFn over KV input, both event-time and processing-time timers, and bundle retry semantics matching the ones the guarantees are stated against. That feeds the third band, the three supported runners, each labelled with the evidence behind it: DirectRunner by the unit tier and the conformance matrix on every pull request, Flink by a Dockerised mini-cluster on every pull request, and Dataflow against the real service nightly. Spark is drawn below that group, unconnected, because although a weekly leg stands up the Spark stack, every conformance scenario on it is currently a declared skip and none executes."
   caption="The group is the supported set, and each row names what backs it. Spark sits outside the group and has no connector. A weekly leg runs against a real Spark stack, but a recorded Beam Spark portable-runner gap — no bundle checkpoint handler for the streaming ingest source — leaves every conformance cell a declared skip, so Spark is drawn as an unverified target rather than a fourth supported one."
   viewBox="0 0 600 664"
-  minWidth={592}
 >
   {/*
     The two band containers are grouping strokes, not nodes — a closed path on

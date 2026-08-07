@@ -27,8 +27,9 @@ nothing.
   wrong.
 
   Geometry note for anyone editing this: the coordinate space is 620 units
-  wide on purpose. The prose column on this site is ~630px, so a 620-wide
-  viewBox renders at roughly 1:1 and the 11px labels stay 11px. Authoring
+  wide on purpose. A figure gets the full article column, which clears 620px
+  from a tablet up, so a 620-wide viewBox renders at roughly 1:1 and the 11px
+  labels stay 11px. Authoring
   against a 1000-wide box (as the landing-page diagram does, in a much wider
   container) scales the type down to seven-ish pixels and forces a sideways
   scroll on a desktop, which is exactly the failure this component exists to
@@ -40,7 +41,6 @@ nothing.
   desc="Two activations in the same Beam bundle. In the first, an AgentEnvelope for key k enters RunAgent, the activation fails, and the atomic commit writes nothing: no working-memory write, no .intents element, and no .output element. A single dead letter leaves on .errors instead — routed, not raised as a bundle failure. In the second, an AgentEnvelope for key j runs in the same bundle, its commit goes through, and it writes state and emits .output as usual. The failure of the first key neither fails the bundle nor affects the second."
   caption="An element-level failure is routed, not raised. The activation for key k commits nothing — no memory write, no intent, no output — and the record on .errors is the only trace that the key was touched at all. The bundle is not failed, so every other key in it commits as usual."
   viewBox="0 0 620 448"
-  minWidth={620}
 >
   {/* The bundle bracket. Everything inside it commits, or does not, together. */}
   <DgEdge d="M30,42 H14 V430 H30" arrow={false} />
@@ -112,7 +112,6 @@ nothing.
   desc="One record on the errors topic is a key-value pair. The key is the failing entity_key, so one key's dead letters keep their order through a single partition; the value is a serialized AgentEnvelope. That envelope carries three fields: entity_key, the failing key; event_time_ms, the record's event time; and external_event, which holds a serialized ActivationErrorRecord. The nested record carries four fields of its own: entity_key, again the failing key; reason, one of the reasons listed below; detail, free-form context for the reason; and event_time_ms, which is the element's event time or a timer's scheduled firing time, never a wall clock."
   caption="The value on the errors topic is an AgentEnvelope whose external_event holds the serialized ActivationErrorRecord. That wrapping is what lets the errors topic be keyed by entity_key and fed straight into another RunAgent with no adapter."
   viewBox="0 0 620 460"
-  minWidth={620}
 >
   {/* The message as it sits on the topic: a key and a value, key first. */}
   <DgText x={18} y={22} variant="faint">ONE RECORD ON THE ERRORS TOPIC</DgText>

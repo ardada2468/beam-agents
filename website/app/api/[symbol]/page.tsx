@@ -61,6 +61,10 @@ export default async function SymbolPage({ params }: { params: Promise<Params> }
           {symbol.name}
         </h1>
 
+        {/* The qualname is the longest single token on the site —
+            `beam_agents.adapters.pydantic_ai.agent.PydanticAIAgent` sets about
+            430px — and `.mono` is what lets it wrap instead of dragging the
+            document past the viewport. */}
         <p className="mono mt-3 text-[0.82rem]" style={{ color: 'var(--ink-3)' }}>
           {symbol.qualname}
         </p>

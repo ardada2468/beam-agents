@@ -168,6 +168,31 @@ input,
   color: var(--ink);
 }
 
+/*
+ * The reading measure.
+ *
+ * Material puts no upper bound on a paragraph, so body text takes whatever the
+ * content column happens to be. On a tablet — where the two sidebars are gone
+ * and the article has the page to itself — that ran to 95 to 103 characters a
+ * line, far past the width a reader can return from one line to the next
+ * without losing the place. The cap goes on the prose children rather than on
+ * `.md-typeset` itself, because the things that are not prose — a figure, a
+ * table, a code block, an admonition — should keep the whole column. That
+ * split is what lets the column widen (see `.md-grid` below) to give the
+ * diagrams room without lengthening a single line of text.
+ *
+ * 30rem is about 72 characters in this face, at every root size Material
+ * steps through.
+ *
+ * Headings are left out on purpose. An `h2` here carries the rule that divides
+ * one section from the next, and a section contains its figures — so the rule
+ * has to run the width of the column, not the width of the prose, or it stops
+ * short of every diagram beneath it.
+ */
+.md-typeset > :is(p, ul, ol, dl, blockquote) {
+  max-width: 30rem;
+}
+
 .md-typeset h1 {
   font-size: 2.42em;
   line-height: 1.06;
@@ -494,6 +519,18 @@ input,
 }
 
 /* ------------------------------------------------------------- content -- */
+
+/*
+ * Material's page grid is 61rem, which leaves the article about 34rem once the
+ * two sidebars are out — narrower than any of this site's diagrams are drawn,
+ * so every one of them was being scaled down on the widest screens as well as
+ * the narrowest. Widening it to 66rem gives the article about 37rem, which
+ * clears the drawings, and costs the prose nothing because the measure above
+ * holds the text where it was.
+ */
+.md-grid {
+  max-width: 66rem;
+}
 
 .md-content__inner {
   margin-bottom: 3rem;
@@ -962,6 +999,12 @@ input,
  * ordinary italic markdown paragraph for the caption. Markdown wraps the SVG in
  * a `<p>` of its own, which is the hook — this gives the pair the same frame
  * and the same caption type as `figure.diagram`, with no markup they can't use.
+ *
+ * The scrolling is part of that frame, and it was the part these two were
+ * missing. Without it their `width: 100%` was taken literally on a phone: a
+ * 720-unit drawing rendered into 316px, a scale of 0.44, which put the 9.5px
+ * qualifier labels at four pixels. They now scroll at the same floor as every
+ * other diagram instead.
  */
 .md-typeset p:has(> svg[role="img"]) {
   border: 1px solid var(--rule);
@@ -969,6 +1012,8 @@ input,
   background: var(--paper);
   padding: 0.9rem 1rem;
   margin: 1.7em 0 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .md-typeset p:has(> svg[role="img"]) + p:has(> em:only-child) {
@@ -989,8 +1034,50 @@ input,
   overscroll-behavior-x: contain;
 }
 
-.md-typeset .diagram-scroll > svg {
-  min-width: 34rem;
+/*
+ * The floor, and it has to clear the widest drawing on the site.
+ *
+ * At 34rem it did not: the diagrams under docs/ are authored 682 to 752 units
+ * wide, and 34rem is 680px, so every one of them rendered somewhere between
+ * 0.90 and 0.94 — on a desktop as much as on a phone, because the article
+ * column is the same 34rem at both. The 11px labels came out at 9px and the
+ * 9.5px qualifiers under them at 8.6px. 36rem clears all but the widest, which
+ * lands at 0.96, and with the grid widened above nothing scrolls on a desktop
+ * to pay for it.
+ */
+.md-typeset .diagram-scroll > svg,
+.md-typeset p:has(> svg[role="img"]) > svg {
+  min-width: 36rem;
+}
+
+/*
+ * A scroll affordance that costs no JavaScript: the pair pinned with
+ * `background-attachment: local` scrolls with the drawing and covers the
+ * shadow beneath it exactly when there is nothing more to see that way, so a
+ * soft edge appears only on the side that has diagram off-screen. This is the
+ * same construction as `website/app/diagram.css`, deliberately.
+ */
+.md-typeset .diagram-scroll,
+.md-typeset p:has(> svg[role="img"]),
+.md-typeset__table {
+  background:
+    linear-gradient(to right, var(--paper) 30%, transparent),
+    linear-gradient(to left, var(--paper) 30%, transparent),
+    linear-gradient(to right, color-mix(in srgb, var(--ink) 12%, transparent), transparent 12px),
+    linear-gradient(to left, color-mix(in srgb, var(--ink) 12%, transparent), transparent 12px);
+  background-color: var(--paper);
+  background-repeat: no-repeat;
+  background-size:
+    28px 100%,
+    28px 100%,
+    12px 100%,
+    12px 100%;
+  background-position:
+    left center,
+    right center,
+    left center,
+    right center;
+  background-attachment: local, local, scroll, scroll;
 }
 
 /* ------------------------------------------------------------- footer --- */

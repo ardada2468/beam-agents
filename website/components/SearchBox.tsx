@@ -58,7 +58,9 @@ export function SearchBox() {
       action="/search"
       method="get"
       role="search"
-      className="relative"
+      // Below `sm` the field takes what the header row has left; above it, a
+      // fixed measure, so the wordmark and nav do not shift as it grows.
+      className="relative min-w-0 flex-1 sm:flex-none"
       onSubmit={() => setOpen(false)}
     >
       <label htmlFor={listId} className="sr-only">
@@ -88,7 +90,7 @@ export function SearchBox() {
           }
         }}
         onChange={(event) => setQuery(event.target.value)}
-        className="field w-36 sm:w-48"
+        className="field w-full sm:w-48"
       />
       {open && results.length > 0 ? (
         // Two positionings, because the field sits in a different place at each

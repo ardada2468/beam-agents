@@ -146,7 +146,6 @@ export function HitlFailClosed() {
       }
       caption="Two guards in two processes, not one mechanism described twice. Layer 1 decides whether a suspension may resume; layer 2 decides whether an effect may happen at all. A late answer has to get past both, and gets past neither."
       viewBox="0 0 640 360"
-      minWidth={620}
     >
       <Layer
         y={LAYER1_Y}

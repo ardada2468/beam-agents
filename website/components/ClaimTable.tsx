@@ -85,7 +85,16 @@ export function ClaimTable({
 }) {
   return (
     <figure className="dg-figure">
-      <div className="table-scroll">
+      {/* Focusable for the same reason `rehypeScrollableTables` makes the
+          markdown ones focusable: a comparison this wide always scrolls on a
+          phone, and a scrolling region no keyboard can reach hides its own
+          right-hand columns. */}
+      <div
+        className="table-scroll"
+        tabIndex={0}
+        role="region"
+        aria-label={`${caption ?? 'Comparison'} (scrollable table)`}
+      >
         <table>
           <caption className="sr-only">{caption ?? 'Comparison'}</caption>
           <thead>

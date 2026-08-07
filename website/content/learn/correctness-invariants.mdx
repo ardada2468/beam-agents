@@ -44,7 +44,6 @@ A failed or timed-out activation mutates nothing.
   desc="Five kinds of effect — memory writes, replay-cache inserts, intents, traces and outputs — are staged inside the activation context rather than written as the agent produces them. All five meet one all-or-nothing gate. If the activation returns, the runtime writes keyed state in a fixed order — memory, LLM cache, continuation, pending intents, then seq plus one — and emits on .output, .intents and .traces, including the activation's full set of trace spans. If it raises or times out, every staged effect is discarded: no keyed state is written, seq does not advance, and nothing reaches .output or .intents. The only two records that leave are one ActivationError on .errors and one ERROR event on .traces, both synthesized by the runtime from the key, the sequence number and the failure reason."
   caption="Nothing is written as the agent produces it. Either everything the activation did lands together, or none of it does and the failure is visible only as the two records on the bottom row — never as a partial write."
   viewBox="0 0 640 372"
-  minWidth={560}
 >
   <DgText x={320} y={26} anchor="middle" variant="faint">{'STAGED IN THE ACTIVATION CONTEXT'}</DgText>
   <DgNode x={56} y={36} w={104} h={28} label="memory writes" soft />
@@ -140,7 +139,6 @@ a lookup.
   desc="An intent id is derived from three values that describe where the activation is, not when it ran: the entity key, seq (how many activations have committed for that key), and step_index (the position of this step inside the activation). They are formatted into the name entity_key.hex() pipe seq pipe step_index and hashed with uuid5 against a fixed namespace — a pure function with no clock, no counter and no randomness. A retried bundle for the same key, seq and step re-derives rather than remembers, so it produces byte-identical intents. The intent leaves on .intents through the outbox topic to the effector, which claims on the intent id and gets exactly one of three answers: Claimed, meaning it owns the execution and runs it once; InFlight, meaning another worker holds a live lease and it must wait; or Done, meaning a terminal record already exists, so it republishes the stored result and does not execute."
   caption="Determinism is what makes duplicate suppression a lookup. Because the id is a function of position rather than time, the second delivery of the same work asks the same question and gets Done."
   viewBox="0 0 640 472"
-  minWidth={560}
 >
   <DgText x={320} y={26} anchor="middle" variant="faint">{'PURE INPUTS — WHERE THE ACTIVATION IS, NOT WHEN'}</DgText>
   <DgNode x={73} y={36} w={130} h={40} label="entity_key.hex()" sub="THE BEAM KEY" soft />
@@ -234,7 +232,6 @@ model answered differently the second time.
   desc="A model call from inside the activation is turned into a cache key first: the sha256 of one canonical JSON document holding the model id, the messages, the tools schema, the sampling parameters, the entity key and seq. That key is looked up in the replay cache, which lives in keyed state and is bounded to 64 entries, a 6-hour TTL and a 100 KiB blob. A miss calls the provider and stages the response, which is committed to keyed state with the rest of the activation. A hit returns the stored response and makes no provider call. A retried bundle issues the same request for the same key and seq, so it recomputes the same cache key. Where that entry was already committed — by an earlier activation at the same seq, which is the cached path — the lookup hits and the provider is not called again."
   caption="The retry re-enters at the key computation, not at the provider: same six components, same sha256. Where the entry was already committed, that second pass is a lookup rather than a call."
   viewBox="0 0 640 404"
-  minWidth={560}
 >
   <DgNode x={190} y={24} w={260} h={44} label="ctx.call_model(...)" sub="INSIDE THE ACTIVATION" />
   <DgEdge d="M320,68 V92" />

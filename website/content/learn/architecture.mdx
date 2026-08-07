@@ -23,9 +23,10 @@ Three streams feed one keyed transform, and four streams come out of it.
 
 {/*
   The geometry below is authored against a 600-wide viewBox on purpose: the
-  article column on this site is roughly 600px, so at this width the 11px
-  labels render at their intended size instead of being scaled down into
-  illegibility. Below `minWidth` the figure scrolls rather than squashing.
+  article column on this site comfortably clears 600px from a tablet up, so at
+  this width the 11px labels render at their intended size instead of being
+  scaled down into illegibility. `Diagram` holds the floor at the viewBox's own
+  width, so on anything narrower the figure scrolls rather than squashing.
 
   Two things the drawing has to make visible, because the prose immediately
   after it calls them load-bearing: all three inputs enter the *same* WithKeys
@@ -39,7 +40,6 @@ Three streams feed one keyed transform, and four streams come out of it.
   desc="Three input topics — events, approvals, and tool results — arrive on Kafka or Pub/Sub and are treated identically: the same WithKeys transform keys each of them on entity_key, the three keyed streams are flattened into one, and that stream passes through an optional enrichment stage into RunAgent. RunAgent emits four streams. Three of them terminate: .output, the main terminal output; .traces, bound for an OTLP or BigQuery sink; and .errors, bound for a dead-letter sink. The fourth, .intents, is the only one that comes back. It is written to an outbox topic on Kafka or Pub/Sub, executed by an effector running as a separate service outside the pipeline that deduplicates on the intent id, and the result is published onto the tool-results topic, where it re-enters as an ordinary input on the same key. The loop therefore closes outside the pipeline, and the Beam graph itself stays acyclic."
   caption="Tool results and approvals are inputs — keyed and flattened exactly like events, not a side channel. Three of the four outputs terminate; only .intents comes back, and it crosses the line to do it. That is how the loop stays unbounded while the graph stays acyclic."
   viewBox="0 0 600 540"
-  minWidth={560}
 >
   {/* --- three input topics, drawn identically because they are identical --- */}
   <DgText x={276} y={18} anchor="middle" variant="faint">KAFKA / PUB-SUB · ALL THREE ARE INPUTS</DgText>
@@ -132,7 +132,6 @@ activations it took and what had to survive in between.
   desc="Two tracks. On the fast path a single activation of RunAgent at sequence number n consumes the event and runs to completion inside one process() call, emitting .output. On the re-injection path the first activation, also at sequence number n, stages a ToolIntent and suspends: it persists a Continuation into keyed state and yields, so the worker moves on. The intent leaves on .intents to the outbox topic, an effector running outside the pipeline executes it and deduplicates on the intent id, and the resulting tool result re-enters on the same key. A second activation rehydrates the continuation and runs with ctx.is_resume true and the same sequence number n, then emits .output. The sequence number is unchanged across the suspension, which is what keeps the replay-cache keys and the deterministic intent ids of the resumed activation continuing the first one's numbering instead of colliding with it."
   caption="Same key, same seq, two activations. Suspension is not a blocked thread: the first activation ends, the continuation persists in keyed state, and the second activation starts only when the result arrives."
   viewBox="0 0 600 424"
-  minWidth={560}
 >
   {/* --- track 1: one element in, one decision out ------------------------- */}
   <DgText x={16} y={40} variant="title">Fast path</DgText>
