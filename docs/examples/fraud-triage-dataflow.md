@@ -11,6 +11,8 @@ gcloud dataflow flex-template run "fraud-triage-$(date +%s)" \
   --template-file-gcs-location=gs://MY_BUCKET/templates/fraud-flex-SHA.json \
   --project=MY_PROJECT \
   --region=us-central1 \
+  --staging-location=gs://MY_BUCKET/staging \
+  --temp-location=gs://MY_BUCKET/temp \
   --parameters=input_topic=pubsub://MY_PROJECT/tx-events \
   --parameters=approvals_topic=pubsub://MY_PROJECT/fraud-approvals \
   --parameters=output_topic=pubsub://MY_PROJECT/fraud-decisions \
@@ -19,6 +21,12 @@ gcloud dataflow flex-template run "fraud-triage-$(date +%s)" \
   --parameters=model_api_key_secret=projects/MY_PROJECT/secrets/anthropic-key/versions/3 \
   --parameters=hitl_timeout_ms=900000
 ```
+
+Name both locations explicitly. `--temp-location` defaults *from*
+`--staging-location` and not the other way round, so a launch giving only the
+former sends Dataflow to the per-project default bucket
+(`dataflow-staging-<region>-<project-number>`) and fails outright when the
+launching principal may not create it.
 
 Source: `examples/fraud_triage_dataflow/`. Sample code — outside the wheel,
 outside the public API, no compatibility promise beyond its own tests.

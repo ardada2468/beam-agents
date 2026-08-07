@@ -18,8 +18,11 @@ covered. Launch-only keeps a red night unambiguous: red means packaging broke.
 Failures are classified, never blurred, the same way the `--update` gate
 classifies its own (`tests/dataflow/test_update_compat.py`): a job that fails
 before `RUNNING` is reported with the service's own error state so a launcher or
-parameter defect reads differently from quota or an image pull. There is no
-retry and no flake-tolerant skip.
+parameter defect reads differently from quota or an image pull. A launch the
+service refuses on authorization or quota grounds is an `InfraFailure` naming
+the grants to check rather than a `LaunchFailure`: the project is misconfigured
+and the run is not a verdict on packaging. There is no retry and no
+flake-tolerant skip.
 
 Runs nightly only (`-m dataflow`) and skips visibly — never deselects — without
 `GCP_PROJECT_ID`/`GCP_REGION`/`GCP_DATAFLOW_TEMP_BUCKET` and the spec path the
@@ -41,6 +44,7 @@ import pytest
 from tests.dataflow._update.poll import (
     JOB_STATE_RUNNING,
     DataflowJobs,
+    InfraFailure,
     JobStatus,
     PollTimeout,
     await_condition,
@@ -167,12 +171,42 @@ def launch_command(gcp: GcpConfig, topics: RunTopics, job_name: str) -> list[str
         f"--project={gcp.project}",
         f"--region={gcp.region}",
         f"--temp-location=gs://{gcp.temp_bucket}/flex-template/{job_name}",
+        # `--temp-location` defaults *from* `--staging-location`, never the other
+        # way round: with staging unset the service falls back to the per-project
+        # default bucket `dataflow-staging-<region>-<project-number>` and tries to
+        # create it, which a least-privilege CI principal may not do (it holds
+        # object access on this bucket, not `storage.buckets.create` on the
+        # project). Naming it keeps every byte this run stages under the run's own
+        # prefix, the same way design D6 treats every other resource.
+        f"--staging-location=gs://{gcp.temp_bucket}/flex-template/{job_name}/staging",
         f"--parameters={parameters}",
         f"--additional-user-labels={LABEL}",
         "--num-workers=1",
         "--max-workers=1",
         "--format=value(job.id)",
     ]
+
+
+#: Authorization and quota vocabulary in gcloud's output: the project is
+#: misconfigured, and the run is not a verdict on packaging. Deliberately narrow
+#: — a bare `FAILED_PRECONDITION` is *not* here, because the launcher rejecting
+#: the template's own preconditions is exactly the defect this gate exists to
+#: catch, and a classifier that reads a real refusal as noise discards it.
+INFRA_MARKERS = (
+    "permission_denied",
+    "permission denied",
+    "does not have permission",
+    "unauthorized",
+    "unauthenticated",
+    "resource_exhausted",
+    "quota",
+)
+
+
+def looks_like_environment_failure(output: str) -> bool:
+    """Does gcloud's output name an authorization or quota problem?"""
+    lowered = output.lower()
+    return any(marker in lowered for marker in INFRA_MARKERS)
 
 
 def _run_gcloud(command: list[str]) -> str:
@@ -184,11 +218,22 @@ def _run_gcloud(command: list[str]) -> str:
         check=False,
     )
     if completed.returncode != 0:
+        context = (
+            f"command: {' '.join(command)}\nstdout: {completed.stdout}\nstderr: {completed.stderr}"
+        )
+        if looks_like_environment_failure(completed.stderr):
+            raise InfraFailure(
+                "`gcloud dataflow flex-template run` was refused for an "
+                "authorization or quota reason (exit "
+                f"{completed.returncode}), so this run says nothing about "
+                "packaging. Check the nightly service account's grants — see "
+                "docs/ci.md, 'What the nightly service account must be able to "
+                f"do'.\n{context}"
+            )
         raise LaunchFailure(
             "`gcloud dataflow flex-template run` refused the launch (exit "
             f"{completed.returncode}); this is a packaging or parameter defect, "
-            f"not infrastructure.\ncommand: {' '.join(command)}\n"
-            f"stdout: {completed.stdout}\nstderr: {completed.stderr}"
+            f"not infrastructure.\n{context}"
         )
     job_id = completed.stdout.strip().splitlines()[-1].strip() if completed.stdout.strip() else ""
     if not job_id:
