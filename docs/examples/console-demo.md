@@ -67,7 +67,7 @@ Two of those are worth a second look:
 
 ## What it prints
 
-```
+```text
 69 records over 12 scenarios: 48 trace events, 13 errors, 1 snapshots, 7 outputs (11 committed activations)
 
 completion
@@ -174,7 +174,7 @@ be silently collapsed onto it instead of showing up as new traffic.
 
 One `AgentConfig`, four keyword arguments:
 
-```python
+```python title="examples/console_demo/pipeline.py"
 --8<-- "examples/console_demo/pipeline.py"
 ```
 

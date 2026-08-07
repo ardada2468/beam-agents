@@ -8,13 +8,84 @@ chargeback confirmed, an alert acknowledged as real — that arrives on a
 separate stream, minutes to days after the activation it judges. Closing that
 loop is a second, ordinary Beam pipeline:
 
-```
-traces topic ───► parse ─► key by (entity_key, seq) ─┐
-                                                     ├─► stateful join ─► judge ─► verdict rows
-outcome stream ─► key by (entity_key, seq) ──────────┘        │             │          │
-                                                        no_outcome    judge_errors  hourly aggregates
-                                                        orphaned_outcomes
-```
+<figure class="diagram" markdown="1">
+<div class="diagram-scroll">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 722 288" role="img" aria-labelledby="eval-t eval-d">
+<title id="eval-t">The evaluation pipeline that closes the loop</title>
+<desc id="eval-d">Two streams arrive from outside this pipeline: the traces topic, which is parsed, and the outcome stream, which lags by minutes to days. Both are keyed by the pair entity_key and seq, flattened into one keyed stream, and fed to a stateful join with a watermark deadline. The join emits joined records to the judge, plus two side outputs of its own: no_outcome for an activation nobody judged, and orphaned_outcomes for an outcome with no live state. The judge emits verdict rows and a judge_errors side output. Verdict rows, no_outcome and judge_errors are then flattened into hourly windows, grouped by scenario and prompt version, to produce hourly aggregates.</desc>
+<defs>
+<marker id="eval-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--rule-2, #8e8e87)"/></marker>
+<marker id="eval-a-tra" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--s-traces, #3c5c78)"/></marker>
+</defs>
+<g fill="none" stroke="var(--rule-2, #8e8e87)" stroke-width="1.25">
+<path d="M118,120 H202" stroke-dasharray="4 3" marker-end="url(#eval-a)"/>
+<path d="M186,56 H202" marker-end="url(#eval-a)"/>
+<path d="M358,56 H368"/>
+<path d="M358,120 H368"/>
+<path d="M368,56 V120"/>
+<path d="M368,88 H380" marker-end="url(#eval-a)"/>
+<path d="M522,88 H538" marker-end="url(#eval-a)"/>
+<path d="M594,88 H610" marker-end="url(#eval-a)"/>
+<path d="M458,132 V166" marker-end="url(#eval-a)"/>
+<path d="M396,132 V246 H378" marker-end="url(#eval-a)"/>
+<path d="M567,102 V166" marker-end="url(#eval-a)"/>
+<path d="M458,196 V214"/>
+<path d="M567,196 V214"/>
+<path d="M660,102 V214"/>
+<path d="M458,214 H660"/>
+<path d="M559,214 V230" marker-end="url(#eval-a)"/>
+</g>
+<path d="M118,56 H136" fill="none" stroke="var(--s-traces, #3c5c78)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#eval-a-tra)"/>
+<g fill="var(--paper-2, #f6f6f4)" stroke="var(--rule-2, #8e8e87)" stroke-width="1">
+<rect x="10" y="42" width="108" height="28" rx="2"/>
+<rect x="10" y="106" width="108" height="28" rx="2"/>
+<rect x="416" y="168" width="84" height="28" rx="2"/>
+<rect x="517" y="168" width="100" height="28" rx="2"/>
+<rect x="248" y="232" width="128" height="28" rx="2"/>
+</g>
+<g fill="var(--paper, #ffffff)" stroke="var(--ink, #0b0c0e)" stroke-width="1.25">
+<rect x="138" y="42" width="48" height="28" rx="2"/>
+<rect x="204" y="42" width="154" height="28" rx="2"/>
+<rect x="204" y="106" width="154" height="28" rx="2"/>
+<rect x="382" y="44" width="140" height="88" rx="2"/>
+<rect x="540" y="74" width="54" height="28" rx="2"/>
+<rect x="612" y="74" width="96" height="28" rx="2"/>
+<rect x="495" y="232" width="128" height="28" rx="2"/>
+</g>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--ink-2, #4a4e54)" text-anchor="middle">
+<text x="64" y="60">traces topic</text>
+<text x="64" y="124">outcome stream</text>
+<text x="162" y="60">parse</text>
+<text x="281" y="60">key (entity_key, seq)</text>
+<text x="281" y="124">key (entity_key, seq)</text>
+<text x="567" y="92">judge</text>
+<text x="660" y="92">verdict rows</text>
+<text x="458" y="186">no_outcome</text>
+<text x="567" y="186">judge_errors</text>
+<text x="312" y="250">orphaned_outcomes</text>
+<text x="559" y="250">hourly aggregates</text>
+</g>
+<text x="452" y="84" text-anchor="middle" font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--ink, #0b0c0e)">stateful join</text>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">
+<text x="452" y="102" text-anchor="middle">keyed · deadline timer</text>
+<text x="368" y="36" text-anchor="middle">Flatten</text>
+<text x="567" y="66" text-anchor="middle">LLMClient seam</text>
+<text x="160" y="98" text-anchor="middle">outcome lags minutes to days</text>
+<text x="10" y="154">both arrive from outside this pipeline</text>
+<text x="312" y="276" text-anchor="middle">never joined, never dropped</text>
+<text x="559" y="276" text-anchor="middle">hourly windows · by scenario and prompt</text>
+</g>
+</svg>
+</div>
+<figcaption markdown="1">
+Ordinary Beam throughout: two inputs, one stateful `DoFn`, three side outputs.
+The deadline timer is what turns an unbounded outcome lag into named outputs
+instead of silent loss — `no_outcome` and `orphaned_outcomes` come off the
+join, `judge_errors` off the judge — and the hourly aggregate counts
+`no_outcome` and `judge_errors` alongside the verdicts, so no quality series is
+flattered by the rows that fell out of it.
+</figcaption>
+</figure>
 
 No beam-agents runtime is involved: the pipeline consumes the traces topic
 with the public proto bindings, and the judge calls a provider through the

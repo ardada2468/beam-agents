@@ -21,7 +21,7 @@ uv run python -m examples.hello_world
 
 It prints the single terminal output and exits:
 
-```
+```text
 b'Hello from the beam-agents runtime!'
 ```
 
@@ -33,7 +33,7 @@ The code below is included verbatim from
 [`tests/examples/test_hello_world.py`](https://github.com/ardada2468/beam-agents/blob/main/tests/examples/test_hello_world.py)
 executes in CI, asserting exactly what this page claims.
 
-```python
+```python title="examples/hello_world.py"
 --8<-- "examples/hello_world.py"
 ```
 

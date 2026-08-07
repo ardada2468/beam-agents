@@ -41,7 +41,7 @@ then runs the full script and asserts exactly one.
 uv run python -m examples.iot_reaction
 ```
 
-```
+```text
 b'ok:sensor-1:window=1'
 b'ok:sensor-2:window=1'
 b'ok:sensor-1:window=2'
@@ -59,6 +59,6 @@ The code below is included verbatim from
 [`examples/iot_reaction.py`](https://github.com/ardada2468/beam-agents/blob/main/examples/iot_reaction.py)
 — the same file the CI test executes.
 
-```python
+```python title="examples/iot_reaction.py"
 --8<-- "examples/iot_reaction.py"
 ```

@@ -131,15 +131,87 @@ across with the code.
 
 ### 5.1 Pipeline shape
 
-```
-Kafka/PubSub events ──┐
-tool-results topic ───┼─► WithKeys(entity_id) ─► Flatten ─► RunAgent
-approvals topic ──────┘                                       │
-   .output  (main)   ─► downstream
-   .intents          ─► outbox topic ─► effector ─► results topic (re-injected)
-   .traces           ─► OTLP / BigQuery
-   .errors           ─► dead-letter sink
-```
+<figure class="diagram" markdown="1">
+<div class="diagram-scroll">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 752 258" role="img" aria-labelledby="dd-t dd-d">
+<title id="dd-t">One multi-output transform, four tagged outputs, four destinations</title>
+<desc id="dd-d">Three topics — events, tool results and approvals — are flattened onto one stream, keyed by entity id, and fed to RunAgent. RunAgent emits four tagged outputs, each to its own destination: dot output, the main output, to downstream; dot traces to OTLP or BigQuery; dot errors to a dead-letter sink; and dot intents downward to an outbox topic, executed by an external effector, published to a results topic, and re-injected into the pipeline as tool results on the same key.</desc>
+<defs>
+<marker id="dd-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--rule-2, #8e8e87)"/></marker>
+<marker id="dd-a-out" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--s-output, #0b0c0e)"/></marker>
+<marker id="dd-a-tra" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--s-traces, #3c5c78)"/></marker>
+<marker id="dd-a-err" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--s-errors, #9e2a18)"/></marker>
+<marker id="dd-a-int" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--s-intents, #8a5205)"/></marker>
+</defs>
+<g fill="none" stroke="var(--rule-2, #8e8e87)" stroke-width="1.25">
+<path d="M124,52 H140"/>
+<path d="M124,128 H140"/>
+<path d="M124,90 H140"/>
+<path d="M140,52 V128"/>
+<path d="M140,90 H154" marker-end="url(#dd-a)"/>
+<path d="M228,90 H246" marker-end="url(#dd-a)"/>
+<path d="M388,90 H404" marker-end="url(#dd-a)"/>
+</g>
+<g fill="var(--paper, #ffffff)" stroke="var(--ink, #0b0c0e)" stroke-width="1.25">
+<rect x="24" y="38" width="100" height="28" rx="2"/>
+<rect x="24" y="76" width="100" height="28" rx="2"/>
+<rect x="24" y="114" width="100" height="28" rx="2"/>
+<rect x="156" y="76" width="72" height="28" rx="2"/>
+<rect x="248" y="76" width="140" height="28" rx="2"/>
+<rect x="406" y="42" width="132" height="96" rx="2"/>
+</g>
+<g fill="var(--paper-2, #f6f6f4)" stroke="var(--rule-2, #8e8e87)" stroke-width="1">
+<rect x="612" y="38" width="124" height="28" rx="2"/>
+<rect x="612" y="76" width="124" height="28" rx="2"/>
+<rect x="612" y="114" width="124" height="28" rx="2"/>
+<rect x="416" y="198" width="112" height="30" rx="2"/>
+<rect x="284" y="198" width="112" height="30" rx="2"/>
+<rect x="152" y="198" width="112" height="30" rx="2"/>
+</g>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--ink-2, #4a4e54)" text-anchor="middle">
+<text x="74" y="56">events</text>
+<text x="74" y="94">tool-results</text>
+<text x="74" y="132">approvals</text>
+<text x="192" y="94">Flatten</text>
+<text x="318" y="94">WithKeys(entity_id)</text>
+<text x="674" y="56">downstream</text>
+<text x="674" y="94">OTLP / BigQuery</text>
+<text x="674" y="132">dead-letter sink</text>
+<text x="472" y="217">outbox topic</text>
+<text x="340" y="217">effector</text>
+<text x="208" y="217">results topic</text>
+</g>
+<text x="472" y="86" text-anchor="middle" font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--ink, #0b0c0e)">RunAgent</text>
+<text x="472" y="104" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">keyed · stateful</text>
+<g fill="none" stroke-width="1.25">
+<path d="M538,52 H610" stroke="var(--s-output, #0b0c0e)" marker-end="url(#dd-a-out)"/>
+<path d="M538,90 H610" stroke="var(--s-traces, #3c5c78)" marker-end="url(#dd-a-tra)"/>
+<path d="M538,128 H610" stroke="var(--s-errors, #9e2a18)" marker-end="url(#dd-a-err)"/>
+<path d="M472,138 V196" stroke="var(--s-intents, #8a5205)" stroke-dasharray="4 3" marker-end="url(#dd-a-int)"/>
+<path d="M416,213 H398" stroke="var(--s-intents, #8a5205)" stroke-dasharray="4 3" marker-end="url(#dd-a-int)"/>
+<path d="M284,213 H266" stroke="var(--s-intents, #8a5205)" stroke-dasharray="4 3" marker-end="url(#dd-a-int)"/>
+<path d="M152,213 H10 V90 H22" stroke="var(--s-intents, #8a5205)" stroke-dasharray="4 3" marker-end="url(#dd-a-int)"/>
+</g>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" text-anchor="middle">
+<text x="575" y="46" fill="var(--s-output, #0b0c0e)">.output</text>
+<text x="575" y="84" fill="var(--s-traces, #3c5c78)">.traces</text>
+<text x="575" y="122" fill="var(--s-errors, #9e2a18)">.errors</text>
+</g>
+<text x="480" y="174" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--s-intents, #8a5205)">.intents</text>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)" text-anchor="middle">
+<text x="575" y="66">main</text>
+<text x="174" y="246">results, re-injected on the same key</text>
+<text x="414" y="246">outside the pipeline</text>
+</g>
+</svg>
+</div>
+<figcaption markdown="1">
+Sources are flattened first and keyed once, so every source — including the
+re-injected ones — enters `RunAgent` under the same entity key. Solid lines are
+edges in the Beam DAG; the dashed intent loop leaves it for the message bus,
+which is what lets the agent's iteration count stay unbounded (§5.4).
+</figcaption>
+</figure>
 
 Everything the agent produces leaves as a tagged output of one multi-output
 transform. Results and approvals return as ordinary elements on the same key.
@@ -424,8 +496,8 @@ position**, not a demand; the ones we consider most negotiable are flagged.
 | `adapters/` — the agent protocol, the shared transport seam, and the LangGraph, ADK and Pydantic AI adapters | **moves, framework deps stay optional** | The protocol plus the conformance matrix *is* the compatibility story (§9). Each framework stays an extra, exactly as `apache_beam.ml` treats model frameworks. Negotiable: the community may prefer adapters live out-of-tree with only the protocol and matrix upstream. |
 | `yaml/` — the Beam YAML provider | **moves** | It is a Beam surface by construction — a Python-typed provider exposing `RunAgent` to a YAML pipeline. Upstream it stops being a third-party provider and becomes a first-party transform. |
 | `testing/` — the bundle-retry chaos harness | **moves** | Invariant 2 and invariant 3 are only credible because something forces bundle retries and checks the results are byte-identical. Donating the guarantees without the harness that enforces them would be donating prose. |
-| `intent_signing.py` — HMAC signing and verification of `ToolIntent`s | **moves with the contract** | It is the authenticity half of the intent/result protobuf contract the row below proposes Beam standardize: the pipeline signs at the outbox, and any conforming effector — in any language — verifies before executing. Upstreaming the wire fields without the reference signing and verification routines would standardize a format nobody could interoperate on. Pure stdlib (`hmac`, `hashlib`), no Beam import, no provider SDK. Key *distribution* stays deployment-specific and out of scope. |
-| `console/` — the local telemetry viewer (SQLite store, read API, bundled UI) | **stays external** | A developer tool that *reads* the trace, error, and snapshot records the row above proposes Beam standardize. It imports no Beam on its read path, ships an HTTP server and a JavaScript bundle, and would arrive carrying a web build toolchain a runtime SDK has no reason to own. The part worth upstreaming is already upstream-bound: the record semantics. Anyone can then write their own viewer, and this one keeps working against a donated runtime unchanged, because it only depends on the wire format. Its one pipeline-side piece — the `console://` sink — is a thin `SinkResolver` wrapper that deliberately modifies nothing in `core/`. |
+| `intent_signing.py` — HMAC signing and verification of `ToolIntent`s | **moves with the contract** | It is the authenticity half of the intent/result protobuf contract the `effector/` row below proposes Beam standardize: the pipeline signs at the outbox, and any conforming effector — in any language — verifies before executing. Upstreaming the wire fields without the reference signing and verification routines would standardize a format nobody could interoperate on. Pure stdlib (`hmac`, `hashlib`), no Beam import, no provider SDK. Key *distribution* stays deployment-specific and out of scope. |
+| `console/` — the local telemetry viewer (SQLite store, read API, bundled UI) | **stays external** | A developer tool that *reads* the trace, error, and snapshot records the rows above propose Beam standardize. It imports no Beam on its read path, ships an HTTP server and a JavaScript bundle, and would arrive carrying a web build toolchain a runtime SDK has no reason to own. The part worth upstreaming is already upstream-bound: the record semantics. Anyone can then write their own viewer, and this one keeps working against a donated runtime unchanged, because it only depends on the wire format. Its one pipeline-side piece — the `console://` sink — is a thin `SinkResolver` wrapper that deliberately modifies nothing in `core/`. |
 | `effector/` — the reference side-effect executor service | **stays external** | It is a deployed *service* (consume → dedup → execute → publish), not a pipeline transform; it imports no Beam and never will. Beam ships transforms and SDKs, not long-running side-effect executors. What Beam would standardize is the **intent/result protobuf contract** — any conforming effector implementation then works, including ones written in other languages or embedded in an existing job runner. **Where the reference implementation lives after a donation is an open question** (§13), not something this document decides. |
 
 Two boundaries are worth restating because they carry the design's weight. The

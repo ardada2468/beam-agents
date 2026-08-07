@@ -31,7 +31,7 @@ Removing or renaming anything on this page requires a deprecation window — see
 
 | Name | Contract |
 | --- | --- |
-| `RunAgent` | The transform. `events \| RunAgent(agent, config=...)` turns an agent into a keyed, stateful Beam step. |
+| `RunAgent` | The transform. `events | RunAgent(agent, config=...)` turns an agent into a keyed, stateful Beam step. |
 | `AgentConfig` | Everything the transform needs that is not the agent: provider factory, timeouts, tool registry, HITL policy, sink URIs. Validated at construction. |
 | `RunAgentOutputs` | The four named outputs: `.output`, `.intents`, `.traces`, `.errors`. |
 | `StreamAgent` | The protocol an agent (or adapter) implements to be accepted by `RunAgent`. |
@@ -66,7 +66,7 @@ and `StreamAgent`.
 | `StreamAgent` | Protocol: `async def activate(ctx) -> None`. Everything the agent does goes through `ctx` and is staged, never applied directly. |
 | `FunctionAgent` | Adapts a plain `async def fn(ctx) -> None` into a `StreamAgent`. |
 | `Agent` | The runtime driver contract: `async def __call__(ctx) -> Outcome`. What adapters implement. |
-| `Outcome` | `Complete \| Suspend` — the result of one activation. |
+| `Outcome` | `Complete | Suspend` — the result of one activation. |
 | `Complete` | The activation finished; carries the payload emitted on `.output`. |
 | `Suspend` | The activation staged an intent and yielded; the runtime persists a continuation and resumes on re-injection. |
 | `FallbackContext` | The context a HITL timeout route receives. |
@@ -322,7 +322,7 @@ See [Memory](memory.md).
 | Name | Contract |
 | --- | --- |
 | `HitlPolicy` | Suspension timeout, intent TTL, approval channel, and the route taken on timeout. |
-| `Route` | The routing function type: `FallbackContext -> Deny \| Drop \| Escalate`. |
+| `Route` | The routing function type: `FallbackContext -> Deny | Drop | Escalate`. |
 | `Deny` | Emit deterministic denial bytes on the main output and end the suspension. |
 | `Drop` | Emit nothing; record the timeout on `.errors` and end the suspension. |
 | `Escalate` | Stage a fresh approval intent on an escalation channel and extend the deadline. Bounded by `max_escalations`. |
@@ -613,7 +613,7 @@ imports no Beam. Its real contract is its CLI and config; see
 | `MetricsSink` | The service's metrics protocol (`incr`, `observe`). |
 | `CountingMetrics` | Default in-process `MetricsSink`. |
 | `DedupStore` | Atomic claim/complete/release over `intent_id`. The execution-side half of effectively-once. |
-| `ClaimOutcome` | `Claimed \| InFlight \| Done`. |
+| `ClaimOutcome` | `Claimed | InFlight | Done`. |
 | `Claimed` | Exclusive ownership, carrying the token later calls must present. |
 | `InFlight` | Another worker holds a live lease. |
 | `Done` | A terminal record exists — the dedup decision itself. |

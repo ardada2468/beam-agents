@@ -40,60 +40,62 @@ At send time, three mechanical steps:
 ## 2. Announcement email — draft
 
 > **To:** dev@beam.apache.org
+>
 > **Subject:** [DISCUSS] `apache_beam.ml.agents` — a Beam-native runtime for stateful streaming agents
-
-Hi all,
-
-We would like to propose contributing an agent *runtime* to Beam, and to get
-the design in front of the list before anything resembling a patch exists.
-
-**The problem.** A growing class of workloads is agents that events invoke
-rather than users chat with: fraud triage, anomaly response, IoT reaction, ops
-automation. Agent frameworks solve authoring, and none of them solves execution
-at stream scale — durable per-entity memory, event- and processing-time
-semantics, effectively-once side effects, backpressure, and portability across
-runners. Beam already has those primitives; what is missing is the layer that
-expresses an agent in them.
-
-**The proposal.** A new package, `apache_beam.ml.agents`, whose surface is
-essentially one transform — `events | RunAgent(my_agent)` — turning an agent
-into a keyed, stateful, fault-tolerant Beam transform. It is explicitly a
-runtime and not an authoring framework: agents are written in LangGraph, Google
-ADK, Pydantic AI or a plain async protocol and reach the transform through thin
-adapters, the same division of labor `RunInference` already draws between Beam
-and model frameworks. The package would bring a stated behavioral contract —
-bundle-atomic activation, deterministic intent ids, a replay cache that makes
-bundle retries free, per-key serialized memory, side effects only as intents
-executed outside the pipeline, fail-closed timeouts, and protobuf-only state
-with an `--update` compatibility discipline. A working Apache-2.0 implementation
-exists today outside the ASF, running on DirectRunner, Dataflow and Flink, with
-Spark verified weekly as best-effort.
-
-**Evidence.** [links: the design document; the benchmark report vs. Apache
-Flink Agents, with its methodology section; the conformance-matrix results; the
-repository]. The comparison report states every dimension on which it is not
-like-for-like, and reports the unfavorable runs too.
-
-**What we are asking.**
-
-1. *Design feedback* — particularly on the outbox/effector split for side
-   effects versus inline durable execution, on which modules should and should
-   not move upstream, and on the dependency policy.
-2. *A sponsoring committer or PMC member* willing to shepherd this.
-3. *Guidance on donation mechanics.* We know a contribution of this size
-   carries IP-clearance-style obligations; we do not know their exact shape for
-   this case and would rather ask than assume.
-
-Maintainership is part of the offer: a donation without sustained maintenance
-is a burden on the project, and the people who wrote this intend to keep
-maintaining it in-tree. Happy to say more about that specifically.
-
-The design document is linked above as both a commentable copy and a
-version-controlled file; inline comments on the former come back as pull
-requests against the latter.
-
-Thanks,
-[names]
+>
+> Hi all,
+>
+> We would like to propose contributing an agent *runtime* to Beam, and to get
+> the design in front of the list before anything resembling a patch exists.
+>
+> **The problem.** A growing class of workloads is agents that events invoke
+> rather than users chat with: fraud triage, anomaly response, IoT reaction, ops
+> automation. Agent frameworks solve authoring, and none of them solves execution
+> at stream scale — durable per-entity memory, event- and processing-time
+> semantics, effectively-once side effects, backpressure, and portability across
+> runners. Beam already has those primitives; what is missing is the layer that
+> expresses an agent in them.
+>
+> **The proposal.** A new package, `apache_beam.ml.agents`, whose surface is
+> essentially one transform — `events | RunAgent(my_agent)` — turning an agent
+> into a keyed, stateful, fault-tolerant Beam transform. It is explicitly a
+> runtime and not an authoring framework: agents are written in LangGraph, Google
+> ADK, Pydantic AI or a plain async protocol and reach the transform through thin
+> adapters, the same division of labor `RunInference` already draws between Beam
+> and model frameworks. The package would bring a stated behavioral contract —
+> bundle-atomic activation, deterministic intent ids, a replay cache that makes
+> bundle retries free, per-key serialized memory, side effects only as intents
+> executed outside the pipeline, fail-closed timeouts, and protobuf-only state
+> with an `--update` compatibility discipline. A working Apache-2.0 implementation
+> exists today outside the ASF, running on DirectRunner, Dataflow and Flink, with
+> Spark verified weekly as best-effort.
+>
+> **Evidence.** [links: the design document; the benchmark report vs. Apache
+> Flink Agents, with its methodology section; the conformance-matrix results; the
+> repository]. The comparison report states every dimension on which it is not
+> like-for-like, and reports the unfavorable runs too.
+>
+> **What we are asking.**
+>
+> 1. *Design feedback* — particularly on the outbox/effector split for side
+>    effects versus inline durable execution, on which modules should and should
+>    not move upstream, and on the dependency policy.
+> 2. *A sponsoring committer or PMC member* willing to shepherd this.
+> 3. *Guidance on donation mechanics.* We know a contribution of this size
+>    carries IP-clearance-style obligations; we do not know their exact shape for
+>    this case and would rather ask than assume.
+>
+> Maintainership is part of the offer: a donation without sustained maintenance
+> is a burden on the project, and the people who wrote this intend to keep
+> maintaining it in-tree. Happy to say more about that specifically.
+>
+> The design document is linked above as both a commentable copy and a
+> version-controlled file; inline comments on the former come back as pull
+> requests against the latter.
+>
+> Thanks,
+>
+> [names]
 
 ## 3. Objections register
 

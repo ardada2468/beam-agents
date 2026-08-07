@@ -112,7 +112,7 @@ commit.
 Three things must agree, and `scripts/check_release.py` proves it before
 anything is built for publishing:
 
-```
+```text
 git tag  vX.Y.Z   ==   pyproject.toml [project].version   ==   uv.lock beam-agents version
 ```
 
@@ -158,8 +158,8 @@ The release PR:
    dated `CHANGELOG.md` section and deletes the fragments it consumed. Preview
    first with `make changelog-draft`, which writes nothing.
 5. `make build && uv run python scripts/check_wheel.py dist` locally if you
-      want to eyeball the artifact. Local builds are for inspection only;
-      nothing outside `release.yml` uploads.
+   want to eyeball the artifact. Local builds are for inspection only;
+   nothing outside `release.yml` uploads.
 6. Open, review, squash-merge.
 
 Then tag the squash-merge commit:
