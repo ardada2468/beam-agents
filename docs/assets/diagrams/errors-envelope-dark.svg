@@ -1,0 +1,46 @@
+<svg width="910" height="377" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 290" role="img" aria-labelledby="err-t err-d"><style>svg{--paper:#0c0d0f;--paper-2:#141618;--paper-3:#1c1f22;--ink:#ededea;--ink-2:#a7abb0;--ink-3:#8f949a;--rule:#262a2e;--rule-2:#5f666d;--s-output:#ededea;--s-intents:#e0a458;--s-traces:#9bbcdd;--s-errors:#ee9683;--font-sans:'Instrument Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;--font-mono:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}</style><rect x="0" y="0" width="700.0" height="290.0" fill="var(--paper)"/>
+<title id="err-t">One errors-topic value: an AgentEnvelope wrapping an ActivationErrorRecord</title>
+<desc id="err-d">The value written to the errors topic is a serialized AgentEnvelope with three fields: entity_key, the failing key; event_time_ms, the record's event time; and external_event, which holds a serialized ActivationErrorRecord. That record is drawn nested inside the envelope, with its own four fields — entity_key, reason, detail and event_time_ms. Because the record arrives already wrapped in an envelope, the errors topic can be read straight back into another RunAgent, keyed by entity_key, with no adapter.</desc>
+<defs>
+<marker id="err-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--rule-2, #8e8e87)"/></marker>
+</defs>
+<rect x="24" y="24" width="512" height="248" rx="2" fill="var(--paper, #ffffff)" stroke="var(--ink, #0b0c0e)" stroke-width="1.25"/>
+<text x="44" y="54" font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--ink, #0b0c0e)">AgentEnvelope</text>
+<text x="516" y="54" text-anchor="end" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">the errors-topic value</text>
+<g fill="var(--paper-2, #f6f6f4)" stroke="var(--rule-2, #8e8e87)" stroke-width="1">
+<rect x="44" y="70" width="126" height="26" rx="2"/>
+<rect x="44" y="104" width="126" height="26" rx="2"/>
+<rect x="44" y="138" width="126" height="26" rx="2"/>
+<rect x="166" y="176" width="350" height="76" rx="2"/>
+</g>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--ink-2, #4a4e54)" text-anchor="middle">
+<text x="107" y="87">entity_key</text>
+<text x="107" y="121">event_time_ms</text>
+<text x="107" y="155">external_event</text>
+</g>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">
+<text x="184" y="87">= the failing key</text>
+<text x="184" y="121">= the record's event time</text>
+<text x="184" y="155">= serialized bytes of</text>
+</g>
+<path d="M107,164 V214 H164" fill="none" stroke="var(--rule-2, #8e8e87)" stroke-width="1.25" marker-end="url(#err-a)"/>
+<text x="182" y="200" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--ink-2, #4a4e54)">ActivationErrorRecord</text>
+<text x="500" y="200" text-anchor="end" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">the dead letter itself</text>
+<g fill="var(--paper, #ffffff)" stroke="var(--rule, #e2e2dd)" stroke-width="1">
+<rect x="182" y="210" width="80" height="26" rx="2"/>
+<rect x="272" y="210" width="54" height="26" rx="2"/>
+<rect x="336" y="210" width="54" height="26" rx="2"/>
+<rect x="400" y="210" width="100" height="26" rx="2"/>
+</g>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--ink-2, #4a4e54)" text-anchor="middle">
+<text x="222" y="227">entity_key</text>
+<text x="299" y="227">reason</text>
+<text x="363" y="227">detail</text>
+<text x="450" y="227">event_time_ms</text>
+</g>
+<path d="M538,148 H580" fill="none" stroke="var(--rule-2, #8e8e87)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#err-a)"/>
+<rect x="582" y="123" width="112" height="50" rx="2" fill="var(--paper, #ffffff)" stroke="var(--ink, #0b0c0e)" stroke-width="1.25"/>
+<text x="638" y="145" text-anchor="middle" font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--ink, #0b0c0e)">RunAgent</text>
+<text x="638" y="161" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">no adapter</text>
+<text x="638" y="192" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">keyed by entity_key</text>
+</svg>
