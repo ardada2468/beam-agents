@@ -1,6 +1,6 @@
 ---
 title: Runners
-summary: Which runners are exercised by which test tier — stated as test coverage, not as a support matrix.
+summary: Which runners are supported, at what level, and the test evidence in this repository behind each claim.
 status: partial
 order: 7
 verifies:
@@ -11,43 +11,57 @@ verifies:
   - module: benchmark-baseline.toml
   - module: docs/benchmarks.md
   - module: docs/deploying.md
+  - module: .github/workflows/integration.yml
+  - module: .github/workflows/nightly.yml
   - spec: openspec/specs/repo-scaffolding/spec.md
   - spec: openspec/specs/spark-runner-support/spec.md
+  - spec: openspec/specs/adapter-conformance-matrix/spec.md
   - test: tests/conformance/test_direct.py
   - test: tests/conformance/test_flink.py
   - test: tests/conformance/test_spark_selection.py
+  - test: tests/semantics/test_effectively_once_e2e.py
+  - test: tests/dataflow/test_update_compat.py
+  - test: tests/dataflow/test_flex_template_launch.py
 ---
 
-Support claims are cheap to make and hard to check, so this page states only
-what the repository actually exercises, and where.
+Support claims are cheap to make and hard to check, so this page states a
+support level for each runner **and** the evidence in this repository behind
+it.
+
+**DirectRunner, Flink, and Dataflow are supported runners.** Each is exercised
+by named tests on a stated schedule: DirectRunner and Flink on every pull
+request, Dataflow nightly against the real service. **Spark is not supported.**
+A weekly leg stands the Spark stack up, but a runner-level gap leaves every
+conformance cell a declared skip, so nothing on it actually executes.
 
 {/*
   The portability surface, drawn.
 
   Three bands, top to bottom: what is identical no matter where the pipeline
-  runs, what the runner has to supply in return, and which runners the tests in
-  this repository actually reach.
+  runs, what the runner has to supply in return, and which runners are
+  supported — each labelled with the evidence that earns it the word.
 
   Authored 600 user units wide because that is the reading column — a diagram
   wider than roughly 600 scrolls sideways even on a large desktop, and a
   three-across layout put the runner column off the right edge. Height is free,
   so the columns became bands.
 
-  The last row is the reason this diagram exists. Spark sits *outside* the
-  tested group, with no connector at all, so the picture agrees with the
-  landing page and with the table below: a weekly Spark leg stands the stack
-  up, but every conformance cell on it is currently a declared skip, so no
-  scenario actually executes there. A fourth identical row inside the group
-  would be a support claim, and this page exists to not make one. Note the
-  separation is not drawn as a dashed line — dashed means "leaves through the
-  message bus and comes back" everywhere else on this site, and re-using it
-  for "unverified" would break that key.
+  The last row is the reason this diagram exists. The group holds the three
+  supported runners, and each row carries the evidence that supports the word
+  rather than the word alone. Spark sits *outside* that group, with no
+  connector at all, so the picture agrees with the landing page and with the
+  table below: a weekly Spark leg stands the stack up, but every conformance
+  cell on it is currently a declared skip, so no scenario actually executes
+  there. A fourth identical row inside the group would claim support Spark has
+  not earned. Note the separation is not drawn as a dashed line — dashed means
+  "leaves through the message bus and comes back" everywhere else on this site,
+  and re-using it for "unverified" would break that key.
 */}
 
 <Diagram
   title="Where a beam-agents pipeline runs"
-  desc="Three bands. The first holds what is identical on every runner: your agent, the RunAgent transform, keyed state held as protobuf, and intent ids derived from key, seq and step index. It feeds the second band, what the runner must supply in return: a stateful DoFn over KV input, both event-time and processing-time timers, and bundle retry semantics matching the ones the guarantees are stated against. That feeds the third band, the runners this repository exercises: DirectRunner by the unit tier and the conformance matrix on every pull request, Flink by a Dockerised mini-cluster on every pull request, and Dataflow against the real service nightly. Spark is drawn below that group, unconnected, because although a weekly leg stands up the Spark stack, every conformance scenario on it is currently a declared skip and none executes."
-  caption="Spark sits outside the group and has no connector. A weekly leg runs against a real Spark stack, but a recorded Beam Spark portable-runner gap — no bundle checkpoint handler for the streaming ingest source — leaves every conformance cell a declared skip, so Spark is drawn as an unverified target rather than a fourth supported one."
+  desc="Three bands. The first holds what is identical on every runner: your agent, the RunAgent transform, keyed state held as protobuf, and intent ids derived from key, seq and step index. It feeds the second band, what the runner must supply in return: a stateful DoFn over KV input, both event-time and processing-time timers, and bundle retry semantics matching the ones the guarantees are stated against. That feeds the third band, the three supported runners, each labelled with the evidence behind it: DirectRunner by the unit tier and the conformance matrix on every pull request, Flink by a Dockerised mini-cluster on every pull request, and Dataflow against the real service nightly. Spark is drawn below that group, unconnected, because although a weekly leg stands up the Spark stack, every conformance scenario on it is currently a declared skip and none executes."
+  caption="The group is the supported set, and each row names what backs it. Spark sits outside the group and has no connector. A weekly leg runs against a real Spark stack, but a recorded Beam Spark portable-runner gap — no bundle checkpoint handler for the streaming ingest source — leaves every conformance cell a declared skip, so Spark is drawn as an unverified target rather than a fourth supported one."
   viewBox="0 0 600 664"
   minWidth={592}
 >
@@ -72,7 +86,7 @@ what the repository actually exercises, and where.
   <DgNode x={215} y={252} w={170} h={38} soft label="timers" sub="EVENT-TIME + REAL-TIME" />
   <DgNode x={398} y={252} w={170} h={38} soft label="bundle retry" sub="AS THE GUARANTEES ASSUME" />
   <DgEdge d="M 300,306 V 390" />
-  <DgText x={16} y={378} variant="title">Runners, and their evidence</DgText>
+  <DgText x={16} y={378} variant="title">Supported runners, and their evidence</DgText>
   <DgEdge d="M 16,392 H 584 V 568 H 16 Z" arrow={false} />
   <DgNode x={32} y={408} w={536} h={44} label="DirectRunner" sub="UNIT TIER + CONFORMANCE, EVERY PR" />
   <DgNode x={32} y={462} w={536} h={44} label="Flink" sub="MINI-CLUSTER IN DOCKER, EVERY PR" />
@@ -82,16 +96,41 @@ what the repository actually exercises, and where.
 
 ## What runs where today
 
-| Runner | Exercised by | Tier |
-|---|---|---|
-| DirectRunner | The whole unit tier, plus the conformance matrix's DirectRunner leg | Offline, every PR |
-| Flink | Mini-cluster via testcontainers; the conformance matrix's Flink leg and the effectively-once end-to-end gate | Docker-backed, every PR |
-| Dataflow | `-m dataflow` tests against real Dataflow with FakeLLM over HTTP | Nightly only |
-| Spark | A weekly leg (`docker/compose.spark.yaml`) stands up the stack, but every conformance cell is a declared skip — Beam's Spark portable runner registers no bundle checkpoint handler, which the streaming ingest source requires | Weekly; zero scenarios currently execute |
+| Runner | Support | Exercised by | Tier |
+|---|---|---|---|
+| DirectRunner | **Supported** | The whole unit tier, plus the conformance matrix's DirectRunner leg | Offline, every PR |
+| Flink | **Supported** | Mini-cluster in Docker; the conformance matrix's Flink leg and the effectively-once end-to-end gate | Docker-backed, every PR |
+| Dataflow | **Supported** | `-m dataflow` tests against real Dataflow with FakeLLM over HTTP | Nightly |
+| Spark | **Unverified** | A weekly leg (`docker/compose.spark.yaml`) stands up the stack, but every conformance cell is a declared skip — Beam's Spark portable runner registers no bundle checkpoint handler, which the streaming ingest source requires | Weekly; zero scenarios currently execute |
 
-The project's stated v1.0 target is DirectRunner, Dataflow, and Flink, with
-Spark best-effort. That is a goal, and the table above is the current evidence
-for it.
+DirectRunner, Flink, and Dataflow are the project's supported v1.0 runners, and
+the table above is what that word rests on. Spark stays best-effort, which on
+this page means unverified: a target the project intends to support, not one it
+claims to today.
+
+### What "supported" rests on
+
+- **Flink.** A per-pull-request job builds the SDK-harness image, brings the
+  mini-cluster stack up, and runs two gates against it: the docker-backed
+  effectively-once end-to-end semantics gate, and the adapter conformance
+  matrix's Flink leg. Five of the seven canonical conformance scenarios run on
+  that leg for every registered adapter. The other two are declared skips with
+  recorded reasons, and neither is a Flink gap: the bundle-retry-cache cell
+  needs an in-process commit-failure monkeypatch that cannot reach the harness
+  container (real replay on Flink is covered instead by the
+  restart-mid-suspension cell), and the TTL-expiry cell needs idle-partition
+  watermark control the harness does not have (TTL garbage collection is
+  runtime rather than adapter-visible behavior, so the DirectRunner leg keeps
+  full adapter coverage).
+- **Dataflow.** A nightly job runs the `dataflow`-marked tests against the real
+  service in the GCP project the repository's CI variables name: the pipeline
+  `--update` state-compatibility gate, which launches the previous release and
+  then replaces it in place with head (see
+  [`docs/state-compat.md`](https://github.com/ardada2468/beam-agents/blob/main/docs/state-compat.md)),
+  and the Flex Template launch gate, which validates the packaging built from
+  that same commit. Where those CI variables are unset the job reports a
+  visible skip rather than a pass, so an unconfigured fork never reads as
+  evidence.
 
 ## What the runner has to provide
 
@@ -132,6 +171,10 @@ alongside [the quickstart](https://github.com/ardada2468/beam-agents/blob/main/d
 laptop → local Flink → Dataflow ladder.
 
 ## Not yet implemented
+
+This page carries the **Partial** badge even though three of its four runners
+are supported, because the badge describes the runner surface as a whole and
+two things in it are still missing:
 
 - **No conformance scenario executes on Spark.** The weekly leg exists and
   runs, but a runner-level gap (no bundle checkpoint handler in Beam's Spark

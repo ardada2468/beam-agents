@@ -12,7 +12,7 @@ document's ``config:`` mapping as keyword arguments.
     providers:
       - type: python
         config:
-          packages: ["beam-agents==1.0.0"]
+          packages: ["beam-agents==1.0.0a1"]
         transforms:
           RunAgent: "beam_agents.yaml.run_agent"
 

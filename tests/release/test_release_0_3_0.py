@@ -82,7 +82,15 @@ def changelog_section(version: str) -> str:
 
 
 def _parts(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.split("."))
+    """The release triple, with any PEP 440 pre-release suffix dropped.
+
+    See the same helper in `test_release_1_0_0.py` for why the floor is
+    asserted over the release triple rather than the raw string: a pre-release
+    of X.Y.Z is the run-up to X.Y.Z, not a regression below it.
+    """
+    release = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
+    assert release is not None, f"unparseable version {version!r}"
+    return tuple(int(part) for part in release.groups())
 
 
 def _project_version() -> str:

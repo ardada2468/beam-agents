@@ -78,3 +78,21 @@ nav:
       - Benchmarks: benchmarks.md
       - Benchmarks vs. Flink Agents: benchmarks/0.3.0-vs-flink-agents.md
       - Releasing: releasing.md
+  # Upstreaming artifacts. Both documents are drafts addressed to the Beam
+  # community, and each says so in its own front matter; they are navigable
+  # here so the proposal is readable alongside the runtime it describes.
+  - Upstreaming to Apache Beam:
+      - Design document (draft): design/apache-beam-ml-agents.md
+      - dev@ thread plan (draft): design/apache-beam-ml-agents-thread-plan.md
+
+# Stricter than the mkdocs defaults, which report all of these at INFO and so
+# let them slip past `--strict`. A dead in-page anchor, an unrecognized link
+# target, an absolute link that only resolves on GitHub, or a page left out of
+# the nav (an unreachable orphan) is a docs defect; each one fails `make docs`.
+validation:
+  anchors: warn
+  links:
+    unrecognized_links: warn
+    absolute_links: warn
+  nav:
+    omitted_files: warn

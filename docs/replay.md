@@ -96,7 +96,7 @@ results, or approvals) topic is the only place the triggering bytes exist.
 $ beam-agents-replay \
     --snapshot snapshot.pb --traces traces.pb --event event.pb \
     --agent myapp.agent:AGENT --registry myapp.agent:TOOLS
-beam-agents-replay 1.0.0
+beam-agents-replay 1.0.0a1
   agent:  myapp.agent:AGENT
   key:    637573746f6d65722d3432  seq: 7  now_ms: 1734000000000
   kind:   start

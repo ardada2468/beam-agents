@@ -14,6 +14,24 @@ the release procedure.
 
 <!-- towncrier release notes start -->
 
+## 1.0.0a1 - 2026-08-06
+
+The first **published** artifact, and a pre-release of the 1.0.0 below rather
+than a release of its own. `1.0.0a1` sorts *before* `1.0.0` under PEP 440, so
+`pip install beam-agents` will not resolve to it — installing it takes an
+explicit `--pre` or an exact pin.
+
+It carries no code changes over the 1.0.0 section below: the tree is the same
+one those notes were assembled from. What it exercises is the publishing path
+itself — trusted publishing to PyPI, the rendered metadata, and the artifact
+contents — on a version number that can be superseded, because PyPI filenames
+are immutable and a botched first upload can only be yanked, never replaced.
+
+The pending [`changelog.d/`](changelog.d/README.md) fragments are deliberately
+**not** consumed here. They belong to the 1.0.0 section that `make changelog`
+will assemble at the real release; spending them on a pre-release would leave
+1.0.0's notes empty.
+
 ## 1.0.0 - 2026-07-31
 
 The **M4 milestone release**, and the first release whose version number is a

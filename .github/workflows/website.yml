@@ -85,6 +85,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `vercel build` shells out to the package manager detected from the
+      # lockfile (pnpm-lock.yaml here), so pnpm must be on PATH before that
+      # step runs — without it the build fails with `spawn pnpm ENOENT`.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: website/.nvmrc
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
 
