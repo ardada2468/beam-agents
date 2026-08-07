@@ -118,6 +118,14 @@ jobs:
 
       - name: Deploy to production
         id: deploy
-        run: echo "url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")" >> "$GITHUB_OUTPUT"
+        # The URL is captured in its own assignment rather than inline in the
+        # `echo`. Written as `echo "url=$(vercel deploy ...)"`, the step's exit
+        # status is *echo's* — zero no matter what the deploy did — so a
+        # rejected deployment reported a green check and the workflow claimed a
+        # publish that had not happened. An assignment's status is the command
+        # substitution's, which `bash -e` then acts on.
+        run: |
+          url="$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
