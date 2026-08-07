@@ -5,7 +5,7 @@ name = "beam-agents"
 # scripts/check_release.py fails the release workflow before anything builds if
 # they don't. Never derived from git state: uv.lock records the project version,
 # so a VCS-derived version would break `uv sync --locked` determinism.
-version = "1.0.0"
+version = "1.0.0a1"
 description = "A runtime for protobuf-native, per-key-deterministic streaming agents on Apache Beam."
 readme = "README.md"
 license = { text = "Apache-2.0" }

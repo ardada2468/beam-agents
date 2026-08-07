@@ -148,7 +148,19 @@ def changelog_section(version: str) -> str:
 
 
 def _parts(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.split("."))
+    """The release triple, with any PEP 440 pre-release suffix dropped.
+
+    `1.0.0a1` is *below* `1.0.0` under PEP 440 ordering, so comparing the raw
+    strings would read a pre-release as a regression below the milestone. It is
+    the opposite: an alpha/beta/rc of X.Y.Z is the run-up *to* X.Y.Z, cut from
+    the tree that already has X.Y.Z's notes assembled. The floor this asserts is
+    therefore over the release triple — `1.0.0a1` reaches the `1.0.0` floor,
+    while a genuine regression to `0.9.0` still fails. Dropping the suffix is
+    also what keeps `int()` from raising on the `0a1` component.
+    """
+    release = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
+    assert release is not None, f"unparseable version {version!r}"
+    return tuple(int(part) for part in release.groups())
 
 
 def project_version() -> str:

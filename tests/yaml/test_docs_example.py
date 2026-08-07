@@ -68,7 +68,10 @@ def test_the_documented_provider_block_names_the_shipped_constructor() -> None:
 
 def test_the_documented_package_pin_matches_the_shipped_version() -> None:
     text = DOC.read_text(encoding="utf-8")
-    pinned = re.findall(r"beam-agents==(\d+\.\d+\.\d+)", text)
+    # The pin has to admit PEP 440 pre-releases: an alpha/beta/rc ships the
+    # same documented providers block, and a bare `\d+\.\d+\.\d+` would capture
+    # `1.0.0` out of `1.0.0a1` and then compare it against the real version.
+    pinned = re.findall(r"beam-agents==(\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?)", text)
     assert pinned, "docs/yaml.md must pin the installable package in its providers block"
     assert set(pinned) == {version("beam-agents")}
 

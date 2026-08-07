@@ -1,7 +1,7 @@
 {
   "generated_by": "scripts/gen_api_reference.py",
   "package": "beam_agents",
-  "package_version": "1.0.0",
+  "package_version": "1.0.0a1",
   "public_surface": [
     "AdkAgent",
     "AgentConfig",

@@ -34,7 +34,7 @@ export const LICENSE = 'Apache-2.0';
  * The declared package version, mirroring `pyproject.toml`.
  * `scripts/verify_docs_claims.py` fails the check when the two drift.
  */
-export const PACKAGE_VERSION = '1.0.0';
+export const PACKAGE_VERSION = '1.0.0a1';
 
 /**
  * Release state is deliberately NOT derived from the version string: the
