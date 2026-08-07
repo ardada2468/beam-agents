@@ -108,6 +108,19 @@ export async function renderMdx(source: string): Promise<ReactElement> {
     source,
     options: {
       parseFrontmatter: false,
+      // next-mdx-remote 6 blocks JS expressions in MDX by default, which strips
+      // every `{...}` attribute value before the tree is compiled. That is the
+      // right default for user-submitted MDX; here it silently empties the
+      // site's own component API — `<ClaimTable columns={[...]} rows={[...]}>`
+      // and every `<Diagram>`'s geometry arrive as `undefined`, and the page
+      // fails to prerender on `columns.map`. The MDX this renders is first-party
+      // content under `website/content/`, versioned and reviewed like the rest
+      // of the repository, never reader input.
+      //
+      // `blockDangerousJS` is deliberately left at its secure default: the pages
+      // need array and object literals as props, not `eval`, `Function`, or
+      // `process`.
+      blockJS: false,
       mdxOptions: {
         remarkPlugins: REMARK_PLUGINS,
         rehypePlugins: [rehypeSlug, rehypeScrollableTables, [rehypeShiki, SHIKI_OPTIONS]],
