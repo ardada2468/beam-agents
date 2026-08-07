@@ -57,7 +57,7 @@ see also [the errors output](../errors.md) for the `orphaned_result` and
 uv run python -m examples.fraud_triage
 ```
 
-```
+```text
 b'freeze:acct-a'
 b'__hitl_timeout__'
 ```
@@ -80,6 +80,6 @@ The code below is included verbatim from
 executes in CI, asserting the freeze output, the single approval intent for
 account A, and the deny fallback for account B.
 
-```python
+```python title="examples/fraud_triage.py"
 --8<-- "examples/fraud_triage.py"
 ```

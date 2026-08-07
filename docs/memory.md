@@ -39,7 +39,7 @@ pipeline exists — without importing any client library:
 
 Backends ship in the optional `memory-stores` extra:
 
-```
+```sh
 pip install 'beam-agents[memory-stores]'
 ```
 

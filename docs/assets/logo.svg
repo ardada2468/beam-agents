@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="beam-agents">
+  <!--
+    The mark is the site's signature reduced to its glyph: the pipe from
+    `events | RunAgent(my_agent)`, in the amber this project reserves for
+    "staged", on the dark paper token. Deliberately the same mark the website
+    generates in app/icon.tsx — no logo exists for this project, and inventing
+    one here would outrun the identity.
+
+    The tile is drawn rather than left transparent so the one file works as the
+    header logo on a white bar and as the favicon on a browser tab of unknown
+    colour. The hairline stroke is what keeps it from vanishing into a dark
+    header.
+  -->
+  <rect x=".5" y=".5" width="31" height="31" rx="3" fill="#0c0d0f" stroke="#33363b"/>
+  <rect x="14.6" y="7" width="2.8" height="18" rx="1.2" fill="#e0a458"/>
+</svg>

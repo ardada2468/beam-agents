@@ -48,7 +48,7 @@ job there reads a real source. The Dataflow-shaped version of the same story is
 
 ## The pipeline
 
-```python
+```python title="examples/quickstart/pipeline.py"
 --8<-- "examples/quickstart/pipeline.py"
 ```
 

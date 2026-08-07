@@ -107,7 +107,7 @@ The pattern this repo uses is a parameter that carries a *reference*:
 `model_api_key_secret` names a Secret Manager **version**, validated at launch
 against the resource-name grammar
 
-```
+```text
 projects/<project>/secrets/<secret>/versions/<version>
 ```
 

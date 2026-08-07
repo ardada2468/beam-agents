@@ -11,13 +11,71 @@ Nothing in the runtime fronts that channel — approval surfaces are yours, not
 the runtime's. This example is a worked one, so the contract is code you can
 read rather than a paragraph you re-derive.
 
-```
-RunAgent .intents ─► outbox ─► effector ─► approval channel
-                                                  │
-                                        [ this example: Slack ]
-                                                  │
-                                    approvals topic ─► re-injection ─► resume
-```
+<figure class="diagram" markdown="1">
+<div class="diagram-scroll">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 252" role="img" aria-labelledby="slack-t slack-d">
+<title id="slack-t">The approval round trip through a Slack surface</title>
+<desc id="slack-d">A cycle that starts and ends at RunAgent. The activation calls request_approval, suspends, and its approval intent leaves the graph on dot intents to an outbox topic, where the effector routes it verbatim to the approval channel without executing it. Everything from there is the reader's own code: a Slack approval surface posts the intent to a channel, a human decides, and the verdict returns to the surface, which publishes one AgentEnvelope.Approval to the approvals topic under the same key. That topic is read back into the pipeline — the only solid edge in the diagram — and the suspended activation resumes on the same key. If no verdict arrives before the deadline, the runtime denies.</desc>
+<defs>
+<marker id="slack-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--rule-2, #8e8e87)"/></marker>
+<marker id="slack-a-int" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--s-intents, #8a5205)"/></marker>
+</defs>
+<rect x="448" y="26" width="258" height="170" rx="2" fill="none" stroke="var(--rule-2, #8e8e87)" stroke-width="1" stroke-dasharray="4 3"/>
+<g fill="none" stroke="var(--s-intents, #8a5205)" stroke-width="1.25" stroke-dasharray="4 3">
+<path d="M94,118 V77 H198" marker-end="url(#slack-a-int)"/>
+<path d="M304,77 H338" marker-end="url(#slack-a-int)"/>
+<path d="M424,77 H462" marker-end="url(#slack-a-int)"/>
+</g>
+<g fill="none" stroke="var(--rule-2, #8e8e87)" stroke-width="1.25" stroke-dasharray="4 3">
+<path d="M540,98 V128" marker-end="url(#slack-a)"/>
+<path d="M606,144 H628" marker-end="url(#slack-a)"/>
+<path d="M660,130 V100" marker-end="url(#slack-a)"/>
+<path d="M478,98 V218 H438" marker-end="url(#slack-a)"/>
+</g>
+<path d="M298,218 H16 V154 H26" fill="none" stroke="var(--rule-2, #8e8e87)" stroke-width="1.25" marker-end="url(#slack-a)"/>
+<g fill="var(--paper, #ffffff)" stroke="var(--ink, #0b0c0e)" stroke-width="1.25">
+<rect x="28" y="118" width="132" height="72" rx="2"/>
+<rect x="300" y="204" width="136" height="28" rx="2"/>
+</g>
+<g fill="var(--paper-2, #f6f6f4)" stroke="var(--rule-2, #8e8e87)" stroke-width="1">
+<rect x="200" y="63" width="104" height="28" rx="2"/>
+<rect x="340" y="63" width="84" height="28" rx="2"/>
+<rect x="464" y="56" width="226" height="42" rx="2"/>
+<rect x="506" y="130" width="100" height="28" rx="2"/>
+<rect x="630" y="130" width="60" height="28" rx="2"/>
+</g>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--ink-2, #4a4e54)" text-anchor="middle">
+<text x="252" y="81">outbox topic</text>
+<text x="382" y="81">effector</text>
+<text x="577" y="73">Slack approval surface</text>
+<text x="556" y="148">#approvals</text>
+<text x="660" y="148">human</text>
+<text x="368" y="222">approvals topic</text>
+</g>
+<text x="94" y="150" text-anchor="middle" font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--ink, #0b0c0e)">RunAgent</text>
+<text x="94" y="168" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">suspended · same key</text>
+<text x="102" y="98" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--s-intents, #8a5205)">.intents</text>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">
+<text x="577" y="91" text-anchor="middle">examples/slack_approval</text>
+<text x="382" y="104" text-anchor="middle">routes it verbatim</text>
+<text x="462" y="44">your code, not the runtime's</text>
+<text x="548" y="118">post</text>
+<text x="648" y="118" text-anchor="end">verdict</text>
+<text x="486" y="180">publishes AgentEnvelope.Approval</text>
+<text x="176" y="148">no verdict before the deadline</text>
+<text x="176" y="162">resolves the suspension as denied</text>
+<text x="157" y="208" text-anchor="middle">resumes on the same key</text>
+</g>
+</svg>
+</div>
+<figcaption markdown="1">
+Everything inside the dashed region is code you write; the runtime's half is the
+amber leg, `.intents` to the outbox and an effector that routes the request
+without executing it. The verdict returns as one `AgentEnvelope.Approval` on the
+approvals topic — the only hop here that is an edge in the Beam graph, and the
+re-injection that resumes the suspended activation on the same key.
+</figcaption>
+</figure>
 
 Source: `examples/slack_approval/`. Sample code — outside the wheel, outside
 the public API, no compatibility promise beyond its own tests. Copy it into
@@ -178,7 +236,7 @@ intent, post it, take the verdict, publish the envelope back. This is the
 module itself, rendered from source — the code below is the code the tests
 below execute.
 
-```python
+```python title="examples/slack_approval/surface.py"
 --8<-- "examples/slack_approval/surface.py"
 ```
 

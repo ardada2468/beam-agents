@@ -13,7 +13,18 @@ edit_uri: blob/main/docs/
 
 theme:
   name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  # The two schemes must be Material's own `default` and `slate`: the theme
+  # defines its base `--md-*` variables against exactly those selectors, and
+  # docs/stylesheets/extra.css overrides them from there. The three-entry
+  # palette means the site follows the OS preference until a reader overrides
+  # it, and the override then sticks.
   palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
       toggle:
@@ -23,37 +34,100 @@ theme:
       scheme: slate
       toggle:
         icon: material/brightness-4
-        name: Switch to light mode
+        name: Follow the system preference
+  # The website self-hosts Instrument Sans and IBM Plex Mono from npm so it
+  # stays hermetic at render time. Material has no equivalent, so these are
+  # requested from the font CDN with the same two families; nothing is fetched
+  # at *build* time, so `mkdocs build --strict` still runs offline.
+  font:
+    text: Instrument Sans
+    code: IBM Plex Mono
+  icon:
+    repo: fontawesome/brands/github
   features:
     - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
     - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+# Stated in the footer of every page, because the name "Apache Beam" in the
+# tagline invites exactly the wrong inference and the site should not rely on a
+# reader knowing better.
+copyright: >-
+  Apache-2.0. Built on Apache Beam; not an Apache Software Foundation project.
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ardada2468/beam-agents
+      name: beam-agents on GitHub
+  # The identity is stated once, in website/app/globals.css, and ported onto
+  # Material in docs/stylesheets/extra.css. Material's own palette generator
+  # would fight both, so it stays switched off.
+  generator: true
+
+plugins:
+  - search
 
 markdown_extensions:
   # Re-declare the mkdocs defaults this list replaces.
   - toc:
       permalink: true
+      permalink_title: Link to this section
+      toc_depth: 3
   - tables
   - admonition
   - attr_list
-  - pymdownx.highlight
+  - def_list
+  - footnotes
+  # The diagrams under docs/ are hand-authored inline SVG, and the grid on the
+  # home page is markdown inside a div; both need raw HTML to survive.
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
   - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
   # Example pages include examples/*.py by path; a moved file fails the build.
   - pymdownx.snippets:
       base_path: ["."]
       check_paths: true
 
+# Top-level entries become tabs. Grouping Quickstart with the example programs
+# is what makes that work: a tab whose section holds one page renders an empty
+# sidebar next to it, so single-page tabs are reserved for the two pages that
+# really are destinations on their own — the home page and the API reference.
 nav:
   - Home: index.md
-  - Quickstart: quickstart.md
-  - Examples:
-      - Quickstart: examples/quickstart.md
-      - Hello, world: examples/hello-world.md
-      - Fraud triage: examples/fraud-triage.md
-      - Fraud triage on Dataflow: examples/fraud-triage-dataflow.md
-      - IoT reaction: examples/iot-reaction.md
-      - Slack approval: examples/slack-approval.md
-      - Console demo: examples/console-demo.md
-      - Continuous evaluation: continuous_eval.md
+  - Get started:
+      - Quickstart: quickstart.md
+      - Examples:
+          - Hello, world: examples/hello-world.md
+          - Fraud triage: examples/fraud-triage.md
+          - IoT reaction: examples/iot-reaction.md
+          - Console demo: examples/console-demo.md
+          - Quickstart pipeline: examples/quickstart.md
+          - Slack approval: examples/slack-approval.md
+          - Fraud triage on Dataflow: examples/fraud-triage-dataflow.md
   - API reference: api.md
   - Building on the runtime:
       - Framework adapters: adapters.md
@@ -75,6 +149,9 @@ nav:
       - State export and replay: replay.md
       - State compatibility: state-compat.md
       - State schema migration: state-migration.md
+      # Not an example program — a 600-line guide to a second Beam pipeline
+      # that judges the first one's decisions. It sits with the operator pages.
+      - Continuous evaluation: continuous_eval.md
       - Benchmarks: benchmarks.md
       - Benchmarks vs. Flink Agents: benchmarks/0.3.0-vs-flink-agents.md
       - Releasing: releasing.md

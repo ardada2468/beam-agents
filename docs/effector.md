@@ -2,9 +2,51 @@
 
 The effector is the external service that closes the effects loop:
 
-```
-RunAgent .intents ─► outbox topic ─► effector ─► results topic ─► re-injection
-```
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 288" width="100%" role="img" aria-labelledby="eff-t eff-d">
+<title id="eff-t">The effects loop closed by the effector</title>
+<desc id="eff-d">RunAgent stages tool intents but never executes them. Its dot intents output leaves the Beam graph as a dashed line into an outbox topic. The effector consumes that topic in key order and executes each intent exactly once per deterministic intent id, following the phase order verify, refuse-expired, claim, execute, complete, publish, commit. It publishes one ToolResult to a results topic, which re-enters RunAgent on the same entity key. The outbox topic, the effector and the results topic all sit outside the pipeline.</desc>
+<defs>
+<marker id="eff-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--rule-2, #8e8e87)"/></marker>
+<marker id="eff-a-int" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--s-intents, #8a5205)"/></marker>
+</defs>
+<rect x="20" y="140" width="680" height="114" rx="2" fill="none" stroke="var(--rule, #e2e2dd)" stroke-width="1"/>
+<g fill="var(--paper, #ffffff)" stroke="var(--ink, #0b0c0e)" stroke-width="1.25">
+<rect x="276" y="40" width="168" height="58" rx="2"/>
+</g>
+<g fill="var(--paper-2, #f6f6f4)" stroke="var(--rule-2, #8e8e87)" stroke-width="1">
+<rect x="272" y="170" width="176" height="56" rx="2"/>
+<rect x="48" y="184" width="126" height="28" rx="2"/>
+<rect x="546" y="184" width="126" height="28" rx="2"/>
+</g>
+<g fill="none" stroke-width="1.25">
+<path d="M276,69 H111 V182" stroke="var(--s-intents, #8a5205)" stroke-dasharray="4 3" marker-end="url(#eff-a-int)"/>
+<path d="M174,198 H270" stroke="var(--s-intents, #8a5205)" stroke-dasharray="4 3" marker-end="url(#eff-a-int)"/>
+<path d="M448,198 H544" stroke="var(--rule-2, #8e8e87)" stroke-dasharray="4 3" marker-end="url(#eff-a)"/>
+<path d="M609,184 V69 H446" stroke="var(--rule-2, #8e8e87)" stroke-dasharray="4 3" marker-end="url(#eff-a)"/>
+</g>
+<text x="360" y="63" text-anchor="middle" font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--ink, #0b0c0e)">RunAgent</text>
+<text x="360" y="81" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">stages, never executes</text>
+<text x="360" y="192" text-anchor="middle" font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--ink, #0b0c0e)">effector</text>
+<text x="360" y="210" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">once per intent_id</text>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--ink-2, #4a4e54)" text-anchor="middle">
+<text x="111" y="202">outbox topic</text>
+<text x="609" y="202">results topic</text>
+</g>
+<text x="118" y="118" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--s-intents, #8a5205)">.intents</text>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">
+<text x="595" y="110" text-anchor="end">one ToolResult per intent</text>
+<text x="595" y="126" text-anchor="end">re-injected on the same key</text>
+<text x="222" y="188" text-anchor="middle">in key order</text>
+<text x="497" y="188" text-anchor="middle">publishes</text>
+<text x="360" y="244" text-anchor="middle">verify → refuse-expired → claim → execute → complete → publish → commit</text>
+<text x="360" y="272" text-anchor="middle">outside the pipeline</text>
+</g>
+</svg>
+
+*Every edge in the loop is dashed because none of it is an edge in the Beam
+graph: the cycle closes through the message bus, outside the pipeline. The
+phase order under the effector is the crash argument — each boundary is
+explained in [Behavior reference](#behavior-reference).*
 
 It consumes `ToolIntent`s, refuses expired ones, dedups on `intent_id`,
 executes side-effecting tools from your `ToolRegistry`, and publishes one

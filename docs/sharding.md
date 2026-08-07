@@ -66,11 +66,57 @@ Three properties are load-bearing:
 On the **events branch only** — after `WithKeys`, before the `Flatten` with tool
 results and approvals:
 
-```text
-Kafka/PubSub events ──► WithKeys(entity_id) ──► ShardKeys(N) ──┐
-tool-results topic ────────────────────────────────────────────┼─► Flatten ─► RunAgent
-approvals topic ───────────────────────────────────────────────┘
-```
+<figure class="diagram" markdown="1">
+<div class="diagram-scroll">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 682 184" role="img" aria-labelledby="shard-t shard-d">
+<title id="shard-t">Where ShardKeys sits in the dataflow shape</title>
+<desc id="shard-d">The events branch runs left to right through WithKeys of entity id and then ShardKeys of N, which rewrites the key to key hash shard index. The tool-results and approvals branches run straight past ShardKeys and join the same Flatten untouched, because their elements already carry the physical shard key. The flattened stream feeds RunAgent.</desc>
+<defs>
+<marker id="shard-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L7,4 L0,7 z" fill="var(--rule-2, #8e8e87)"/></marker>
+</defs>
+<g fill="none" stroke="var(--rule-2, #8e8e87)" stroke-width="1.25">
+<path d="M120,46 H142" marker-end="url(#shard-a)"/>
+<path d="M288,46 H310" marker-end="url(#shard-a)"/>
+<path d="M412,46 H428"/>
+<path d="M120,98 H428"/>
+<path d="M120,150 H428"/>
+<path d="M428,46 V150"/>
+<path d="M428,98 H442" marker-end="url(#shard-a)"/>
+<path d="M518,98 H540" marker-end="url(#shard-a)"/>
+</g>
+<g fill="var(--paper, #ffffff)" stroke="var(--ink, #0b0c0e)" stroke-width="1.25">
+<rect x="16" y="32" width="104" height="28" rx="2"/>
+<rect x="16" y="84" width="104" height="28" rx="2"/>
+<rect x="16" y="136" width="104" height="28" rx="2"/>
+<rect x="144" y="32" width="144" height="28" rx="2"/>
+<rect x="312" y="32" width="100" height="28" rx="2"/>
+<rect x="444" y="84" width="74" height="28" rx="2"/>
+<rect x="542" y="74" width="124" height="48" rx="2"/>
+</g>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="var(--ink-2, #4a4e54)" text-anchor="middle">
+<text x="68" y="50">events</text>
+<text x="68" y="102">tool-results</text>
+<text x="68" y="154">approvals</text>
+<text x="216" y="50">WithKeys(entity_id)</text>
+<text x="362" y="50">ShardKeys(N)</text>
+<text x="481" y="102">Flatten</text>
+</g>
+<text x="604" y="94" text-anchor="middle" font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--ink, #0b0c0e)">RunAgent</text>
+<text x="604" y="112" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)">keyed · stateful</text>
+<g font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5" letter-spacing="0.06" fill="var(--ink-3, #63676d)" text-anchor="middle">
+<text x="362" y="23">events branch only</text>
+<text x="362" y="74">key#0 … key#N-1</text>
+<text x="300" y="127">already carry the physical key</text>
+</g>
+</svg>
+</div>
+<figcaption markdown="1">
+`ShardKeys` sits on one branch, not on the `Flatten`. The other two lanes run
+straight past it into the same `Flatten`, because their elements were already
+stamped with the physical key upstream — that asymmetry is the whole placement
+rule.
+</figcaption>
+</figure>
 
 Results and approvals must **not** pass through `ShardKeys`. They already carry
 the physical shard key: the runtime stamps `ToolIntent.entity_key` with it, the

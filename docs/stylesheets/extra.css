@@ -1,0 +1,1079 @@
+/*
+ * The docs site's skin.
+ *
+ * The project already has a visual identity: `website/` states it in
+ * `app/globals.css` and `app/diagram.css`, and it is a deliberate one —
+ * monochrome, hairlines instead of cards, no shadows anywhere, radius capped
+ * at 2px, and exactly four saturated colours which name the four outputs of
+ * `RunAgent` and mean the same thing everywhere they appear. This file ports
+ * that identity onto Material for MkDocs rather than inventing a second one.
+ *
+ * The token names below are the website's token names, deliberately. The
+ * inline SVG diagrams under docs/ paint themselves with `var(--rule-2)`,
+ * `var(--s-intents)` and friends, so the same diagram markup renders correctly
+ * on both sites — which matters, because `website/lib/repodoc.ts` renders
+ * docs/effector.md, docs/errors.md, docs/metrics.md, docs/traces.md and
+ * docs/ci.md itself, from these very files.
+ *
+ * Everything after the token block is the mapping onto Material's own
+ * `--md-*` variables, plus the handful of places where Material's defaults
+ * (filled admonitions, drop shadows, a coloured header bar) contradict the
+ * identity and have to be overridden rather than tinted.
+ */
+
+/* ---------------------------------------------------------------- tokens -- */
+
+/*
+ * The two schemes are Material's own `default` and `slate` rather than custom
+ * names, because Material defines its ~80 base `--md-*` variables against
+ * exactly those two selectors: a scheme it does not know leaves the theme with
+ * no defaults at all to override.
+ */
+[data-md-color-scheme="default"] {
+  color-scheme: light;
+
+  --paper: #ffffff;
+  --paper-2: #f6f6f4;
+  --paper-3: #edede9;
+  --ink: #0b0c0e;
+  --ink-2: #4a4e54;
+  --ink-3: #63676d;
+  --rule: #e2e2dd;
+  --rule-2: #8e8e87;
+  --link: #14448f;
+  --focus: #0f62d6;
+
+  /* The stream key. Used only where the stream is the subject. */
+  --s-output: #0b0c0e;
+  --s-intents: #8a5205;
+  --s-traces: #3c5c78;
+  --s-errors: #9e2a18;
+
+  --status-stable: #1f5c38;
+
+  /* Code. The website renders through Shiki's github-light/github-dark; these
+     are that pair's grounds, so a snippet looks the same on both sites. */
+  --code-bg: #ffffff;
+  --hl-comment: #6e7781;
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-number: #0550ae;
+  --hl-function: #8250df;
+  --hl-name: #953800;
+  --hl-operator: #0550ae;
+  --hl-punct: #24292f;
+}
+
+[data-md-color-scheme="slate"] {
+  color-scheme: dark;
+
+  --paper: #0c0d0f;
+  --paper-2: #141618;
+  --paper-3: #1c1f22;
+  --ink: #ededea;
+  --ink-2: #a7abb0;
+  --ink-3: #8f949a;
+  --rule: #262a2e;
+  --rule-2: #5f666d;
+  --link: #9dbef2;
+  --focus: #6ea4f5;
+
+  --s-output: #ededea;
+  --s-intents: #e0a458;
+  --s-traces: #9bbcdd;
+  --s-errors: #ee9683;
+
+  --status-stable: #74d49f;
+
+  --code-bg: #0d1117;
+  --hl-comment: #8b949e;
+  --hl-keyword: #ff7b72;
+  --hl-string: #a5d6ff;
+  --hl-number: #79c0ff;
+  --hl-function: #d2a8ff;
+  --hl-name: #ffa657;
+  --hl-operator: #79c0ff;
+  --hl-punct: #c9d1d9;
+}
+
+/* ------------------------------------------------ mapping onto Material -- */
+
+[data-md-color-scheme="default"],
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: var(--paper);
+  --md-default-bg-color--light: var(--paper-2);
+  --md-default-bg-color--lighter: var(--paper-2);
+  --md-default-bg-color--lightest: var(--paper-3);
+
+  --md-default-fg-color: var(--ink);
+  --md-default-fg-color--light: var(--ink-2);
+  --md-default-fg-color--lighter: var(--ink-3);
+  --md-default-fg-color--lightest: var(--rule);
+
+  --md-typeset-color: var(--ink);
+  --md-typeset-a-color: var(--link);
+  --md-typeset-del-color: color-mix(in srgb, var(--s-errors) 18%, transparent);
+  --md-typeset-ins-color: color-mix(in srgb, var(--status-stable) 18%, transparent);
+  --md-typeset-mark-color: color-mix(in srgb, var(--s-intents) 22%, transparent);
+
+  /* The header and the tab strip are the page, not a coloured band over it. */
+  --md-primary-fg-color: var(--paper);
+  --md-primary-fg-color--light: var(--paper);
+  --md-primary-fg-color--dark: var(--paper);
+  --md-primary-bg-color: var(--ink);
+  --md-primary-bg-color--light: var(--ink-2);
+
+  --md-accent-fg-color: var(--link);
+  --md-accent-bg-color: var(--paper);
+
+  --md-code-bg-color: var(--code-bg);
+  --md-code-fg-color: var(--ink);
+  --md-code-hl-color: color-mix(in srgb, var(--s-intents) 20%, transparent);
+
+  --md-code-hl-comment-color: var(--hl-comment);
+  --md-code-hl-keyword-color: var(--hl-keyword);
+  --md-code-hl-string-color: var(--hl-string);
+  --md-code-hl-number-color: var(--hl-number);
+  --md-code-hl-function-color: var(--hl-function);
+  --md-code-hl-name-color: var(--ink);
+  --md-code-hl-constant-color: var(--hl-number);
+  --md-code-hl-variable-color: var(--hl-name);
+  --md-code-hl-operator-color: var(--hl-operator);
+  --md-code-hl-punctuation-color: var(--hl-punct);
+  --md-code-hl-special-color: var(--hl-name);
+  --md-code-hl-generic-color: var(--ink-2);
+
+  --md-footer-bg-color: var(--paper);
+  --md-footer-bg-color--dark: var(--paper);
+  --md-footer-fg-color: var(--ink);
+  --md-footer-fg-color--light: var(--ink-2);
+  --md-footer-fg-color--lighter: var(--ink-3);
+
+  --md-shadow-z1: none;
+  --md-shadow-z2: none;
+  --md-shadow-z3: none;
+}
+
+/* ------------------------------------------------------------ typography -- */
+
+body,
+input,
+.md-typeset {
+  font-feature-settings: "cv05" 1;
+}
+
+.md-typeset {
+  font-size: 0.825rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+.md-typeset h1 {
+  font-size: 2.42em;
+  line-height: 1.06;
+  font-weight: 600;
+  letter-spacing: -0.028em;
+  color: var(--ink);
+  text-wrap: balance;
+  margin: 0 0 1.1rem;
+}
+
+/* Every h2 draws its own top rule, which is what divides a page here — so a
+   page header deliberately carries none, and neither does an h2 that follows
+   the h1 immediately. */
+.md-typeset h2 {
+  font-size: 1.376em;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-top: 2.6em;
+  padding-top: 0.7em;
+  border-top: 1px solid var(--rule);
+}
+
+.md-typeset h1 + h2 {
+  margin-top: 1.4em;
+}
+
+/* A page that already divides with `---` would otherwise draw two rules with a
+   band of nothing between them. The h2's own rule is the one that stays. */
+.md-typeset hr + h2 {
+  margin-top: 1.4em;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.md-typeset h3 {
+  font-size: 1.086em;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  margin-top: 1.9em;
+}
+
+.md-typeset h4 {
+  font-size: 0.94em;
+  font-weight: 600;
+  color: var(--ink-2);
+  margin-top: 1.5em;
+}
+
+.md-typeset h5,
+.md-typeset h6 {
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.md-typeset p,
+.md-typeset li {
+  text-wrap: pretty;
+}
+
+.md-typeset a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--link) 35%, transparent);
+}
+
+.md-typeset a:hover,
+.md-typeset a:focus {
+  color: var(--link);
+  text-decoration-color: currentcolor;
+}
+
+/* Headerlinks are furniture, not prose. */
+.md-typeset .headerlink {
+  color: var(--rule-2);
+  text-decoration: none;
+}
+
+.md-typeset blockquote {
+  border-left: 2px solid var(--rule-2);
+  padding-left: 1rem;
+  color: var(--ink-2);
+}
+
+.md-typeset hr {
+  border-bottom: 1px solid var(--rule);
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The eyebrow: the site's signature label. Reachable from markdown as
+   `{ .eyebrow }` on a paragraph. */
+.md-typeset .eyebrow {
+  font-family: var(--md-code-font-family);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 0.4rem;
+}
+
+.md-typeset .lede {
+  font-size: 1.1em;
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 62ch;
+}
+
+/* --------------------------------------------------------------- chrome -- */
+
+.md-header {
+  background: var(--paper);
+  color: var(--ink);
+  border-bottom: 1px solid var(--rule);
+  box-shadow: none;
+}
+
+.md-header--shadow {
+  box-shadow: none;
+}
+
+.md-header__title {
+  font-family: var(--md-code-font-family);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.md-header__topic:first-child {
+  font-weight: 500;
+}
+
+.md-header__button.md-logo :is(img, svg) {
+  height: 1.3rem;
+  width: 1.3rem;
+}
+
+.md-tabs {
+  background: var(--paper);
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--rule);
+  box-shadow: none;
+}
+
+.md-tabs__link {
+  font-size: 0.7rem;
+  opacity: 1;
+  color: var(--ink-2);
+  margin-top: 0.5rem;
+}
+
+.md-tabs__item {
+  padding-inline: 0.7rem;
+}
+
+.md-tabs__link--active,
+.md-tabs__link:hover,
+.md-tabs__link:focus {
+  color: var(--ink);
+}
+
+/* Active tab: a rule under the label, not a colour swap alone. */
+.md-tabs__item--active .md-tabs__link {
+  position: relative;
+  font-weight: 600;
+}
+
+.md-tabs__item--active .md-tabs__link::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: -0.55rem;
+  height: 2px;
+  background: var(--ink);
+}
+
+/* Search: a field, in the site's field idiom. No filled pill, no shadow. */
+.md-search__form {
+  background: var(--paper);
+  border: 1px solid var(--rule-2);
+  border-radius: 2px;
+  box-shadow: none;
+  height: 1.6rem;
+}
+
+.md-search__form:hover {
+  background: var(--paper);
+  border-color: var(--ink-3);
+}
+
+.md-search__input {
+  font-size: 0.7rem;
+  color: var(--ink);
+}
+
+.md-search__input::placeholder {
+  color: var(--ink-3);
+}
+
+.md-search__icon,
+.md-search__options .md-icon {
+  color: var(--ink-3);
+}
+
+.md-search__output {
+  border-radius: 0 0 2px 2px;
+  box-shadow: none;
+}
+
+.md-search-result__meta {
+  background: var(--paper-2);
+  color: var(--ink-3);
+  font-family: var(--md-code-font-family);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.md-search-result__article,
+.md-search-result__more summary {
+  border-top: 1px solid var(--rule);
+}
+
+.md-search-result mark {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--s-intents) 24%, transparent);
+}
+
+@media screen and (min-width: 60em) {
+  .md-search__form {
+    background: var(--paper);
+  }
+}
+
+/* ------------------------------------------------------- navigation ------ */
+
+.md-nav {
+  font-size: 0.7rem;
+}
+
+.md-nav__title {
+  font-family: var(--md-code-font-family);
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  box-shadow: none;
+}
+
+.md-nav__link {
+  color: var(--ink-2);
+}
+
+.md-nav__link:is(:hover, :focus) {
+  color: var(--ink);
+}
+
+/* The active-item idiom, borrowed intact from the website's sidebar: a
+   darker, thicker left rule plus weight plus colour — three cues, so it is
+   still legible without colour. */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--primary .md-nav__list .md-nav__item > .md-nav__link:not(.md-nav__link--index) {
+    border-left: 2px solid var(--rule);
+    padding-left: 0.7rem;
+    margin-left: -0.1rem;
+  }
+
+  .md-sidebar--primary .md-nav__link--active,
+  .md-sidebar--primary .md-nav__item .md-nav__link--active {
+    border-left-color: var(--ink) !important;
+    color: var(--ink);
+    font-weight: 600;
+  }
+}
+
+.md-nav__link--active,
+.md-nav__link--active:is(:hover, :focus) {
+  color: var(--ink);
+}
+
+/* Section labels in the sidebar read as eyebrows. */
+.md-nav--lifted > .md-nav__list > .md-nav__item--active > .md-nav__link,
+.md-nav__item--section > .md-nav__link[for] {
+  font-family: var(--md-code-font-family);
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* The table of contents. */
+.md-sidebar--secondary .md-nav__list {
+  border-left: 1px solid var(--rule);
+}
+
+.md-sidebar--secondary .md-nav__link {
+  padding-left: 0.7rem;
+  margin-left: -1px;
+  border-left: 2px solid transparent;
+}
+
+.md-sidebar--secondary .md-nav__link--active {
+  border-left-color: var(--ink);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------- content -- */
+
+.md-content__inner {
+  margin-bottom: 3rem;
+}
+
+/* Material sets a decorative rule after the last block; the h2 rules already
+   do that job. */
+.md-content__inner::before {
+  display: none;
+}
+
+.md-content__button {
+  color: var(--ink-3);
+}
+
+/* --------------------------------------------------------------- code ---- */
+
+.md-typeset code {
+  font-size: 0.855em;
+  background: var(--paper-3);
+  color: var(--ink);
+  border-radius: 2px;
+  padding: 0.1em 0.32em;
+  box-shadow: none;
+}
+
+.md-typeset pre > code {
+  font-size: 0.805em;
+  line-height: 1.6;
+  background: transparent;
+  padding: 0.9rem 1.05rem;
+}
+
+.md-typeset .highlight,
+.md-typeset .highlighttable {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--code-bg);
+}
+
+/*
+ * The example pages include their program verbatim from `examples/`, and three
+ * of those files run to several hundred lines — one is 560. Rendered as an
+ * unbroken block, a single include is longer than everything else on the site
+ * put together and the page's own structure becomes unreachable by scrolling.
+ * A block taller than this scrolls within itself instead. Shorter blocks, which
+ * is nearly all of them, are untouched, and the text stays in the DOM, so
+ * in-page search and printing still reach it.
+ */
+.md-typeset .highlight > pre > code,
+.md-typeset .highlighttable .linenodiv > pre,
+.md-typeset .highlighttable .code > pre > code {
+  max-height: 40rem;
+  overflow: auto;
+}
+
+/* The filename header pymdownx puts above a titled block. */
+.md-typeset .highlight span.filename {
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--rule);
+  border-radius: 3px 3px 0 0;
+  color: var(--ink-3);
+  font-family: var(--md-code-font-family);
+  font-size: 0.68em;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  padding: 0.45rem 1.05rem;
+}
+
+.md-typeset pre {
+  margin: 0;
+}
+
+.md-typeset .highlight > pre,
+.md-typeset .highlighttable pre {
+  border-radius: 3px;
+}
+
+.md-typeset a > code {
+  background: var(--paper-3);
+  color: var(--link);
+}
+
+.md-typeset .md-code__content {
+  background: var(--code-bg);
+}
+
+/* The copy button is furniture: hairline, no fill. */
+.md-clipboard {
+  color: var(--rule-2);
+}
+
+.md-clipboard:hover,
+:hover > .md-clipboard {
+  color: var(--ink);
+}
+
+.md-typeset .linenos,
+.md-typeset .linenodiv pre {
+  background: var(--code-bg);
+  color: var(--ink-3);
+  border-right: 1px solid var(--rule);
+}
+
+/* Code annotations and the ⧉ marker. */
+.md-typeset .md-annotation__index {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* ------------------------------------------------------------- tables --- */
+
+.md-typeset table:not([class]) {
+  font-size: 0.873em;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  box-shadow: none;
+  font-variant-numeric: tabular-nums;
+  display: table;
+  width: 100%;
+}
+
+.md-typeset table:not([class]) th,
+.md-typeset table:not([class]) td {
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--rule);
+  border-top: 0;
+  vertical-align: top;
+  min-width: 6.5rem;
+}
+
+.md-typeset table:not([class]) th {
+  background: var(--paper-2);
+  color: var(--ink);
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.md-typeset table:not([class]) thead th {
+  border-bottom: 1px solid var(--rule-2);
+}
+
+/* No zebra. Division is the hairline. */
+.md-typeset table:not([class]) tbody tr:hover {
+  background: var(--paper-2);
+  box-shadow: none;
+}
+
+.md-typeset table:not([class]) tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.md-typeset table:not([class]) code {
+  white-space: nowrap;
+}
+
+/* A wide table scrolls inside its own frame rather than widening the page. */
+.md-typeset__scrollwrap {
+  margin: 1em 0;
+}
+
+.md-typeset__table {
+  padding: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+/* --------------------------------------------------------- admonitions -- */
+
+/*
+ * The website's callout: a `--paper-2` ground, a 2px left edge in the accent,
+ * square corners, no border elsewhere, no icon, and a mono uppercase eyebrow
+ * for the title. Material ships the opposite of all six, so each is undone.
+ */
+.md-typeset :is(.admonition, details) {
+  background: var(--paper-2);
+  border: 0;
+  border-left: 2px solid var(--rule-2);
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 0.95em;
+  padding: 0.15rem 1.1rem 0.15rem 0.9rem;
+  margin: 1.4em 0;
+}
+
+.md-typeset :is(.admonition-title, summary) {
+  font-family: var(--md-code-font-family);
+  font-size: 0.72em;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.md-typeset :is(.admonition-title, summary)::before,
+.md-typeset :is(.admonition-title, summary)::after {
+  display: none;
+}
+
+.md-typeset .admonition > :not(.admonition-title),
+.md-typeset details > :not(summary) {
+  color: var(--ink-2);
+}
+
+.md-typeset details > summary {
+  cursor: pointer;
+}
+
+/* A collapsible needs its affordance back, since the icon is gone. */
+.md-typeset details > summary::marker {
+  content: "";
+}
+
+.md-typeset details > summary {
+  list-style: none;
+}
+
+.md-typeset details > summary::before {
+  display: inline;
+  content: "▸ ";
+  color: var(--rule-2);
+}
+
+.md-typeset details[open] > summary::before {
+  content: "▾ ";
+}
+
+/* The kinds, mapped onto the stream key so a colour means one thing here. */
+.md-typeset :is(.admonition, details):is(.tip, .success, .check, .done) {
+  border-left-color: var(--status-stable);
+}
+
+.md-typeset :is(.tip, .success, .check, .done) > :is(.admonition-title, summary) {
+  color: var(--status-stable);
+}
+
+.md-typeset :is(.admonition, details):is(.warning, .caution, .attention) {
+  border-left-color: var(--s-intents);
+}
+
+.md-typeset :is(.warning, .caution, .attention) > :is(.admonition-title, summary) {
+  color: var(--s-intents);
+}
+
+.md-typeset :is(.admonition, details):is(.danger, .error, .failure, .bug, .fail, .missing) {
+  border-left-color: var(--s-errors);
+}
+
+.md-typeset
+  :is(.danger, .error, .failure, .bug, .fail, .missing)
+  > :is(.admonition-title, summary) {
+  color: var(--s-errors);
+}
+
+.md-typeset :is(.admonition, details):is(.info, .todo, .abstract, .summary, .tldr) {
+  border-left-color: var(--s-traces);
+}
+
+.md-typeset :is(.info, .todo, .abstract, .summary, .tldr) > :is(.admonition-title, summary) {
+  color: var(--s-traces);
+}
+
+/* ------------------------------------------------------- content tabs --- */
+
+.md-typeset .tabbed-set > input:checked + label {
+  border-bottom-color: var(--ink);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.md-typeset .tabbed-labels > label {
+  font-size: 0.68rem;
+  font-family: var(--md-code-font-family);
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+
+.md-typeset .tabbed-labels {
+  box-shadow: inset 0 -1px var(--rule);
+}
+
+/* ------------------------------------------------------------ buttons --- */
+
+.md-typeset .md-button {
+  font-size: 0.85em;
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 0.68rem 1rem;
+  border: 1px solid var(--rule-2);
+  border-radius: 2px;
+  color: var(--ink);
+  text-decoration: none;
+  transition: none;
+}
+
+.md-typeset .md-button:hover,
+.md-typeset .md-button:focus {
+  background: transparent;
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.md-typeset .md-button--primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+  color: var(--paper);
+}
+
+/* --------------------------------------------------------- grid cards --- */
+
+/*
+ * Material's `grid cards` draws boxes with shadows. Here a cell is a rule and
+ * the text under it — the same treatment the website gives its four guarantees
+ * and its built/not-built ledger.
+ *
+ * A rule per cell rather than the website's 1px-gap trick, which paints the
+ * grid --rule and each cell --paper: that one only works when the item count
+ * fills every row at every column count, and these grids reflow from one
+ * column to three. An unfilled slot would show as a solid block of rule
+ * colour instead of as a line.
+ */
+.md-typeset .grid.cards {
+  grid-gap: 1.5rem 2.4rem;
+  gap: 1.5rem 2.4rem;
+  background: none;
+  margin: 1.5em 0;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) {
+  display: contents;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li,
+.md-typeset .grid > .card {
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  border-radius: 0;
+  box-shadow: none;
+  margin: 0;
+  padding: 0.85rem 0 0;
+  transition: none;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li:hover {
+  background: none;
+  border-top-color: var(--rule-2);
+  box-shadow: none;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li > :first-child {
+  margin-top: 0;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li > p:first-child strong {
+  font-size: 1.02em;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li > p:first-child a {
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li > p:first-child a:hover {
+  text-decoration: underline;
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li > p:last-child {
+  margin-bottom: 0;
+  font-size: 0.93em;
+  color: var(--ink-2);
+}
+
+.md-typeset .grid.cards > :is(ul, ol) > li > hr {
+  display: none;
+}
+
+/* -------------------------------------------------------------- chips --- */
+
+.md-typeset .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--md-code-font-family);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 0.28rem 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* ----------------------------------------------------------- diagrams --- */
+
+/*
+ * The figures are inline SVG authored by hand, in the same visual language as
+ * `website/app/diagram.css`: hairline strokes on --rule-2, node outlines on
+ * --ink, soft nodes on --paper-2, mono 11px labels, and the stream key for
+ * anything that names an output. The SVG paints itself with the tokens above
+ * through presentation attributes, so it needs no classes and renders the same
+ * under the website's MDX pipeline, which is why there is so little here.
+ */
+.md-typeset figure.diagram {
+  margin: 1.7em 0;
+  max-width: 100%;
+}
+
+/* The website frames a figure and lets it scroll rather than shrink; the frame
+   is the same hairline the code blocks and tables wear. */
+.md-typeset figure.diagram > .diagram-scroll {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  padding: 0.9rem 1rem;
+}
+
+.md-typeset figure.diagram > svg,
+.md-typeset p > svg[role="img"],
+.md-typeset > svg[role="img"] {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+
+/* Material centres a figcaption in a 24rem measure and italicises it; here it
+   is a provenance line under a figure, so it is set flush left and upright. */
+.md-typeset figure.diagram > figcaption {
+  margin: 0.55rem 0 0;
+  font-size: 0.82em;
+  line-height: 1.45;
+  font-style: normal;
+  color: var(--ink-3);
+  max-width: 62ch;
+  text-align: left;
+}
+
+.md-typeset figure.diagram > figcaption > p {
+  margin: 0;
+}
+
+/*
+ * The two diagrams that cannot use the figure wrapper.
+ *
+ * `website/lib/repodoc.ts` renders docs/effector.md and docs/errors.md through
+ * an MDX pipeline, where raw HTML is JSX: a `class` attribute and a `style`
+ * string are both hazards there, so those two pages emit a bare `<svg>` and an
+ * ordinary italic markdown paragraph for the caption. Markdown wraps the SVG in
+ * a `<p>` of its own, which is the hook — this gives the pair the same frame
+ * and the same caption type as `figure.diagram`, with no markup they can't use.
+ */
+.md-typeset p:has(> svg[role="img"]) {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  padding: 0.9rem 1rem;
+  margin: 1.7em 0 0;
+}
+
+.md-typeset p:has(> svg[role="img"]) + p:has(> em:only-child) {
+  margin-top: 0.55rem;
+  font-size: 0.82em;
+  line-height: 1.45;
+  color: var(--ink-3);
+  max-width: 62ch;
+}
+
+.md-typeset p:has(> svg[role="img"]) + p > em:only-child {
+  font-style: normal;
+}
+
+/* A diagram wider than the measure scrolls rather than shrinking to illegible. */
+.md-typeset .diagram-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.md-typeset .diagram-scroll > svg {
+  min-width: 34rem;
+}
+
+/* ------------------------------------------------------------- footer --- */
+
+.md-footer {
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
+  color: var(--ink);
+}
+
+.md-footer-meta {
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
+}
+
+.md-footer__link {
+  opacity: 1;
+  color: var(--ink-2);
+}
+
+.md-footer__link:hover {
+  color: var(--ink);
+}
+
+.md-footer__direction {
+  font-family: var(--md-code-font-family);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  opacity: 1;
+}
+
+.md-footer__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+
+.md-copyright,
+.md-copyright__highlight {
+  color: var(--ink-3);
+  font-size: 0.62rem;
+}
+
+.md-social__link {
+  color: var(--ink-3);
+}
+
+.md-social__link:hover {
+  color: var(--ink);
+}
+
+/* -------------------------------------------------------------- misc ---- */
+
+.md-typeset .md-typeset__scrollwrap {
+  margin: 1em 0;
+}
+
+/* Material's "back to top" is a filled pill; make it a hairline chip. */
+.md-top {
+  background: var(--paper);
+  border: 1px solid var(--rule-2);
+  border-radius: 2px;
+  box-shadow: none;
+  color: var(--ink-2);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.md-top:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+/* The version/edit affordances. */
+.md-content__button.md-icon:hover {
+  color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

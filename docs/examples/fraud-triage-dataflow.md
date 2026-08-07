@@ -112,6 +112,6 @@ The code below is included verbatim from
 exercises offline in CI, asserting the parameter mapping, the grammar checks,
 and that a resolved secret never reaches the launch surface.
 
-```python
+```python title="examples/fraud_triage_dataflow/launch.py"
 --8<-- "examples/fraud_triage_dataflow/launch.py"
 ```

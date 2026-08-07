@@ -40,7 +40,7 @@ pipeline graph the runner stores.
 The keyring is `key_id=base64(key)` lines, delivered to both workloads by your
 secret manager and named by reference:
 
-```
+```text
 # /var/run/secrets/intent-keys
 k-2026-07=aGVsbG8td29ybGQtdGhpcy1pcy0zMi1ieXRlcyEh
 ```
@@ -63,10 +63,13 @@ EFFECTOR_DEAD_LETTERS_TO=kafka://broker:9092/agent-intents-dead \
 ```
 
 Generate a key with 32 bytes from a CSPRNG (`openssl rand -base64 32`). Rotation
-is three ordered steps and needs no downtime: **add** the new key to the
-effector's keyring → **switch** the pipeline's `signing_key_id` to it → **retire**
-the old key once the outbox retention window has passed. The window matters: a
-retained intent signed with a retired key dead-letters as
+is three ordered steps and needs no downtime:
+
+1. **Add** the new key to the effector's keyring.
+2. **Switch** the pipeline's `signing_key_id` to it.
+3. **Retire** the old key once the outbox retention window has passed.
+
+The window matters: a retained intent signed with a retired key dead-letters as
 `unknown_signing_key`.
 
 Key material must never appear on a command line. `--signing-keys` and every
