@@ -47,11 +47,14 @@ from tests.dataflow._update.poll import (
 from tests.dataflow._update.resources import (
     LABEL_KEY,
     LABEL_VALUE,
+    PUBSUB_ROLE,
     RunLedger,
     RunResources,
     guaranteed_teardown,
+    is_permission_denied,
     new_run_id,
     parse_rfc3339,
+    permission_errors_as_infra,
     sweep_targets,
 )
 from tests.dataflow._update.resources import provision as provision_resources
@@ -422,6 +425,53 @@ def test_a_provisioning_error_is_infrastructure_and_never_a_verdict() -> None:
 
     assert isinstance(failure, InfraFailure)
     assert "pip download failed" in str(failure)
+
+
+class _Denied(Exception):
+    """A `google.api_core` 403, in the one shape the classifier reads."""
+
+    code = 403
+
+
+def test_a_denied_pubsub_call_is_infrastructure_naming_the_missing_grant() -> None:
+    """Both gates provision topics before they test anything, so a service
+    account without Pub/Sub fails them at the first call. That is an
+    environment failure, and the message has to carry the fix: a raw 403 proto
+    dump reads like a product defect and cost three nights of triage.
+    """
+    with (
+        pytest.raises(InfraFailure) as caught,
+        permission_errors_as_infra("create topic", "projects/p/topics/t"),
+    ):
+        raise _Denied("User not authorized to perform this action.")
+
+    message = str(caught.value)
+    assert PUBSUB_ROLE in message
+    assert "projects/p/topics/t" in message
+    assert "create topic" in message
+    # The whole point of the class: never mistaken for a verdict.
+    assert not isinstance(caught.value, UpdateCompatibilityFailure | StateLossFailure)
+
+
+def test_a_non_permission_error_passes_through_untranslated() -> None:
+    """Only 403 is an authorization story; a deadline or a wrong topic name
+    must not be relabelled as a missing grant.
+    """
+    with (
+        pytest.raises(ValueError, match="not a topic name"),
+        permission_errors_as_infra("create topic", "bad"),
+    ):
+        raise ValueError("not a topic name")
+
+    assert not is_permission_denied(ValueError("boom"))
+    assert not is_permission_denied(_job_error(404))
+    assert is_permission_denied(_job_error(403))
+
+
+def _job_error(code: int) -> Exception:
+    error = Exception("api error")
+    error.code = code  # type: ignore[attr-defined]
+    return error
 
 
 def test_a_phase_two_assertion_timeout_is_state_loss_not_infrastructure() -> None:

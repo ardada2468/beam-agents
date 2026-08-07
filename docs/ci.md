@@ -50,7 +50,60 @@ ever used. The `--update` gate needs two more, `GCP_REGION` and
 `GCP_DATAFLOW_TEMP_BUCKET`; without either it skips visibly rather than being
 deselected, so a partially configured project produces a reported skip, not a
 silent pass. The Flex Template gate needs one further variable,
-`GCP_ARTIFACT_REGISTRY_REPO`, and skips the same way without it.
+`GCP_ARTIFACT_REGISTRY_REPO`, and skips the same way without it. Configured
+variables are necessary but not sufficient — see
+[what the service account must be able to do](#what-the-nightly-service-account-must-be-able-to-do).
+
+## What the nightly service account must be able to do
+
+`GCP_SERVICE_ACCOUNT` is impersonated through Workload Identity Federation, so
+the only credential is the federation binding — but the roles below are what
+make the `dataflow` job's two gates run at all, and they are **granted once by
+an admin**, not by the workflow. Both gates provision per-run Pub/Sub topics
+with random names *before* they test anything, so a missing Pub/Sub grant fails
+them at the first call, minutes in, with nothing about compatibility or
+packaging having been exercised.
+
+| Grant | Scope | Why |
+|---|---|---|
+| `roles/iam.workloadIdentityUser` | the service account | lets the repository's WIF principal impersonate it at all |
+| `roles/pubsub.editor` | project | per-run topics and subscriptions are created and deleted under generated names, so this cannot be a resource-level binding |
+| `roles/dataflow.developer` | project | submit, `--update`, list and cancel the gates' jobs |
+| `roles/iam.serviceAccountUser` | the **worker** service account | Dataflow refuses a submission whose launcher may not act as the SA the workers run as |
+| `roles/storage.objectAdmin` | `GCP_DATAFLOW_TEMP_BUCKET` | staging and temp files, plus the Flex Template spec the build step writes under `templates/` |
+| `roles/artifactregistry.writer` | the template repository | the template image push (granted with the repository, below) |
+
+```sh
+gcloud projects add-iam-policy-binding MY_PROJECT \
+  --member="serviceAccount:$GCP_SERVICE_ACCOUNT" --role=roles/pubsub.editor
+
+gcloud projects add-iam-policy-binding MY_PROJECT \
+  --member="serviceAccount:$GCP_SERVICE_ACCOUNT" --role=roles/dataflow.developer
+
+# The workers' own identity: the Compute Engine default SA unless the pipeline
+# is launched with an explicit --service_account_email.
+gcloud iam service-accounts add-iam-policy-binding \
+  PROJECT_NUMBER-compute@developer.gserviceaccount.com \
+  --project=MY_PROJECT --member="serviceAccount:$GCP_SERVICE_ACCOUNT" \
+  --role=roles/iam.serviceAccountUser
+
+gcloud storage buckets add-iam-policy-binding gs://MY_TEMP_BUCKET \
+  --member="serviceAccount:$GCP_SERVICE_ACCOUNT" --role=roles/storage.objectAdmin
+```
+
+The *worker* service account is a second principal with its own needs: the
+gates' pipelines read and write the run's topics, so it needs Pub/Sub access to
+them too (the Compute Engine default SA has it via the project's editor role;
+a locked-down worker SA needs `roles/pubsub.subscriber` and
+`roles/pubsub.publisher` granted explicitly). This is CI's disposable
+per-run traffic, and is unrelated to the least-privilege topic-level bindings a
+*production* pipeline and effector get in
+[`docs/security.md`](security.md) — do not copy this table into a deployment.
+
+A denied call is reported as an `InfraFailure` naming the missing role rather
+than as a gate verdict: a red night whose message says `Pub/Sub denied create
+topic … grant roles/pubsub.editor` is a misconfigured project, and says nothing
+about the release.
 
 ## The fraud-triage Flex Template
 
