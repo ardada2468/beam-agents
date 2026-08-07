@@ -66,3 +66,45 @@ jobs:
 
       - name: Site check
         run: make site-check
+
+  deploy:
+    name: deploy (beamagent.org)
+    needs: website
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    defaults:
+      run:
+        working-directory: website
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      # `vercel pull` links this checkout to the `website` project using
+      # VERCEL_ORG_ID/VERCEL_PROJECT_ID instead of a committed .vercel/
+      # directory, and downloads the production env vars/build settings
+      # configured on that project (see SITE_URL in lib/site.ts, which falls
+      # back to https://beamagent.org when NEXT_PUBLIC_SITE_URL is unset).
+      - name: Pull Vercel project settings
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to production
+        id: deploy
+        run: echo "url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")" >> "$GITHUB_OUTPUT"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
