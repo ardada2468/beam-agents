@@ -38,6 +38,8 @@ from tests.dataflow._update.poll import (
     await_condition,
     cancel_body,
     classify_update_failure,
+    error_lines,
+    job_messages_url,
     job_status_from_api,
     job_url,
     jobs_list_url,
@@ -823,3 +825,56 @@ def test_provisioning_records_each_resource_in_the_ledger_as_it_creates_it() -> 
     ]
     assert pubsub.created_topics == ledger.topics
     assert [name for name, _topic in pubsub.created_subscriptions] == ledger.subscriptions
+
+
+# -- a failed job's reason, which is not on the job resource --------------------
+
+
+def test_a_failed_jobs_reason_comes_from_its_messages_not_its_state() -> None:
+    """A job whose launcher died reports `JOB_STATE_FAILED` with an empty
+    top-level message, so a gate quoting only the state says nothing. The
+    2026-08-09 nightly cost a manual Cloud Logging dig for exactly this.
+    """
+    payload = {
+        "jobMessages": [
+            {"messageImportance": "JOB_MESSAGE_BASIC", "messageText": "Worker pool started."},
+            {
+                "messageImportance": "JOB_MESSAGE_ERROR",
+                "messageText": "AttributeError: 'NoneType' object has no attribute 'id'",
+            },
+            {"messageImportance": "JOB_MESSAGE_DETAILED", "messageText": "noise"},
+            {
+                "messageImportance": "JOB_MESSAGE_ERROR",
+                "messageText": "Error occurred in the launcher container",
+            },
+        ]
+    }
+
+    assert error_lines(payload) == [
+        "AttributeError: 'NoneType' object has no attribute 'id'",
+        "Error occurred in the launcher container",
+    ]
+
+
+def test_a_job_with_nothing_to_say_yields_no_error_lines() -> None:
+    assert error_lines({}) == []
+    assert error_lines({"jobMessages": [{"messageImportance": "JOB_MESSAGE_BASIC"}]}) == []
+
+
+def test_only_the_last_errors_are_kept() -> None:
+    """A wedged job can emit thousands; the tail is the part that explains it,
+    and an unbounded dump would bury the verdict it is attached to.
+    """
+    payload = {
+        "jobMessages": [
+            {"messageImportance": "JOB_MESSAGE_ERROR", "messageText": f"error {n}"}
+            for n in range(50)
+        ]
+    }
+
+    lines = error_lines(payload, limit=3)
+    assert lines == ["error 47", "error 48", "error 49"]
+
+
+def test_the_messages_url_hangs_off_the_job() -> None:
+    assert job_messages_url("p", "us-east1", "job-1").endswith("/jobs/job-1/messages")

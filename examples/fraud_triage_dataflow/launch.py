@@ -55,7 +55,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlparse
 
 import apache_beam as beam
-from apache_beam.options.pipeline_options import PipelineOptions
+from apache_beam.options.pipeline_options import GoogleCloudOptions, PipelineOptions
 
 from beam_agents import AgentConfig, RunAgent
 from beam_agents._protos import AgentEnvelope
@@ -535,13 +535,29 @@ def build(pipeline: beam.Pipeline, *, plan: LaunchPlan) -> None:
 
 
 def run_pipeline(plan: LaunchPlan) -> str:
-    """Submit the streaming job and return its id.
+    """Submit the streaming job and return its id — or build the template graph.
 
-    Streaming: `run()` submits and returns; Dataflow owns the job from here.
+    Two callers with genuinely different contracts, and only one of them ends
+    with a job:
+
+    - A direct launch (`--runner=DataflowRunner`) submits. Streaming, so `run()`
+      returns as soon as Dataflow owns the job, and `job_id()` names it.
+    - The Flex Template launcher runs this same module with
+      `--template_location`, which makes the runner **serialize** the job graph
+      to that path for the service to submit afterwards. No job exists yet, so
+      `DataflowPipelineResult._job` is `None` and reading `job_id()` raises
+      `AttributeError` — which exits the launcher non-zero and fails the very
+      job it just finished building.
+
+    So the id is read only when a submission actually happened.
     """
-    pipeline = beam.Pipeline(options=PipelineOptions(plan.beam_args))
+    options = PipelineOptions(plan.beam_args)
+    pipeline = beam.Pipeline(options=options)
     build(pipeline, plan=plan)
     result = pipeline.run()
+    if options.view_as(GoogleCloudOptions).template_location:
+        print("template graph written; the service submits the job", flush=True)
+        return ""
     # `job_id()` is DataflowPipelineResult's, not on the `PipelineResult` base.
     job_id = str(result.job_id())  # type: ignore[attr-defined]
     print(f"Dataflow job id: {job_id}", flush=True)

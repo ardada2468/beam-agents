@@ -109,6 +109,27 @@ def job_url(project: str, region: str, job_id: str) -> str:
     return f"{jobs_list_url(project, region)}/{job_id}"
 
 
+def job_messages_url(project: str, region: str, job_id: str) -> str:
+    return f"{job_url(project, region, job_id)}/messages"
+
+
+def error_lines(payload: Mapping[str, Any], *, limit: int = 20) -> list[str]:
+    """The `JOB_MESSAGE_ERROR` text from a `jobs.messages.list` response.
+
+    A failed job's *reason* lives here, not on the job resource: a job that died
+    in its launcher comes back with `currentState=JOB_STATE_FAILED` and an empty
+    top-level message, so a gate reporting only the state tells a triager
+    nothing and sends them to Cloud Logging by hand.
+    """
+    lines = [
+        text
+        for message in payload.get("jobMessages", [])
+        if message.get("messageImportance") == "JOB_MESSAGE_ERROR"
+        and (text := str(message.get("messageText", "")).strip())
+    ]
+    return lines[-limit:]
+
+
 def cancel_body() -> dict[str, str]:
     """Force-cancel, never drain: draining waits on watermarks the gate does not
     care about, and a drain that stalls is a job that bills until morning.
@@ -317,6 +338,23 @@ class DataflowJobs:
                 params={"view": "JOB_VIEW_SUMMARY"},
             )
         )
+
+    # `Sequence[str]`, not `list[str]`: this class defines its own `list`
+    # method, which shadows the builtin for every annotation below it.
+    def errors(self, job_id: str) -> Sequence[str]:
+        """The job's own error messages. Best-effort: diagnosis must never
+        replace the failure being diagnosed, so a failed lookup reports itself
+        rather than raising over the verdict.
+        """
+        try:
+            payload = self._request(
+                "GET",
+                job_messages_url(self._project, self._region, job_id),
+                params={"minimumImportance": "JOB_MESSAGE_ERROR", "pageSize": 100},
+            )
+        except Exception as exc:
+            return [f"<could not read job messages: {type(exc).__name__}: {exc}>"]
+        return error_lines(payload)
 
     def cancel(self, job_id: str) -> None:
         self._request("PUT", job_url(self._project, self._region, job_id), json=cancel_body())

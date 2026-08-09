@@ -461,3 +461,79 @@ def test_dataflows_own_pipeline_options_pass_through(no_secret_access: None) -> 
     assert "--project=my-project" in plan.beam_args
     assert "--region=us-central1" in plan.beam_args
     assert "--num_workers=2" in plan.beam_args
+
+
+# --- Requirement: submission itself, the one step the tests above stub out ----
+#
+# Every test above replaces `run_pipeline` so a rejected parameter can never
+# reach Dataflow. That left the function itself unexercised, and it carried a
+# defect for as long as it existed: the 2026-08-09 nightly's template job died
+# with `AttributeError: 'NoneType' object has no attribute 'id'` from
+# `result.job_id()`, because the Flex Template launcher builds a graph rather
+# than submitting one. These two tests are the missing half.
+
+
+class _FakeResult:
+    """A `DataflowPipelineResult` in the two shapes the launcher can meet."""
+
+    def __init__(self, job_id: str | None) -> None:
+        self._job_id = job_id
+        self.job_id_reads = 0
+
+    def job_id(self) -> str:
+        self.job_id_reads += 1
+        if self._job_id is None:
+            # Beam's own failure when no job was submitted: `_job` is None.
+            raise AttributeError("'NoneType' object has no attribute 'id'")
+        return self._job_id
+
+
+class _FakePipeline:
+    def __init__(self, result: _FakeResult) -> None:
+        self._result = result
+
+    def run(self) -> _FakeResult:
+        return self._result
+
+
+def stub_submission(monkeypatch: pytest.MonkeyPatch, result: _FakeResult) -> None:
+    """Run `run_pipeline` for real against a fake runner, graph construction aside."""
+    monkeypatch.setattr(launch, "build", lambda pipeline, *, plan: None)
+    monkeypatch.setattr(beam, "Pipeline", lambda options: _FakePipeline(result))
+
+
+def test_a_template_build_never_reads_a_job_id(
+    monkeypatch: pytest.MonkeyPatch, no_secret_access: None
+) -> None:
+    # Scenario: the Flex Template launcher runs this module with
+    # `--template_location`, which makes the runner serialize the graph for the
+    # service to submit later. No job exists, so reading `job_id()` raises and
+    # exits the launcher non-zero -- failing the job it just built.
+    result = _FakeResult(job_id=None)
+    stub_submission(monkeypatch, result)
+    plan = launch.build_launch_plan(
+        argv(
+            "--runner=DataflowRunner",
+            "--project=my-project",
+            "--region=us-central1",
+            "--template_location=gs://my-bucket/staging/job_object",
+        )
+    )
+
+    assert launch.run_pipeline(plan) == ""
+    assert result.job_id_reads == 0
+
+
+def test_a_direct_submission_still_reports_its_job_id(
+    monkeypatch: pytest.MonkeyPatch, no_secret_access: None
+) -> None:
+    # The other contract must keep working: without `--template_location` the
+    # runner really submits, and the id is the launcher's whole output.
+    result = _FakeResult(job_id="2026-08-09_00_49_26-123")
+    stub_submission(monkeypatch, result)
+    plan = launch.build_launch_plan(
+        argv("--runner=DataflowRunner", "--project=my-project", "--region=us-central1")
+    )
+
+    assert launch.run_pipeline(plan) == "2026-08-09_00_49_26-123"
+    assert result.job_id_reads == 1

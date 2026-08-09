@@ -271,8 +271,22 @@ def test_the_published_template_launches_and_reaches_running(gcp: GcpConfig) -> 
                 f"the template job {job_id} never reached {JOB_STATE_RUNNING} within "
                 f"{RUNNING_DEADLINE_S}s: {jobs.get(job_id).describe()}. A job stuck "
                 "before RUNNING with no error state is usually quota or an image "
-                "pull; an error state names the launcher defect."
+                f"pull; an error state names the launcher defect."
+                f"{_reported_errors(jobs, job_id)}"
             ) from exc
+        except LaunchFailure as exc:
+            # The job's *reason* is not on the job resource — a launcher that
+            # died leaves `message` empty — so it is fetched here, where the
+            # failure is already known, rather than on every poll.
+            raise LaunchFailure(f"{exc}{_reported_errors(jobs, job_id)}") from exc
+
+
+def _reported_errors(jobs: DataflowJobs, job_id: str) -> str:
+    """The job's own error messages, ready to append to a failure message."""
+    errors = jobs.errors(job_id)
+    if not errors:
+        return "\nThe job reported no error messages of its own."
+    return "\nThe job's error messages:\n  " + "\n  ".join(errors)
 
 
 def _running_or_raise(status: JobStatus) -> JobStatus | None:
@@ -288,7 +302,7 @@ def _running_or_raise(status: JobStatus) -> JobStatus | None:
         raise LaunchFailure(
             f"the template job reached {status.state} before {JOB_STATE_RUNNING}: "
             f"{status.describe()}. The launcher container ran and the service "
-            "rejected what it submitted — read the job's error state above for the "
-            "parameter or graph defect."
+            "rejected what it submitted; the job's own error messages below name "
+            "the parameter or graph defect."
         )
     return None
