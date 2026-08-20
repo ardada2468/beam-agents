@@ -116,11 +116,15 @@ def write_baseline(
     medians_ms: dict[str, float] | None = None,
     tolerance: float = 0.25,
     invariance_tolerance_ms: float = 10.0,
+    tolerance_overrides: dict[str, float] | None = None,
 ) -> None:
     medians = _DEFAULT_BASELINE_MS if medians_ms is None else medians_ms
     lines = [
         f"tolerance = {tolerance}",
         f"invariance_tolerance_ms = {invariance_tolerance_ms}",
+        "",
+        "[tolerance_overrides]",
+        *(f'"{name}" = {value}' for name, value in (tolerance_overrides or {}).items()),
         "",
         "[medians_ms]",
         *(f'"{name}" = {value}' for name, value in medians.items()),
@@ -226,6 +230,58 @@ def test_an_improvement_prompts_a_deliberate_baseline_update(
     assert "lower" in out
     assert "0.2000" in out
     assert "benchmark-baseline.toml" in out
+
+
+# --- Scenario: A per-benchmark tolerance band overrides the global one --------
+
+
+def test_an_override_widens_only_the_band_of_the_benchmark_it_names(
+    gate_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The same 1.5x swing on two benchmarks. `encode_100kib` carries a 60%
+    # override and passes; `noop_throughput` does not and fails, so the wider
+    # band cannot leak across the suite.
+    write_results(
+        gate_root,
+        values={"encode_100kib": [0.00015] * 20, "noop_throughput": [0.00075] * 20},
+    )
+    write_baseline(gate_root, tolerance_overrides={"encode_100kib": 0.60})
+
+    assert bench_gate.main() == 1
+    captured = capsys.readouterr()
+    assert "noop_throughput" in captured.err
+    assert "encode_100kib" not in captured.err
+    assert "encode_100kib median 0.1500 ms is within tolerance" in captured.out
+
+
+def test_an_override_still_fails_a_regression_past_its_own_band(
+    gate_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 2.5x against a 60% band: the order-of-magnitude regressions these
+    # micro-benchmarks exist to catch are still caught.
+    write_results(gate_root, values={"encode_100kib": [0.00025] * 20})
+    write_baseline(gate_root, tolerance_overrides={"encode_100kib": 0.60})
+
+    assert bench_gate.main() == 1
+    err = capsys.readouterr().err
+    assert "encode_100kib" in err
+    assert "regressed" in err
+    assert "60%" in err  # the override, not the global 25%
+
+
+def test_an_override_naming_an_untracked_benchmark_fails_the_gate(
+    gate_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A band written for a name the ratchet never evaluates widens nothing and
+    # gates nothing; a silent no-op here is the same defect as an unseeded
+    # entry, so it fails loudly rather than being ignored.
+    write_results(gate_root)
+    write_baseline(gate_root, tolerance_overrides={"encode_128kib": 0.60})
+
+    assert bench_gate.main() == 1
+    err = capsys.readouterr().err
+    assert "tolerance_overrides" in err
+    assert "encode_128kib" in err
 
 
 # --- Scenario: Missing results are a failure, not a pass ----------------------
