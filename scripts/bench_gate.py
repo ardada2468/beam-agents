@@ -12,8 +12,9 @@ lock-in-the-gain instruction of ``coverage_ratchet.py``):
    never over per-process aggregates.
 2. **Baseline ratchet.** Every benchmark's median is compared against
    ``benchmark-baseline.toml``: a median regressing beyond the file's
-   tolerance band fails; one improving beyond it prints the instruction to
-   lower the committed baseline by hand. Includes the tier-invariance check
+   tolerance band — the global one, or that benchmark's entry in
+   ``[tolerance_overrides]`` — fails; one improving beyond it prints the
+   instruction to lower the committed baseline by hand. Includes the tier-invariance check
    (overhead must not grow with provider latency) and the RunInference delta
    (the absolutes are a different measurement surface and are not tracked).
 
@@ -103,6 +104,20 @@ class Baseline:
     tolerance: float
     invariance_tolerance_ms: float
     medians_ms: dict[str, float]
+    tolerance_overrides: dict[str, float]
+
+    def tolerance_for(self, name: str) -> float:
+        """The relative band for one benchmark: its override, else the global.
+
+        One band cannot serve the whole suite. The activation benchmarks are
+        hundreds of microseconds to milliseconds of Python, where 25% sits well
+        above runner jitter. The `encode_*` micro-benchmarks are single-digit
+        microseconds of memcpy-bound C, where the median tracks whichever CPU
+        generation the hosted runner happened to allocate that night, and 25%
+        is below the noise floor — see the override table's comment in
+        `benchmark-baseline.toml`.
+        """
+        return self.tolerance_overrides.get(name, self.tolerance)
 
 
 @dataclass(frozen=True)
@@ -177,20 +192,34 @@ def load_baseline() -> Baseline:
             raise GateError(f"{BASELINE_PATH} must set a numeric {key}")
         return float(value)
 
-    medians = data.get("medians_ms", {})
-    if not isinstance(medians, dict):
-        raise GateError(f"{BASELINE_PATH} [medians_ms] must be a table")
-    invalid = sorted(
-        str(name)
-        for name, value in medians.items()
-        if not isinstance(value, (int, float)) or isinstance(value, bool)
-    )
-    if invalid:
-        raise GateError(f"{BASELINE_PATH} [medians_ms] entries must be numeric: {invalid}")
+    def _numeric_table(key: str) -> dict[str, float]:
+        table = data.get(key, {})
+        if not isinstance(table, dict):
+            raise GateError(f"{BASELINE_PATH} [{key}] must be a table")
+        invalid = sorted(
+            str(name)
+            for name, value in table.items()
+            if not isinstance(value, (int, float)) or isinstance(value, bool)
+        )
+        if invalid:
+            raise GateError(f"{BASELINE_PATH} [{key}] entries must be numeric: {invalid}")
+        return {str(name): float(value) for name, value in table.items()}
+
+    overrides = _numeric_table("tolerance_overrides")
+    # A band written for a benchmark that does not exist is a typo that widens
+    # nothing and gates nothing; the same fail-loudly stance the unseeded-entry
+    # check takes.
+    unknown = sorted(name for name in overrides if name not in BASELINE_TRACKED)
+    if unknown:
+        raise GateError(
+            f"{BASELINE_PATH} [tolerance_overrides] names benchmarks that are not "
+            f"baseline-tracked: {unknown}"
+        )
     return Baseline(
         tolerance=_number("tolerance"),
         invariance_tolerance_ms=_number("invariance_tolerance_ms"),
-        medians_ms={name: float(value) for name, value in medians.items()},
+        medians_ms=_numeric_table("medians_ms"),
+        tolerance_overrides=overrides,
     )
 
 
@@ -235,12 +264,13 @@ def ratchet_verdict(name: str, median_ms: float, baseline: Baseline) -> tuple[li
             [],
         )
     base = baseline.medians_ms[name]
-    band = abs(base) * baseline.tolerance
+    tolerance = baseline.tolerance_for(name)
+    band = abs(base) * tolerance
     if median_ms > base + band:
         return (
             [
                 f"{name} median {median_ms:.4f} ms regressed beyond its baseline "
-                f"{base:.4f} ms + {baseline.tolerance:.0%} tolerance"
+                f"{base:.4f} ms + {tolerance:.0%} tolerance"
             ],
             [],
         )
@@ -249,7 +279,7 @@ def ratchet_verdict(name: str, median_ms: float, baseline: Baseline) -> tuple[li
             [],
             [
                 f"{name} median {median_ms:.4f} ms improved beyond its baseline "
-                f"{base:.4f} ms - {baseline.tolerance:.0%} tolerance; lower "
+                f"{base:.4f} ms - {tolerance:.0%} tolerance; lower "
                 f"medians_ms.{name} to {median_ms:.4f} in {BASELINE_PATH} "
                 "to lock in the gain"
             ],

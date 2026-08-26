@@ -4,14 +4,50 @@
 # lower-the-baseline instruction when one improves beyond it, so gains are
 # locked in deliberately rather than silently.
 #
-# tolerance is the relative band on every median comparison (0.25 = 25%). It
+# tolerance is the default relative band on every median comparison
+# (0.25 = 25%), overridable per benchmark in [tolerance_overrides] below. It
 # is a guess until nightly variance data exists; recalibrate it here, not in
-# the gate. invariance_tolerance_ms is the absolute slack (ms) the 500/2000 ms
+# the gate. On watch: the only two hosted-runner observations of overhead_50ms
+# so far are 0.8517 and 0.6358 ms — a 1.34x spread that 0.25 does not cover in
+# the regression direction either. It has not gone red, and two samples are
+# not a variance estimate, so the band stays put until a few more nights say
+# what it should be. invariance_tolerance_ms is the absolute slack (ms) the 500/2000 ms
 # overhead tiers' medians may sit above the 50 ms tier's before the gate calls
 # the runtime wait-scaled (design D2/D4) — absolute, because a relative band
 # on a low-single-digit-millisecond median would gate on scheduler noise.
 tolerance = 0.25
 invariance_tolerance_ms = 10.0
+
+# Per-benchmark relative bands, overriding `tolerance` for the names listed.
+# One band cannot serve the whole suite. Every other benchmark drives Python
+# through a full activation and lands between 0.2 ms and 3 ms, where 25% is
+# comfortably above hosted-runner jitter. The `encode_*` micro-benchmarks are
+# a single `SerializeToString(deterministic=True)` call — 0.6 to 14 *micro*
+# seconds of memcpy-bound C — so their medians track the memory bandwidth of
+# whichever CPU generation `ubuntu-latest` allocated that night, not this
+# repository's code.
+#
+# The evidence: the 2026-08-03 seed run recorded encode_64kib (0.0122) as
+# *dearer* than encode_100kib (0.0103), which the code cannot do — encoding a
+# strictly larger blob is strictly more work, and a local run confirms the
+# curve is monotonic. Nightly run 32323110935 then measured the same two at
+# 0.0085 and 0.0137 with no commit in between touching the coder, the protos,
+# the harness, or the pinned protobuf: a 1.44x swing on 64 KiB and 1.33x on
+# 100 KiB, from runner allocation alone. A 25% band there reports the CPU
+# lottery as a code regression, and its lock-in-the-gain note is worse than
+# useless — following the seed instruction that run printed for encode_64kib
+# would have committed 0.0085 and made the *next* night red.
+#
+# 0.60 covers the observed swing with headroom while still failing anything
+# that doubles: the regressions worth catching here are order-of-magnitude
+# ones (protobuf falling back to the pure-Python backend, an accidental
+# double-encode), not tens of percent. These four are attribution instruments
+# for the `state_commit_*` curve (docs/benchmarks.md), not the gated budget.
+[tolerance_overrides]
+encode_1kib = 0.60
+encode_16kib = 0.60
+encode_64kib = 0.60
+encode_100kib = 0.60
 
 # Seeding procedure: run the nightly `bench` job (workflow_dispatch) on a
 # GitHub-hosted runner, then copy each `seed medians_ms.<name> = <value>`
@@ -37,6 +73,10 @@ state_commit_64kib = 0.2360
 state_commit_100kib = 0.2462
 encode_1kib = 0.0006
 encode_16kib = 0.0015
-encode_64kib = 0.0122
-encode_100kib = 0.0103
+# Re-seeded 2026-08-19 from nightly run 32323110935 (same runner class): the
+# 2026-08-03 pair was non-monotonic in blob size and could not both be right.
+# Both nights' observations fall inside both entries' 60% bands, so this
+# choice is the monotonic one rather than a loosening.
+encode_64kib = 0.0085
+encode_100kib = 0.0137
 runinference_delta = 0.6431

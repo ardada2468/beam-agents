@@ -19,6 +19,7 @@ from benchmarks import _harness, bench_state_commit, bench_suspension_roundtrip
 from scripts import bench_gate
 
 _BENCHMARKS_DIR = Path(_harness.__file__).resolve().parent
+_REPO_ROOT = _BENCHMARKS_DIR.parent
 _MODULE_NAMES = sorted(path.stem for path in _BENCHMARKS_DIR.glob("bench_*.py"))
 
 
@@ -115,3 +116,47 @@ def test_state_commit_covers_every_configured_size_including_the_cap() -> None:
         # framing), so the size axis of the report is real.
         assert blob.total_value_bytes >= kib * 1024
         assert len(blob.SerializeToString(deterministic=True)) >= kib * 1024
+
+
+# --- Scenario: The committed baseline is coherent before a runner reads it ----
+#
+# `tests/benchmarks/test_bench_gate.py` judges the gate's logic and needs the
+# `bench` group; these two read the committed file itself, need no pyperf, and
+# so ride the required offline lane. A baseline is hand-copied from a nightly
+# log, which is exactly where a noisy number gets frozen into a gate.
+
+
+def _committed_baseline(monkeypatch: pytest.MonkeyPatch) -> bench_gate.Baseline:
+    # The gate resolves its paths against the cwd; read the real file the
+    # nightly reads, validation included.
+    monkeypatch.chdir(_REPO_ROOT)
+    return bench_gate.load_baseline()
+
+
+def test_the_committed_baseline_seeds_every_benchmark_the_gate_tracks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = _committed_baseline(monkeypatch)
+
+    assert set(baseline.medians_ms) == set(bench_gate.BASELINE_TRACKED)
+
+
+def test_the_committed_encode_baseline_grows_with_blob_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `encode_*` times one `SerializeToString` call, so the size axis *is* the
+    # measurement: a larger blob is strictly more work, and a seeded curve that
+    # dips means that run mismeasured. The 2026-08-03 seed did exactly that
+    # (64 KiB recorded dearer than 100 KiB) and the inversion sat in the file
+    # until a later night tripped the ratchet on it.
+    #
+    # `state_commit_*` is deliberately not asserted this way: there the
+    # size-dependent term is a few percent of a fixed ~0.2 ms activation cost,
+    # well inside runner noise, so monotonicity is not a property of a good run.
+    baseline = _committed_baseline(monkeypatch)
+    seeded = [baseline.medians_ms[f"encode_{kib}kib"] for kib in bench_state_commit.BLOB_SIZES_KIB]
+
+    assert seeded == sorted(seeded), (
+        f"the committed encode_* medians dip with blob size ({seeded}); a larger "
+        "blob cannot encode faster, so that entry was seeded from a mismeasured run"
+    )

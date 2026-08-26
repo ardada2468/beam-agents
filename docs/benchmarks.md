@@ -66,12 +66,23 @@ the JSON, so gated and reported numbers cannot drift) carries:
    order of magnitude of headroom over runner jitter, and it needs no
    reference machine to be meaningful. It is the number `project.md` promises.
 2. **Baseline ratchet** — every benchmark's median against
-   `benchmark-baseline.toml`. Regressing beyond the file's `tolerance` band
-   fails; improving beyond it passes and prints the instruction to lower the
+   `benchmark-baseline.toml`. Regressing beyond that benchmark's band fails;
+   improving beyond it passes and prints the instruction to lower the
    committed baseline by hand, so gains are locked in deliberately (the
    `coverage_ratchet.py` mechanism). The tier-invariance check and the
    `RunInference` **delta** ride this layer; the comparison's absolutes do
    not.
+
+The band is the file's global `tolerance` unless the benchmark names its own
+in `[tolerance_overrides]`. One band cannot serve the whole suite: the
+activation benchmarks run 0.2–3 ms of Python, where 25% clears runner jitter,
+while `encode_*` times a single `SerializeToString` call — microseconds of
+memcpy-bound C whose median tracks whichever CPU generation `ubuntu-latest`
+allocated that night. The `encode_*` family therefore carries a 60% band,
+wide enough to ignore the CPU lottery and still fail anything that doubles;
+the file's comment carries the measurements behind that number. An override
+naming a benchmark the ratchet does not track fails the gate rather than
+silently widening nothing.
 
 Missing result files, a declared benchmark absent from a result file, too few
 samples for the p99, or an unseeded baseline entry all **fail** — a gate that
@@ -94,6 +105,14 @@ passes on a missing run has silently stopped gating. There is no
 **Never seed the baseline from developer hardware.** The gate runs on CI
 hardware; a laptop-derived number either blocks every nightly or is so loose
 it catches nothing.
+
+**A `lower medians_ms.<name>` note is not always a gain to lock in.** On a
+benchmark whose run-to-run spread exceeds its band, the note fires on a lucky
+night, and committing that number makes an ordinary night red. Check the
+suite's own physics before copying one: `tests/benchmarks/test_bench_smoke.py`
+asserts the committed `encode_*` curve grows with blob size, because a seeded
+curve that dips is proof that run mismeasured — which is exactly how the
+2026-08-03 seed recorded 64 KiB as dearer than 100 KiB.
 
 ## Why nightly and not per-PR
 
