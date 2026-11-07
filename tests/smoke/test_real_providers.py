@@ -29,11 +29,15 @@ async def test_anthropic_live_call_returns_a_decodable_response() -> None:
         api_key=os.environ["ANTHROPIC_API_KEY"],
         anthropic_version="2023-06-01",
     )
+    # The current Haiku. Dated snapshot ids retire, and when one did the
+    # nightly went red for weeks on a bare 400, so pin the alias instead.
+    # Haiku 5.5 reasons by default; this is a liveness check for one word,
+    # so turn that off and leave room for the word itself.
     request = LlmRequest(
-        model_id="claude-haiku-4-5-20251001",
+        model_id="claude-haiku-5-5",
         messages=_MESSAGES,
         tools_schema=None,
-        sampling_params={"max_tokens": 16},
+        sampling_params={"max_tokens": 64, "thinking": {"type": "disabled"}},
     )
 
     response = await provider.complete(request)

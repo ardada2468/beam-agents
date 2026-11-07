@@ -96,10 +96,14 @@ def base_ms() -> int:
 
 # Small and cheap on purpose: this runs on somebody's first afternoon with the
 # library and should cost a fraction of a cent.
-ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+ANTHROPIC_MODEL = "claude-haiku-5-5"
 OPENAI_MODEL = "gpt-4o-mini"
 
-MAX_TOKENS = 64
+# One word of output, but current Anthropic models reason before answering
+# and that reasoning is billed against the same cap. 64 was enough for the
+# word alone; 256 leaves room for a short think without changing the cost
+# story (still a fraction of a cent across three activations).
+MAX_TOKENS = 256
 
 SYSTEM_RULE = (
     "You are an on-call triage assistant. Reply with exactly one word: "
