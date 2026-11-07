@@ -22,6 +22,7 @@ gate runs a labelled self-update leg".
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -182,8 +183,19 @@ def test_the_cross_version_plan_provisions_a_pypi_wheel_into_its_own_venv(
     assert any(
         "pip download" in command and "beam-agents==0.1.0" in command for command in flattened
     )
-    assert any("venv" in command for command in flattened)
+    assert any("uv venv" in command for command in flattened)
     assert any("pip install" in command for command in flattened)
+    # The venv is created BEFORE the download, and the download runs through
+    # that venv's interpreter — never through `sys.executable`, which is the
+    # job's uv-managed venv and has no pip (the failure `freeze_command`
+    # already hit). Both halves are asserted: the order, and the interpreter.
+    venv_index = next(i for i, command in enumerate(flattened) if "uv venv" in command)
+    download = next(command for command in runner.commands if "download" in command)
+    download_index = runner.commands.index(download)
+    assert venv_index < download_index, flattened
+    assert download[0] == str(provisioned.launch.python), download
+    assert download[0] != sys.executable
+    assert "-m" in download and "pip" in download
     # Both legs log their full resolution — a compat failure is meaningless
     # without knowing which two environments collided (design D3).
     assert sum("freeze" in command for command in flattened) == 2
@@ -212,10 +224,15 @@ def test_the_bootstrap_plan_provisions_one_environment_used_for_both_legs(
 def test_the_provisioning_commands_are_explicit_about_what_they_install(
     tmp_path: Path,
 ) -> None:
-    assert "--no-deps" in download_wheel_command("0.1.0", tmp_path)
-    assert "beam-agents==0.1.0" in download_wheel_command("0.1.0", tmp_path)
+    prev_python = venv_python(tmp_path)
+    assert "--no-deps" in download_wheel_command(prev_python, "0.1.0", tmp_path)
+    assert "beam-agents==0.1.0" in download_wheel_command(prev_python, "0.1.0", tmp_path)
+    assert download_wheel_command(prev_python, "0.1.0", tmp_path)[0] == str(prev_python)
     assert "--wheel" in build_head_wheel_command(tmp_path)
     assert str(tmp_path) in create_venv_command(tmp_path)
+    # `--seed` is what puts pip into the venv; without it the download has
+    # no interpreter to run through.
+    assert "--seed" in create_venv_command(tmp_path)
     wheel = tmp_path / "beam_agents-0.1.0-py3-none-any.whl"
     wheel.write_bytes(b"")
     assert str(wheel) in install_wheel_command(venv_python(tmp_path), wheel)

@@ -37,21 +37,27 @@ in §1, so task 3.3's assertion is already established independent of the PR run
 
 ## 3. Verification on the PR
 
-- [ ] 3.1 Open the PR and confirm the `ci` workflow expands to exactly two legs — `(3.11, ubuntu-latest)` and `(3.12, ubuntu-latest)` — and no macOS leg appears
-- [ ] 3.2 Confirm both legs pass all four steps (`make lint`, `make type`, `make test-unit`, `make test-semantics-offline`) and that `integration` and `quality` are green
-- [ ] 3.3 Confirm the surviving legs' status-check context names are byte-identical to the pre-change Linux legs (verifies D1's rationale held)
-- [ ] 3.4 Confirm no required status check sits permanently pending on the PR
+- [x] 3.1 Open the PR and confirm the `ci` workflow expands to exactly two legs — `(3.11, ubuntu-latest)` and `(3.12, ubuntu-latest)` — and no macOS leg appears — *Recorded 2026-11-07 from the run:* PR #25 (`claude/macos-runner-cost-58a78b`, head `047ac25`): `ci` run 30423734607 expanded to exactly `ci (3.11, ubuntu-latest)` and `ci (3.12, ubuntu-latest)`; no macOS leg.
+
+- [x] 3.2 Confirm both legs pass all four steps (`make lint`, `make type`, `make test-unit`, `make test-semantics-offline`) and that `integration` and `quality` are green — both legs green, each through the `Semantics tests (offline)` step after lint, type and unit; `integration` (run 30423734600) and `quality` (run 30423734596) green on the same head.
+
+- [x] 3.3 Confirm the surviving legs' status-check context names are byte-identical to the pre-change Linux legs (verifies D1's rationale held) — the two context names above are byte-identical to the surviving Linux contexts recorded in §1, and are the two `ci` contexts `main`'s protection names today.
+
+- [x] 3.4 Confirm no required status check sits permanently pending on the PR — the PR merged 2026-07-29T05:01Z under `strict: true` + `enforce_admins: true`, which is only possible with every required context reported green; nothing sat pending.
 
 ## 4. Branch protection cleanup (only if 1.2 found per-leg contexts)
 
-- [ ] 4.1 Remove `ci (3.11, macos-latest)` and `ci (3.12, macos-latest)` from `main`'s required contexts **before** merging the PR
-- [ ] 4.2 Re-confirm the remaining required contexts exactly match the checks the PR reported
+- [x] 4.1 Remove `ci (3.11, macos-latest)` and `ci (3.12, macos-latest)` from `main`'s required contexts **before** merging the PR — done, operationally, before the merge (the PR could not have merged otherwise); `main`'s required contexts as read on 2026-11-07 are exactly `ci (3.11, ubuntu-latest)`, `ci (3.12, ubuntu-latest)`, `integration`, `quality`.
+
+- [x] 4.2 Re-confirm the remaining required contexts exactly match the checks the PR reported — those four are exactly the checks every PR since reports (e.g. runs 32939801829, 32939801872, 32939801922 on PR #45).
 
 ## 5. Merge and post-merge
 
-- [ ] 5.1 Squash-merge with a commit message referencing `openspec/changes/drop-macos-ci-matrix-leg`
-- [ ] 5.2 Open (or check) a subsequent PR against `main` and confirm it reaches a mergeable state — this is the real test that §4 was handled correctly
-- [ ] 5.3 If PRs are blocked by a pending required context, revert the `ci.yml` commit immediately (restores the contexts on the next push), then redo §4 before re-landing
+- [x] 5.1 Squash-merge with a commit message referencing `openspec/changes/drop-macos-ci-matrix-leg` — merged as merge commit `21e1179` rather than a squash; the implementing commit `02aa60e`'s message opens `Implements openspec/changes/drop-macos-ci-matrix-leg.`, so the reference this task wants is in `main`'s history. Recorded as it happened.
+
+- [x] 5.2 Open (or check) a subsequent PR against `main` and confirm it reaches a mergeable state — this is the real test that §4 was handled correctly — twenty PRs (#26–#45) have reached mergeable and merged since, the latest, #45, on 2026-08-26.
+
+- [x] 5.3 If PRs are blocked by a pending required context, revert the `ci.yml` commit immediately (restores the contexts on the next push), then redo §4 before re-landing — not triggered: no PR was blocked by a pending context, so no revert was needed.
 
 ## 6. Spec archive coordination
 
