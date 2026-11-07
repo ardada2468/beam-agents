@@ -32,13 +32,13 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # frontend/ has no .nvmrc and package.json declares no engines range, so
       # the version is pinned here: 22, the same line website/.nvmrc pins for
       # the docs site. If frontend/ ever grows its own .nvmrc, switch this to
       # node-version-file the way website.yml does.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm

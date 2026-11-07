@@ -36,11 +36,11 @@ jobs:
     steps:
       # Full history: scripts/check_release.py proves the tagged commit is an
       # ancestor of main, which is undecidable in a shallow clone.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
           enable-cache: true
@@ -91,7 +91,7 @@ jobs:
       - name: Semantics tier partition check
         run: uv run python scripts/check_semantics_partition.py
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: distributions
           path: dist/
@@ -123,9 +123,9 @@ jobs:
     steps:
       # Checkout FIRST: it cleans the workspace (including ignored paths), so
       # downloading dist/ before it would silently wipe the artifact.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: distributions
           path: dist/
@@ -232,7 +232,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: distributions
           path: dist/

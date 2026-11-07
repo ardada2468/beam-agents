@@ -38,9 +38,9 @@ jobs:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
           enable-cache: true
@@ -50,13 +50,13 @@ jobs:
         run: uv sync --locked --group test --group integration
 
       # docker-container driver: required for the type=gha layer cache.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # The same image the Flink leg uses (one SDK-harness image serves both
       # portable legs), built from THIS checkout so the leg never runs against
       # yesterday's runtime.
       - name: Build SDK-harness image (layer-cached)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/sdk-harness.Dockerfile
@@ -86,7 +86,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: spark-weekly-diagnostics-attempt-${{ github.run_attempt }}
           path: compose-diagnostics/
@@ -113,11 +113,11 @@ jobs:
     steps:
       # Full history: the skip-drift scan is `git log -p` over the conformance
       # spec across the trailing 28 days, which a shallow clone cannot see.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.11"
           enable-cache: true
