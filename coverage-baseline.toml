@@ -135,4 +135,13 @@
 # lane cannot produce — the same shape as the live-client memory-store gap
 # described above, and it closes the same way: by folding the integration lane
 # into the ratcheted coverage.xml.
-branch_rate = 0.9096
+#
+# Re-measured 2026-11-07, still offline-scoped: **0.9272**. No `src/` change in
+# the PR that raised this; the movement is suites that landed after the last
+# ratchet and were never locked in — chiefly the offline call-shape tests for
+# the memory-store backends (`harden-memory-stores-offline`, PR #36), which is
+# the gap the 0.9015 entry above said would close "when those backends gain
+# offline call-shape tests that reach their branches". Measured on this tree
+# by `make test-unit && make coverage-ratchet` (the ratchet printed
+# "raise branch_rate to 0.9272"), not copied from any branch.
+branch_rate = 0.9272

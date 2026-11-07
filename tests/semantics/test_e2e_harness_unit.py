@@ -20,14 +20,27 @@ from pathlib import Path
 import pytest
 
 from beam_agents._protos import AgentEnvelope, ToolIntent, ToolResult
+from beam_agents.core.agent import intent_id_for
+from beam_agents.effector.__main__ import build_parser, config_from_args
+from beam_agents.intent_signing import (
+    IntentSigner,
+    VerificationResult,
+    load_keyring,
+    sign_intent,
+    verify_intent,
+)
+from tests.semantics._e2e.agent import APPROVAL_PREFIX, LATE_PREFIX, TOOL_PREFIX
 from tests.semantics._e2e.approvals import split_due
 from tests.semantics._e2e.assertions import await_condition
 from tests.semantics._e2e.chaos import ChaosExecutor, KillAction, build_schedule
 from tests.semantics._e2e.drainer import Drainer, should_seal
+from tests.semantics._e2e.forgery import FORGED_PREFIX, FORGED_TTL_MS, forged_intent
 from tests.semantics._e2e.ledger import ExecutionLedger
-from tests.semantics._e2e.outbox import duplicate_decision
+from tests.semantics._e2e.outbox import _SignAndEncodeIntent, duplicate_decision
+from tests.semantics._e2e.pipeline import intent_signer
 from tests.semantics._e2e.spool import SpoolWriter, eof_total, read_segment
-from tests.semantics._e2e.stack import InfraFailure
+from tests.semantics._e2e.stack import HOST_BROKERS, SIGNING_KEY_ID, InfraFailure, RunConfig, Stack
+from tests.semantics._e2e.workers import VERIFY_INTENTS, effector_argv
 
 
 def _env(key: bytes, payload: bytes, t_ms: int = 1_700_000_000_000) -> AgentEnvelope:
@@ -328,3 +341,117 @@ def test_ledger_clear_removes_both_countings(monkeypatch: pytest.MonkeyPatch) ->
     assert ledger.attempts() == {}
     assert ledger.effective() == {}
     assert fake.hashes == {}
+
+
+# -- signing: the reference deployment's `require` posture ------------------------
+#
+# The e2e gate is the repository's evidence that intent-signature verification
+# is *enforced* (1.0 release gate condition 2.4). These pin the plumbing that
+# evidence rests on without docker: the per-run keyring both halves resolve,
+# the outbox signer's parity with `WriteIntents`, the forgery's shape, and the
+# effector pool's command line.
+
+
+def _run_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RunConfig:
+    # `host_spool` hangs off the module-level spool root; point it at tmp so
+    # the keyring lands nowhere near docker/e2e-spool.
+    monkeypatch.setattr("tests.semantics._e2e.stack.HOST_SPOOL_ROOT", tmp_path)
+    return RunConfig(run_id="unit-run", seed=7, events=10)
+
+
+def test_keyring_is_minted_per_run_and_resolves_through_a_file_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _run_config(tmp_path, monkeypatch)
+    stack = Stack(config)
+    stack.provision_spool()
+    key = stack.provision_keyring()
+
+    assert len(key) == 32, "docs/security.md prescribes 32 CSPRNG bytes"
+    # Both halves read it the production way: a `file:` reference, never bytes
+    # in configuration or on argv.
+    assert load_keyring(f"file:{config.host_keyring}") == {SIGNING_KEY_ID: key}
+    assert intent_signer(config).key_id == SIGNING_KEY_ID
+    assert intent_signer(config).key_reference == f"file:{config.container_keyring}"
+    assert config.container_keyring.endswith("/" + config.host_keyring.name)
+    # Owner-only on the host; the keyring is not a spool segment.
+    assert config.host_keyring.stat().st_mode & 0o777 == 0o600
+    assert not config.host_keyring.name.endswith(".seg")
+    # Fresh material every run: a committed or reused key would be theater.
+    assert stack.provision_keyring() != key
+
+
+def test_outbox_signer_matches_write_intents_byte_for_byte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _run_config(tmp_path, monkeypatch)
+    stack = Stack(config)
+    stack.provision_spool()
+    key = stack.provision_keyring()
+    intent = ToolIntent(
+        intent_id="i-1", entity_key=b"t-1", tool_name="charge", args_json="{}", expires_at_ms=5
+    )
+
+    # Resolve from the host path here (the container path only exists inside
+    # beam-sdk-harness); the DoFn is otherwise exactly what the pipeline runs.
+    dofn = _SignAndEncodeIntent(
+        IntentSigner(key_id=SIGNING_KEY_ID, key_reference=f"file:{config.host_keyring}")
+    )
+    dofn.setup()
+    ((out_key, payload),) = list(dofn.process((b"t-1", intent)))
+
+    assert out_key == b"t-1"
+    assert payload == sign_intent(intent, key_id=SIGNING_KEY_ID, key=key).SerializeToString(
+        deterministic=True
+    )
+    assert verify_intent(ToolIntent.FromString(payload), {SIGNING_KEY_ID: key}) is (
+        VerificationResult.OK
+    )
+    # Signed on a copy: the element (keyed-state bytes, in production) is untouched.
+    assert not intent.signature
+    # Without a signer the publisher is the pre-signing outbox, byte for byte.
+    unsigned = _SignAndEncodeIntent(None)
+    unsigned.setup()
+    assert list(unsigned.process((b"t-1", intent))) == [
+        (b"t-1", intent.SerializeToString(deterministic=True))
+    ]
+
+
+def test_forgery_is_well_formed_and_refused_only_for_its_missing_signature() -> None:
+    config = RunConfig(run_id="unit-run", seed=7, events=10)
+    forged = forged_intent(config, now_ms=1_700_000_000_000)
+
+    # Nothing malformed to hide behind: a registered tool, canonical args, the
+    # runtime's own deterministic id, an hour of TTL, a key outside every
+    # population the gate enumerates.
+    assert forged.tool_name == "charge"
+    assert forged.intent_id == intent_id_for(forged.entity_key, forged.seq, forged.step_index)
+    assert forged.entity_key.startswith(FORGED_PREFIX)
+    assert not forged.entity_key.startswith((TOOL_PREFIX, APPROVAL_PREFIX, LATE_PREFIX))
+    assert forged.expires_at_ms - forged.created_at_ms == FORGED_TTL_MS
+    assert verify_intent(forged, {SIGNING_KEY_ID: b"\x01" * 32}) is VerificationResult.UNSIGNED
+
+
+def test_effector_pool_enforces_require_with_a_keyring_reference_and_dead_letters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _run_config(tmp_path, monkeypatch)
+    argv = effector_argv(config)
+
+    def flag(name: str) -> str:
+        return argv[argv.index(name) + 1]
+
+    assert VERIFY_INTENTS == "require"
+    assert flag("--verify-intents") == "require"
+    assert flag("--signing-keys") == f"file:{config.host_keyring}"
+    assert flag("--dead-letters-to") == f"kafka://{HOST_BROKERS}/{config.dead_letters_topic}"
+    assert config.dead_letters_topic in config.all_topics
+    # No key material on the command line (argv is visible in process listings).
+    assert not any("=" in arg for arg in argv)
+    # The command line is a valid `require`-mode effector configuration as the
+    # real CLI parses it — `python -m beam_agents.effector <flags>`.
+    assert argv[1:3] == ["-m", "beam_agents.effector"]
+    effector_config = config_from_args(build_parser().parse_args(argv[3:]))
+    assert effector_config.verify_intents == "require"
+    assert effector_config.signing_keys == f"file:{config.host_keyring}"
+    assert effector_config.dead_letters_to == f"kafka://{HOST_BROKERS}/{config.dead_letters_topic}"

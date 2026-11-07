@@ -103,6 +103,27 @@ The full sequence, each step independently reversible:
 Rolling back reverses one step at a time and strands nothing: nothing in the
 sequence changes `intent_id` derivation, dedup records, or state blobs.
 
+### The reference stack runs `require`
+
+The default stays `off`, because changing it would turn an upgrade into a
+breaking change for every deployment that has not provisioned keys. But the
+repository's own reference deployment — the compose stack in `docker/` plus the
+pipeline and effector pool the [effectively-once end-to-end
+gate](ci.md#the-effectively-once-end-to-end-gate) runs against it — stands at
+step 4: the outbox signs every intent with a key minted per run and resolved
+worker-side from a `file:` reference, and every `beam-agents-effector` worker
+runs `--verify-intents require` with a dead-letter topic. The gate then injects
+one **unsigned** intent — well-formed, naming a registered tool, carrying a
+formula-minted `intent_id`, published by "someone with topic-write access and
+no key" — and asserts that it is the only thing on the dead-letter topic
+(verbatim, once), that no `ToolResult` is published for it, that it never
+reaches the execution ledger, and that every genuine intent on the wire verifies
+under the run's key. Under `off` or `permissive` the forgery executes and the
+gate is red, so "enforced" is a fact CI re-checks on every run of
+`tests/semantics/test_effectively_once_e2e.py` rather than a rollout step
+asserted from memory. This is what discharges the 1.0 release gate's
+"verification enforced, not merely available" condition.
+
 ### Verification failures
 
 Verification is the effector's phase **zero** — ahead of the expiry check, the

@@ -62,6 +62,15 @@ stack: those transforms need a Java SDK harness, whose environment defaults to
 `DOCKER`, and the Flink image has no docker CLI. Pipelines here must use
 Python-native sources and sinks.
 
+The effector is **not** a compose service: the e2e gate SIGKILLs its workers,
+so they run as `beam-agents-effector` host processes launched by the test
+(`tests/semantics/_e2e/workers.py`). They run with `--verify-intents require`.
+The signing key is minted per run and travels through the `e2e-spool` bind
+mount (`<run>/intent-keys`, gitignored with the rest of the spool): the
+pipeline's signer resolves it inside `beam-sdk-harness` and the effector pool
+resolves it on the host, both through a `file:` reference. See
+[`docs/security.md`](../docs/security.md#the-reference-stack-runs-require).
+
 ## Usage
 
 ```sh

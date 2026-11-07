@@ -24,7 +24,16 @@ immutable spool. Asserted, over the whole population:
   and never silently dropped;
 - every observed `intent_id` equals `intent_id_for(entity_key, seq,
   step_index)`;
-- full accounting: every event's key reaches a terminal output.
+- full accounting: every event's key reaches a terminal output;
+- **signature verification is enforced, not merely available** (release gate
+  condition 2.4): the pipeline signs every intent with a per-run key resolved
+  worker-side from a `file:` reference, the effector pool runs
+  `--verify-intents require` against the same keyring, every genuine intent
+  on the wire verifies under that key, and one injected *unsigned* forgery —
+  well-formed, registered tool, formula-minted `intent_id` — is the only
+  thing on the dead-letter topic: delivered verbatim, exactly once, with no
+  `ToolResult` and no ledger entry. Under `off` or `permissive` it executes
+  and the gate is red.
 
 Substitutions, both forced by this stack and documented in design D4/D9/F7:
 the production `WriteIntents(kafka://…)` writer is upstream-broken (Beam
@@ -32,9 +41,10 @@ the production `WriteIntents(kafka://…)` writer is upstream-broken (Beam
 expansion response — root cause in tests/actions/test_write_intents_integration.py)
 and cross-language Kafka IO cannot run here at all (no Java SDK environment on
 the TaskManager), so intents are published by the harness's deliberately
-at-least-once producer (message key = raw entity_key, exactly as WriteIntents
-sets it) and the pipeline reads its topics through the replayable segment
-spool (tests/semantics/_e2e/spool.py) instead of ReadFromKafka.
+at-least-once producer (message key = raw entity_key and signing via the
+production `IntentSigner`/`sign_intent`, exactly as WriteIntents does it) and
+the pipeline reads its topics through the replayable segment spool
+(tests/semantics/_e2e/spool.py) instead of ReadFromKafka.
 
 Pacing: recovery from an effector SIGKILL is lease-driven (LEASE_MS = 15 s),
 so quiescence deadlines are generous multiples of the lease, condition-driven,
@@ -58,6 +68,7 @@ import pytest
 from beam_agents._protos import AgentEnvelope, ToolIntent, ToolResult
 from beam_agents.core.agent import intent_id_for
 from beam_agents.core.dofn import REASON_ORPHANED
+from beam_agents.intent_signing import VerificationResult, verify_intent
 from tests.semantics._e2e.agent import (
     APPROVAL_PREFIX,
     DECISION_OUT,
@@ -76,11 +87,19 @@ from tests.semantics._e2e.assertions import (
 )
 from tests.semantics._e2e.chaos import ChaosExecutor, build_schedule, kill_taskmanager
 from tests.semantics._e2e.drainer import Drainer
+from tests.semantics._e2e.forgery import forged_intent, inject
 from tests.semantics._e2e.ledger import ExecutionLedger
 from tests.semantics._e2e.pipeline import run_pipeline
 from tests.semantics._e2e.spool import SpoolWriter
-from tests.semantics._e2e.stack import HOST_BROKERS, InfraFailure, RunConfig, Stack, new_run
-from tests.semantics._e2e.workers import LEASE_MS, EffectorPool
+from tests.semantics._e2e.stack import (
+    HOST_BROKERS,
+    SIGNING_KEY_ID,
+    InfraFailure,
+    RunConfig,
+    Stack,
+    new_run,
+)
+from tests.semantics._e2e.workers import LEASE_MS, VERIFY_INTENTS, EffectorPool
 
 pytestmark = [pytest.mark.semantics, pytest.mark.integration, pytest.mark.slow]
 
@@ -117,6 +136,11 @@ REPLAY_SUBMIT_ATTEMPTS = 3
 # construction. Bounded: past PHASE_A_RESUBMITS the run is InfraFailure.
 PHASE_A_FREEZE_WINDOW_S = 150
 PHASE_A_RESUBMITS = 1
+# How long the injected forgery gets to reach the dead-letter topic. It is
+# refused in the effector's phase zero (no claim, no lease), so this covers
+# only consumer fetch latency plus one rebalance should the owning partition's
+# worker have just been replaced.
+FORGERY_DEADLINE_S = 90 + LEASE_MS / 1000
 # Mirrors the effector's default max_concurrent_partitions: the most in-flight
 # executions one SIGKILL can strand mid-crash-window.
 _EFFECTOR_MAX_CONCURRENT_PARTITIONS = 8
@@ -245,6 +269,10 @@ async def test_exactly_one_execution_and_zero_lost_approvals_under_kills() -> No
     stack.freshen_flink()
     await stack.create_topics()
     stack.provision_spool()
+    # The run's signing key: the pipeline signs with it (inside the harness
+    # container), the effector pool verifies with it under `require`, and the
+    # gate keeps a copy to check the wire independently of both.
+    signing_key = stack.provision_keyring()
 
     ledger = ExecutionLedger(config.run_id)
     writer = SpoolWriter(config.host_spool)
@@ -412,6 +440,38 @@ async def test_exactly_one_execution_and_zero_lost_approvals_under_kills() -> No
             attempts_a, effective_a, expected_ledger, phase="A", kills=len(chaos.executed)
         )
 
+        # ---- Forgery: the authenticity half, on the live loop ----
+        # One unsigned intent from "someone with topic-write access and no
+        # key", published straight to the intents topic. Injected here, with
+        # the chaos schedule complete and no replacement worker still joining,
+        # so the dead-letter publish has no crash window to duplicate in and
+        # "exactly one" is a clean assertion. The pool's `require` is what
+        # refuses it: verification is phase zero, so neither the dedup store
+        # nor the tool ever sees it.
+        forged = forged_intent(config, now_ms=_now_ms())
+        forged_payload = await inject(config, forged)
+        _LOG.info(
+            "injected unsigned forged intent %s (key %r); awaiting its dead letter",
+            forged.intent_id,
+            forged.entity_key,
+        )
+        start = time.monotonic()
+        while sum((await topic_end_offsets(config.dead_letters_topic)).values()) < 1:
+            infra_check()
+            if time.monotonic() - start > FORGERY_DEADLINE_S:
+                raise AssertionError(
+                    f"the injected unsigned intent {forged.intent_id} was not dead-lettered "
+                    f"within {FORGERY_DEADLINE_S:.0f}s with healthy infrastructure. Ledger "
+                    f"attempts recorded for it: {ledger.attempts().get(forged.intent_id)} — "
+                    f"a non-None count means the effector pool executed an unsigned intent, "
+                    f"i.e. it is not running --verify-intents {VERIFY_INTENTS}"
+                )
+            await asyncio.sleep(2)
+        assert forged.intent_id not in ledger.attempts(), (
+            f"the forged intent {forged.intent_id} was dead-lettered AND executed — "
+            "verification did not precede the tool"
+        )
+
         # ---- Phase B: TM kill, cancel, resubmit, full replay from the spool ----
         # Order is load-bearing (F8): recover the TM, let the restored -a job
         # land and be cancelled against the OLD worker pool, and only then
@@ -478,8 +538,13 @@ async def test_exactly_one_execution_and_zero_lost_approvals_under_kills() -> No
             f"the pipeline replay changed effective executions: {changed_effective}"
         )
 
-        # Capture every topic now — teardown deletes them.
-        intents = [ToolIntent.FromString(v) for _, v in await read_topic_all(config.intents_topic)]
+        # Capture every topic now — teardown deletes them. The forgery is on
+        # the intents topic too (the gate put it there); it is held apart so
+        # the population assertions below stay about the pipeline's output.
+        on_wire = [ToolIntent.FromString(v) for _, v in await read_topic_all(config.intents_topic)]
+        intents = [i for i in on_wire if i.entity_key != forged.entity_key]
+        forged_on_wire = [i for i in on_wire if i.entity_key == forged.entity_key]
+        dead_letters = await read_topic_all(config.dead_letters_topic)
         results_raw = await read_topic_all(config.results_topic)
         requests = [
             ToolIntent.FromString(v)
@@ -534,6 +599,43 @@ async def test_exactly_one_execution_and_zero_lost_approvals_under_kills() -> No
         results_by_id.setdefault(result.intent_id, set()).add(value)
     for intent_id, blobs in results_by_id.items():
         assert len(blobs) == 1, f"intent {intent_id} produced {len(blobs)} distinct results"
+
+    # ---- Authenticity: verification enforced (release gate condition 2.4) ----
+    # Every genuine intent the pipeline put on the wire verifies under this
+    # run's key — the signer ran inside the harness container, from a `file:`
+    # reference, on every intent including replay re-mints — so `require`
+    # was never a dial the effector could satisfy vacuously.
+    keyring = {SIGNING_KEY_ID: signing_key}
+    unverifiable = {
+        (intent.entity_key, str(verify_intent(intent, keyring)))
+        for intent in intents
+        if verify_intent(intent, keyring) is not VerificationResult.OK
+    }
+    assert not unverifiable, (
+        f"{len(unverifiable)} genuine intents on the wire do not verify under the run's "
+        f"key: {sorted(unverifiable)[:5]}"
+    )
+    # The forgery reached the topic exactly as injected, and the dead-letter
+    # channel holds exactly it: the raw key and the raw payload, verbatim,
+    # once. Anything else there would be a genuine intent the effector could
+    # not verify — a lost effect dressed as a security event.
+    assert len(forged_on_wire) == 1 and verify_intent(forged_on_wire[0], keyring) is (
+        VerificationResult.UNSIGNED
+    ), f"the forgery on the wire is not the single unsigned intent injected: {forged_on_wire!r}"
+    assert dead_letters == [(forged.entity_key, forged_payload)], (
+        "the dead-letter topic must hold exactly the injected forgery, verbatim, once; got "
+        f"{[(k, ToolIntent.FromString(v).intent_id) for k, v in dead_letters]!r}"
+    )
+    # No ToolResult of any status for it (a result would carry attacker-chosen
+    # identity bytes onto the re-injection path), and no ledger entry: the
+    # tool never ran, in either phase.
+    assert forged.intent_id not in results_by_id, (
+        f"a ToolResult was published for the forged intent: {results_by_id[forged.intent_id]!r}"
+    )
+    assert forged.intent_id not in attempts_b and forged.intent_id not in effective_b, (
+        f"the forged intent {forged.intent_id} reached the ledger (attempts="
+        f"{attempts_b.get(forged.intent_id)}, effective={effective_b.get(forged.intent_id)})"
+    )
 
     # Zero lost approvals, part 1: every approval intent reached the channel.
     requested_ids = {r.intent_id for r in requests}

@@ -12,6 +12,14 @@ Lease/tool-timeout pacing: ``EffectorConfig`` requires ``lease_ms >
 tool_timeout_ms``, and recovery from a kill cannot be faster than the lease,
 so both are kept small — the gate's wall clock is bounded below by
 ``LEASE_MS`` per unlucky kill.
+
+Verification: the workers run with ``--verify-intents require`` against the
+run's keyring and a run-scoped dead-letter topic. This is the repository's
+reference deployment standing at step 4 of the rollout sequence in
+docs/security.md — the effector *enforces* signatures; the pipeline half signs
+in tests/semantics/_e2e/outbox.py — and the gate's forged-intent assertion is
+what makes the dial load-bearing: under ``off`` or ``permissive`` the injected
+unsigned intent executes and the gate goes red.
 """
 
 from __future__ import annotations
@@ -31,7 +39,49 @@ LEASE_MS = 15_000
 TOOL_TIMEOUT_MS = 5_000
 REGISTRY_PATH = "tests.semantics._e2e.agent:LEDGER_TOOLS"
 
+# The rollout dial, at its terminal setting. Not a knob: turning it back to
+# `off` or `permissive` makes the gate's injected unsigned intent execute, and
+# the gate fails on the ledger and the empty dead-letter topic alike.
+VERIFY_INTENTS = "require"
+
 _LOG_DIR = REPO_ROOT / "docker" / "e2e-spool"  # gitignored, survives the run for triage
+
+
+def effector_argv(config: RunConfig) -> list[str]:
+    """The exact command line every worker in the pool is launched with.
+
+    A function rather than an inline list so the unit tier can pin the
+    reference deployment's security posture — `require`, a `file:` keyring
+    reference (never key material on argv), a dead-letter channel — without
+    spawning a process.
+    """
+    return [
+        sys.executable,
+        "-m",
+        "beam_agents.effector",
+        "--registry",
+        REGISTRY_PATH,
+        "--intents-from",
+        f"kafka://{HOST_BROKERS}/{config.intents_topic}",
+        "--results-to",
+        f"kafka://{HOST_BROKERS}/{config.results_topic}",
+        "--approvals-to",
+        f"kafka://{HOST_BROKERS}/{config.approval_requests_topic}",
+        "--dedup",
+        REDIS_URL,
+        "--consumer-group",
+        config.effector_group,
+        "--lease-ms",
+        str(LEASE_MS),
+        "--tool-timeout-ms",
+        str(TOOL_TIMEOUT_MS),
+        "--verify-intents",
+        VERIFY_INTENTS,
+        "--signing-keys",
+        f"file:{config.host_keyring}",
+        "--dead-letters-to",
+        f"kafka://{HOST_BROKERS}/{config.dead_letters_topic}",
+    ]
 
 
 @dataclass
@@ -53,27 +103,7 @@ class EffectorPool:
         self._logs.append(log_path)
         log = log_path.open("wb")
         proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "beam_agents.effector",
-                "--registry",
-                REGISTRY_PATH,
-                "--intents-from",
-                f"kafka://{HOST_BROKERS}/{self.config.intents_topic}",
-                "--results-to",
-                f"kafka://{HOST_BROKERS}/{self.config.results_topic}",
-                "--approvals-to",
-                f"kafka://{HOST_BROKERS}/{self.config.approval_requests_topic}",
-                "--dedup",
-                REDIS_URL,
-                "--consumer-group",
-                self.config.effector_group,
-                "--lease-ms",
-                str(LEASE_MS),
-                "--tool-timeout-ms",
-                str(TOOL_TIMEOUT_MS),
-            ],
+            effector_argv(self.config),
             cwd=REPO_ROOT,
             env=env,
             stdout=log,

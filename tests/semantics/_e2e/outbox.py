@@ -8,9 +8,12 @@ Two jobs, one mechanism:
   ``tests/actions/test_write_intents_integration.py``) *and* could not run on
   this stack anyway (no Java SDK environment; see docker/README.md). It sets
   the message key exactly as ``WriteIntents`` does — the raw ``entity_key`` —
-  and is **deliberately at-least-once**: a deterministic, seeded fraction of
-  intents is published twice, manufacturing the duplicate sink writes the gate
-  must tolerate (spec: duplicate deliveries never produce a second execution).
+  signs each intent exactly as ``WriteIntents`` does (the production
+  ``IntentSigner``, key resolved worker-side in ``setup()`` from a ``file:``
+  reference, ``sign_intent`` on a copy), and is **deliberately
+  at-least-once**: a deterministic, seeded fraction of intents is published
+  twice, manufacturing the duplicate sink writes the gate must tolerate (spec:
+  duplicate deliveries never produce a second execution).
 - ``publish_tagged`` carries the pipeline's other outputs (.output, .errors,
   traces as needed) to run-scoped topics so the post-run assertions can read
   them from outside the pipeline (design D6). Also at-least-once — Beam bundle
@@ -30,12 +33,13 @@ from __future__ import annotations
 import asyncio
 import threading
 import zlib
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterator
 from typing import Any
 
 import apache_beam as beam
 
 from beam_agents._protos import ToolIntent
+from beam_agents.intent_signing import IntentSigner, sign_intent
 
 # Kept in sync with docker/compose.yaml's `internal` Redpanda listener.
 INTERNAL_BROKER = "redpanda:9092"
@@ -111,6 +115,33 @@ class _KafkaPublishDoFn(beam.DoFn):
             self._thread = None
 
 
+class _SignAndEncodeIntent(beam.DoFn):
+    """``KV[bytes, ToolIntent]`` → ``KV[bytes, bytes]``, signed when a signer is set.
+
+    Mirrors ``WriteIntents``' ``_SerializeIntent`` on purpose: the signer
+    object carries only a key *reference*, the key bytes are resolved in
+    ``setup()`` on the worker (inside the beam-sdk-harness container), and
+    ``sign_intent`` returns a copy so the element is never mutated. The gate
+    thereby exercises the shipped signer end to end across the real
+    container/process boundary, with only the broken Kafka writer swapped out.
+    """
+
+    def __init__(self, signer: IntentSigner | None) -> None:
+        self._signer = signer
+        self._key: bytes | None = None
+
+    def setup(self) -> None:
+        if self._signer is not None:
+            self._key = self._signer.resolve_key()
+
+    def process(self, element: tuple[bytes, ToolIntent]) -> Iterator[tuple[bytes, bytes]]:
+        key, intent = element
+        if self._signer is not None:
+            assert self._key is not None, "setup() must run before process()"
+            intent = sign_intent(intent, key_id=self._signer.key_id, key=self._key)
+        yield key, intent.SerializeToString(deterministic=True)
+
+
 def publish_intents(
     intents: beam.pvalue.PCollection,
     topic: str,
@@ -118,16 +149,12 @@ def publish_intents(
     brokers: str = INTERNAL_BROKER,
     duplicate_fraction: float,
     seed: int,
+    signer: IntentSigner | None = None,
 ) -> beam.pvalue.PCollection:
     """Publish ``KV[bytes, ToolIntent]`` exactly as WriteIntents would, plus dupes."""
-
-    def encode(kv: tuple[bytes, ToolIntent]) -> tuple[bytes, bytes]:
-        key, intent = kv
-        return key, intent.SerializeToString()
-
     return (
         intents
-        | f"EncodeIntents[{topic}]" >> beam.Map(encode)
+        | f"SignAndEncodeIntents[{topic}]" >> beam.ParDo(_SignAndEncodeIntent(signer))
         | f"PublishIntents[{topic}]"
         >> beam.ParDo(
             _KafkaPublishDoFn(brokers, topic, duplicate_fraction=duplicate_fraction, seed=seed)

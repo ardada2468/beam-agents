@@ -18,6 +18,7 @@
 
 ## 4. First live runs (blocked: need CI / a tag)
 
-- [ ] 4.1 Open the PR and confirm the `frontend` job triggers (the workflow file itself is in the paths filter), reports under the `frontend` context, and all four steps pass on the runner (blocked: needs CI run)
+- [x] 4.1 Open the PR and confirm the `frontend` job triggers (the workflow file itself is in the paths filter), reports under the `frontend` context, and all four steps pass on the runner (blocked: needs CI run) — *Done (recorded 2026-11-07):* on PR #36 (branch `claude/library-v1-publish-checklist-e0d4ed`) the `frontend` workflow triggered on the workflow file's own path filter — run 30880280069, job 91899973462, reporting under the `frontend` context — and `Install dependencies`, `Lint`, `Type check`, `Build` all passed; the push-to-`main` run after the merge, 31131313232, is green too. 4.2 stays open: `frontend` is not among `main`'s required contexts as of 2026-11-07.
+
 - [ ] 4.2 Add `frontend` to `main`'s required status-check contexts once it has reported at least once (`gh api repos/:owner/:repo/branches/main/protection`) — operational, user-performed (blocked: needs merge window)
 - [ ] 4.3 The next `v*` tag (or a deliberate dry run on a scratch tag) exercises the locate/download/attach path end-to-end; confirm the Release carries `bench-report.md` and `bench-results.zip`, and that the chosen nightly run id printed in the log has a green `bench` job (blocked: needs a tag; `workflow_dispatch` rehearsals do not reach the `publish` job by design)

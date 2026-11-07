@@ -194,9 +194,33 @@ def resolve_plan(
 # -- provisioning ---------------------------------------------------------------
 
 
-def download_wheel_command(version: str, dest: Path) -> list[str]:
+def create_venv_command(venv_dir: Path) -> list[str]:
+    # `uv venv --seed`, NOT `sys.executable -m venv`, and it runs FIRST: the
+    # previous release's venv is the only interpreter on this path that is
+    # guaranteed to have `pip`, so every pip-driven step below (the wheel
+    # download, the install) is routed through it. `--seed` installs pip into
+    # the new venv explicitly rather than relying on the base interpreter's
+    # `ensurepip`; `--python sys.executable` keeps the interpreter minor
+    # version the job already uses (uv resolves the uv-managed venv's python
+    # to its base). This is the second of the two shapes
+    # `complete-dataflow-verification` task 3.1 names — the venv's own pip
+    # does the download — chosen over `uv pip install --python` because the
+    # Dataflow workers need the previous release's *wheel file* as their
+    # `--extra_package`, and an install leaves no wheel behind.
+    return ["uv", "venv", "--seed", "--python", sys.executable, str(venv_dir)]
+
+
+def download_wheel_command(python: Path, version: str, dest: Path) -> list[str]:
+    # `<prev_venv_python> -m pip download`, NOT `sys.executable -m pip
+    # download`: the head leg's interpreter is the job's own uv-managed venv,
+    # and `uv sync` does not install `pip` into it — the same failure
+    # `freeze_command` below hit during provisioning, which is why that one
+    # became `uv pip freeze`. There is no `uv pip download`, so the download
+    # goes through the venv `create_venv_command` just seeded with pip. This
+    # command only ever runs on the cross-version path (bootstrap builds head
+    # and nothing else), so the venv always exists by the time it is issued.
     return [
-        sys.executable,
+        str(python),
         "-m",
         "pip",
         "download",
@@ -207,11 +231,6 @@ def download_wheel_command(version: str, dest: Path) -> list[str]:
         "--dest",
         str(dest),
     ]
-
-
-def create_venv_command(venv_dir: Path) -> list[str]:
-    # Same interpreter minor version the job already uses: `sys.executable`.
-    return [sys.executable, "-m", "venv", str(venv_dir)]
 
 
 def venv_python(venv_dir: Path) -> Path:
@@ -240,7 +259,7 @@ def freeze_command(python: Path) -> list[str]:
     # above; this keeps the harness consistently uv-driven.
     #
     # `--python` makes this correct for the cross-version leg too, whose venv
-    # comes from `python -m venv` (and therefore does have pip): uv reads the
+    # comes from `uv venv --seed` (and therefore does have pip): uv reads the
     # target interpreter's environment either way.
     return ["uv", "pip", "freeze", "--python", str(python)]
 
@@ -310,10 +329,11 @@ def provision(
     assert previous is not None  # narrowed by `is_bootstrap`
     prev_dist = workdir / "prev-dist"
     prev_venv = workdir / "prev-venv"
-    run(download_wheel_command(previous, prev_dist))
-    prev_wheel = find_wheel(prev_dist, version=previous)
+    # Venv first: it is the interpreter with pip, and the download needs one.
     run(create_venv_command(prev_venv))
     prev_python = venv_python(prev_venv)
+    run(download_wheel_command(prev_python, previous, prev_dist))
+    prev_wheel = find_wheel(prev_dist, version=previous)
     run(install_wheel_command(prev_python, prev_wheel))
     prev_leg = Leg(
         version=previous, python=prev_python, wheel=prev_wheel, label=CROSS_VERSION_LABEL

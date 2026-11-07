@@ -13,10 +13,16 @@ from apache_beam.options.pipeline_options import PipelineOptions, StandardOption
 
 from beam_agents._protos import ToolIntent
 from beam_agents.core.dofn import ActivationError
+from beam_agents.intent_signing import IntentSigner
 from tests.semantics._e2e.agent import build_run_agent
 from tests.semantics._e2e.outbox import publish_intents, publish_tagged
 from tests.semantics._e2e.spool import read_spool
-from tests.semantics._e2e.stack import ARTIFACT_ENDPOINT, JOB_ENDPOINT, RunConfig
+from tests.semantics._e2e.stack import (
+    ARTIFACT_ENDPOINT,
+    JOB_ENDPOINT,
+    SIGNING_KEY_ID,
+    RunConfig,
+)
 
 # Manufactured duplicate-delivery rate on the intents topic (spec: duplicate
 # sink writes must never produce a second execution).
@@ -37,6 +43,13 @@ def encode_error(error: ActivationError) -> tuple[bytes, bytes]:
 
 def key_intent(intent: ToolIntent) -> tuple[bytes, ToolIntent]:
     return intent.entity_key, intent
+
+
+def intent_signer(config: RunConfig) -> IntentSigner:
+    """The pipeline half of the reference deployment's signing: a key
+    *reference* into the pipeline graph, resolved worker-side. The effector
+    pool (workers.py) verifies against the same file under `require`."""
+    return IntentSigner(key_id=SIGNING_KEY_ID, key_reference=f"file:{config.container_keyring}")
 
 
 def run_pipeline(config: RunConfig, *, job_name: str) -> None:
@@ -64,6 +77,7 @@ def run_pipeline(config: RunConfig, *, job_name: str) -> None:
             config.intents_topic,
             duplicate_fraction=DUPLICATE_FRACTION,
             seed=config.seed,
+            signer=intent_signer(config),
         )
         publish_tagged(out.output, config.output_topic, encode_output)
         publish_tagged(out.errors, config.errors_topic, encode_error)
