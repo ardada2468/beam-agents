@@ -1,0 +1,26 @@
+# Keeps the third-party actions the workflows pin by major tag on a supported
+# runtime. The nightly job's log already carries the warning this exists for:
+#
+#   Node.js 20 is deprecated. The following actions target Node.js 20 but are
+#   being forced to run on Node.js 24: actions/checkout@v4, astral-sh/setup-uv@v5,
+#   google-github-actions/auth@v2.
+#
+# Dependabot opens one PR per action when a newer major tag exists, so the
+# migration is tracked rather than rediscovered when GitHub stops forcing the
+# runtime. Grouped so the eight `@v4`/`@v5`/`@v6` bumps arrive as one PR, not
+# eight. Actions only: Python dependencies are pinned by `uv.lock` and refreshed
+# deliberately through `uv lock`, and the two Node projects (`frontend/`,
+# `website/`) are outside this change's scope.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
