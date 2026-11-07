@@ -177,7 +177,10 @@ durable before it is published (a crash republishes rather than re-executes);
 the offset advances last (a crash redelivers rather than loses).
 
 The verify step is inert until you turn it on: `--verify-intents` defaults to
-`off`, which is byte-for-byte the pre-signing behavior.
+`off`, which is byte-for-byte the pre-signing behavior. The repository's own
+reference stack runs it at `require`, and the effectively-once gate proves the
+setting bites by injecting an unsigned intent — see
+[Security](security.md#the-reference-stack-runs-require).
 
 **Statuses.** `REJECTED` means the callable never ran (unknown tool, a
 `side_effect=False` tool reaching the outbox, argument validation failure).

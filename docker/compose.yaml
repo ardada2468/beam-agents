@@ -199,6 +199,17 @@ services:
       # into segment files here (host side), and the spool SDF replays them
       # from inside this container. Bind mount, not a named volume, because
       # the writer is the host-side pytest process.
+      #
+      # The same mount carries the gate's per-run intent-signing keyring
+      # (`<run>/intent-keys`, minted by tests/semantics/_e2e/stack.py, never
+      # committed): the outbox signer in this container resolves it through a
+      # `file:` reference, and the host-side `beam-agents-effector` pool the
+      # gate launches resolves the same file under `--verify-intents require`
+      # with a run-scoped dead-letter topic. No effector runs as a compose
+      # service — the gate SIGKILLs its workers, so they are host processes —
+      # and this stack's reference deployment is therefore enforcing, not
+      # merely able to verify (docs/security.md, "The reference stack runs
+      # require").
       - ./e2e-spool:/var/beam-agents/spool
     deploy:
       resources:

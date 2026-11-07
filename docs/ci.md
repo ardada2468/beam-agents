@@ -341,9 +341,13 @@ those two modules.
 `tests/semantics/test_effectively_once_e2e.py` is the most expensive check in
 the repository: 10,000 events through real Kafka (Redpanda), `RunAgent` on the
 Flink mini-cluster via the Beam job server, real `beam-agents-effector`
-processes with Redis dedup, SIGKILLed effector workers, a killed TaskManager,
-and a full cancel-and-resubmit replay from the ingest spool. It runs in the
-`integration` workflow's `flink-minicluster` job via `make test-semantics` —
+processes with Redis dedup running `--verify-intents require` against a
+per-run signing key, SIGKILLed effector workers, one injected unsigned forgery
+that must be dead-lettered rather than executed (the evidence behind the 1.0
+release gate's "verification enforced" condition — see
+[Security](security.md#the-reference-stack-runs-require)), a killed
+TaskManager, and a full cancel-and-resubmit replay from the ingest spool. It
+runs in the `integration` workflow's `flink-minicluster` job via `make test-semantics` —
 the only selection that runs it (`make test-integration` excludes semantics
 gates so the gate is not paid for twice; removing the `test-semantics` step
 would therefore silently drop the release gate) — and is budgeted

@@ -15,6 +15,8 @@ provisioning, and total teardown.
 
 from __future__ import annotations
 
+import base64
+import secrets
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -45,13 +47,27 @@ __all__ = [
     "HOST_SPOOL_ROOT",
     "INTERNAL_BROKERS",
     "JOB_ENDPOINT",
+    "KEYRING_NAME",
     "REDIS_URL",
     "REPO_ROOT",
+    "SIGNING_KEY_ID",
     "InfraFailure",
     "RunConfig",
     "Stack",
     "new_run",
 ]
+
+# The reference deployment's intent-signing key, named by id as the pipeline's
+# `IntentSigner` and the effector's keyring both name it. The key *material*
+# is minted fresh per run by `Stack.provision_keyring` (32 CSPRNG bytes, the
+# size docs/security.md prescribes) and written to the spool directory, which
+# is the one filesystem both halves of the loop already share: the signer
+# DoFn resolves it inside the beam-sdk-harness container, the host-side
+# effector pool resolves it from the same bind mount — each through a `file:`
+# reference, exactly the production provisioning shape. Nothing about the key
+# is committed, and the whole directory is removed at teardown.
+SIGNING_KEY_ID = "e2e-dev"
+KEYRING_NAME = "intent-keys"  # not `*.seg`, so the spool source never reads it
 
 
 @dataclass(frozen=True)
@@ -91,6 +107,11 @@ class RunConfig:
         return run_topic("e2e", self.run_id, "errors")
 
     @property
+    def dead_letters_topic(self) -> str:
+        """Where the effector preserves deliveries that fail verification."""
+        return run_topic("e2e", self.run_id, "dead-letters")
+
+    @property
     def effector_group(self) -> str:
         return f"e2e-{self.run_id}-effector"
 
@@ -106,6 +127,16 @@ class RunConfig:
     def container_spool(self) -> str:
         return f"{CONTAINER_SPOOL_ROOT}/{self.run_id}"
 
+    @property
+    def host_keyring(self) -> Path:
+        """The per-run signing keyring as the host-side effector pool reads it."""
+        return self.host_spool / KEYRING_NAME
+
+    @property
+    def container_keyring(self) -> str:
+        """The same file as the signer DoFn inside beam-sdk-harness reads it."""
+        return f"{self.container_spool}/{KEYRING_NAME}"
+
     def entity_key(self, prefix: bytes, index: int) -> bytes:
         return prefix + self.run_id.encode() + b"-" + f"{index:05d}".encode()
 
@@ -119,6 +150,7 @@ class RunConfig:
             self.decisions_topic,
             self.output_topic,
             self.errors_topic,
+            self.dead_letters_topic,
         )
 
 
@@ -150,8 +182,31 @@ class Stack(FlinkStackControl):
         shutil.rmtree(self.config.host_spool, ignore_errors=True)
         self.config.host_spool.mkdir(parents=True, exist_ok=True)
 
+    def provision_keyring(self) -> bytes:
+        """Mint this run's signing key and write the keyring both halves read.
+
+        Returns the raw key so the gate can prove, independently of either
+        half, what a correctly signed intent looks like. Requires
+        ``provision_spool`` to have run: the keyring lives in the spool
+        directory because that is the filesystem the pipeline container and
+        the host already share, and because teardown's ``rmtree`` then removes
+        the key material along with everything else the run minted.
+        """
+        key = secrets.token_bytes(32)
+        encoded = base64.b64encode(key).decode("ascii")
+        self.config.host_keyring.write_text(
+            "# beam-agents e2e gate: per-run intent-signing keyring (dev key, minted by\n"
+            "# tests/semantics/_e2e/stack.py; never committed; removed at teardown).\n"
+            f"{SIGNING_KEY_ID}={encoded}\n"
+        )
+        # Readable by the (root) harness container through the bind mount; no
+        # wider than the run's own user on the host.
+        self.config.host_keyring.chmod(0o600)
+        return key
+
     async def teardown(self) -> None:
-        """Total cleanup: jobs, topics, spool. Ledger/dedup keys expire with Redis."""
+        """Total cleanup: jobs, topics, spool (keyring included). Ledger/dedup
+        keys expire with Redis."""
         self._cancel_all_jobs()
         await self.delete_topics()
         shutil.rmtree(self.config.host_spool, ignore_errors=True)
