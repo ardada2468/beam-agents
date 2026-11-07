@@ -164,7 +164,7 @@ See [the CI workflow map](ci.md) for what runs where.
 ## Costs and safety
 
 - Rungs 0 to 2 cost only model tokens. The quickstart uses Haiku (or
-  `gpt-4o-mini`) capped at 64 output tokens across three activations — a
+  `gpt-4o-mini`) capped at 256 output tokens across three activations — a
   fraction of a cent.
 - Rung 3 provisions Dataflow workers and bills for them until the job is
   drained or cancelled. Nothing in this repo starts a Dataflow job for you.
