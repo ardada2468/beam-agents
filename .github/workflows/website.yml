@@ -40,13 +40,13 @@ jobs:
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.29.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: website/.nvmrc
           cache: pnpm
@@ -55,7 +55,7 @@ jobs:
       # `site-check` verifies claims against the real package, so the Python
       # environment has to be present — see design D3. `site-build` alone does
       # not need this step.
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.11'
           enable-cache: true
@@ -83,16 +83,16 @@ jobs:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # `vercel build` shells out to the package manager detected from the
       # lockfile (pnpm-lock.yaml here), so pnpm must be on PATH before that
       # step runs — without it the build fails with `spawn pnpm ENOENT`.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.29.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: website/.nvmrc
           cache: pnpm
